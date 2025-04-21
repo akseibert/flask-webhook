@@ -46,15 +46,19 @@ Please extract the following fields as structured JSON:
 
 1. site_name (required)
 2. segment (optional)
-3. people – [{"name": "...", "role": "..."}] - Only include individuals. If a company is mentioned as working, it should go under service or tools instead.
-4. tools – [{"item": "...", "company": "..."}]
-5. service – [{"task": "...", "company": "..."}]
-6. activities
-7. issues – [{"description": "...", "caused_by": "...", "has_photo": true/false}]
-8. time
-9. weather
-10. impression
-11. comments
+3. company -  [{"company": "..."}]
+4. people – [{"name": "...", "role": "..."}]
+- Only include named individuals.  
+- If a company is mentioned as working with its employees or team, do not list placeholder people.  
+- Instead, just list the company under `company` or and skip the `people` field.
+5. tools – [{"item": "...", "company": "..."}]
+6. service – [{"task": "...", "company": "..."}]
+7. activities
+8. issues – [{"description": "...", "caused_by": "...", "has_photo": true/false}]
+9. time
+10. weather
+11. impression
+12. comments
 
 If a photo was sent after a message about an issue, set has_photo to true. If something is not mentioned, leave it out of the JSON.
 
