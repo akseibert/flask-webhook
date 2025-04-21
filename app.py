@@ -1,45 +1,228 @@
-==> Exited with status 1
-==> Common ways to troubleshoot your deploy: https://render.com/docs/troubleshooting-deploys
-==> Running 'gunicorn app:app'
-Traceback (most recent call last):
-  File "/opt/render/project/src/.venv/bin/gunicorn", line 8, in <module>
-    sys.exit(run())
-             ^^^^^
-  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/wsgiapp.py", line 66, in run
-    WSGIApplication("%(prog)s [OPTIONS] [APP_MODULE]", prog=prog).run()
-  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/base.py", line 235, in run
-    super().run()
-  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/base.py", line 71, in run
-    Arbiter(self).run()
-    ^^^^^^^^^^^^^
-  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/arbiter.py", line 57, in __init__
-    self.setup(app)
-  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/arbiter.py", line 117, in setup
-    self.app.wsgi()
-  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/base.py", line 66, in wsgi
-    self.callable = self.load()
-                    ^^^^^^^^^^^
-  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/wsgiapp.py", line 57, in load
-    return self.load_wsgiapp()
-           ^^^^^^^^^^^^^^^^^^^
-  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/wsgiapp.py", line 47, in load_wsgiapp
-    return util.import_app(self.app_uri)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/util.py", line 370, in import_app
-    mod = importlib.import_module(module)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
-  File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
-  File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
-  File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
-  File "<frozen importlib._bootstrap_external>", line 936, in exec_module
-  File "<frozen importlib._bootstrap_external>", line 1074, in get_code
-  File "<frozen importlib._bootstrap_external>", line 1004, in source_to_code
-  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
-  File "/opt/render/project/src/app.py", line 1
-    => Exited with status 1
-    ^
-SyntaxError: invalid syntax
+from flask import Flask, request
+import requests
+import os
+import openai
+import json
+from twilio.rest import Client
+from msal import ConfidentialClientApplication
+
+app = Flask(__name__)
+
+# Validate environment setup
+if not all([os.getenv("TENANT_ID"), os.getenv("CLIENT_ID"), os.getenv("CLIENT_SECRET")]):
+    raise ValueError("❌ Missing one or more required environment variables: TENANT_ID, CLIENT_ID, CLIENT_SECRET")
+
+# In-memory session store
+session_data = {}  # { "whatsapp:+4176...": {"structured_data": {...}} }
+
+def transcribe_audio(media_url):
+    response = requests.get(media_url, auth=(
+        os.getenv("TWILIO_SID"), os.getenv("TWILIO_AUTH_TOKEN")
+    ))
+
+    if response.status_code != 200:
+        print(f"❌ Failed to download audio. Status code: {response.status_code}")
+        return "[Download failed]"
+
+    audio_data = response.content
+
+    whisper_response = requests.post(
+        "https://api.openai.com/v1/audio/transcriptions",
+        headers={
+            "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"
+        },
+        files={"file": ("audio.ogg", audio_data, "audio/ogg")},
+        data={"model": "whisper-1"}
+    )
+
+    if whisper_response.status_code != 200:
+        print(f"❌ Whisper error: {whisper_response.status_code} – {whisper_response.text}")
+        return "[Whisper failed]"
+
+    result = whisper_response.json()
+    return result.get("text", "[No text found]")
+
+def send_whatsapp_reply(to_number, message):
+    client = Client(os.getenv("TWILIO_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+    from_number = "whatsapp:" + os.getenv("TWILIO_PHONE_NUMBER")
+    if not to_number.startswith("whatsapp:"):
+        to_number = "whatsapp:" + to_number
+
+    print(f"📤 Sending WhatsApp message from {from_number} to {to_number}")
+    print(f"📤 Message content: {message}")
+
+    client.messages.create(
+        body=message,
+        from_=from_number,
+        to=to_number
+    )
+
+def summarize_data(data):
+    lines = []
+    if "site_name" in data:
+        lines.append(f"📍 Site: {data['site_name']}")
+    if "segment" in data:
+        lines.append(f"📦 Segment: {data['segment']}")
+    if "category" in data:
+        lines.append(f"🏷️ Category: {data['category']}")
+    if "company" in data and isinstance(data["company"], list):
+        lines.append("🏣 Companies: " + ", ".join(c["name"] for c in data["company"] if isinstance(c, dict)))
+    if "people" in data and isinstance(data["people"], list):
+        lines.append("👷 People: " + ", ".join(f"{p['name']} ({p['role']})" for p in data["people"] if isinstance(p, dict)))
+    if "service" in data and isinstance(data["service"], list):
+        lines.append("🔧 Services: " + ", ".join(f"{s['task']} ({s['company']})" for s in data["service"] if isinstance(s, dict)))
+    if "tools" in data and isinstance(data["tools"], list):
+        lines.append("🛠️ Tools: " + ", ".join(f"{t['item']} ({t['company']})" for t in data["tools"] if isinstance(t, dict)))
+    if "activities" in data and isinstance(data["activities"], list):
+        lines.append("📋 Activities: " + ", ".join(data["activities"]))
+    if "issues" in data and isinstance(data["issues"], list):
+        lines.append("⚠️ Issues:")
+        for i in data["issues"]:
+            if isinstance(i, dict):
+                lines.append(f"• {i['description']} (by {i['caused_by']}){' 📸' if i['has_photo'] else ''}")
+    if "time" in data:
+        lines.append(f"⏰ Time: {data['time']}")
+    if "weather" in data:
+        lines.append(f"🌦️ Weather: {data['weather']}")
+    if "impression" in data:
+        lines.append(f"💬 Impression: {data['impression']}")
+    if "comments" in data:
+        lines.append(f"📝 Comments: {data['comments']}")
+    return "\n".join(lines)
+
+def extract_site_report(text):
+    prompt = gpt_prompt_template + f"""
+{text}
+"""
+    messages = [
+        {"role": "system", "content": "You only return fields explicitly mentioned in the transcribed message. Never guess or fill missing info."},
+        {"role": "user", "content": prompt}
+    ]
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        temperature=0.3,
+        messages=messages
+    )
+    try:
+        return json.loads(response.choices[0].message["content"])
+    except Exception as e:
+        print(f"❌ GPT parsing failed: {e}")
+        return {}
+
+def apply_correction(original_data, correction_text):
+    correction_prompt = f"""
+You are helping correct structured site data for a construction project.
+Below is the current structured JSON that was extracted from a voice message:
+
+{json.dumps(original_data, indent=2)}
+
+The user has sent this correction:
+"""{correction_text}"""
+
+✅ Please:
+- Correct **any spelling mistakes** in company or person names.
+- **Add** any field that was missing if clearly described in the correction.
+- Overwrite existing values if a correction clearly applies to them.
+- Return only the updated full JSON with all fields combined.
+
+Important: Only change what the user asked to correct. Keep all other values from the original JSON.
+"""
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        temperature=0,
+        messages=[{"role": "user", "content": correction_prompt}]
+    )
+    try:
+        return json.loads(response.choices[0].message["content"])
+    except Exception as e:
+        print(f"❌ Correction parsing failed: {e}")
+        return original_data
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    try:
+        sender = request.form.get("From")
+        message = request.form.get("Body")
+        media_url = request.form.get("MediaUrl0")
+        media_type = request.form.get("MediaContentType0")
+
+        print(f"📩 Message from {sender}: {message}")
+
+        if media_url and "audio" in media_type:
+            transcription = transcribe_audio(media_url)
+            print(f"🗣 Transcription: {transcription}")
+
+            if sender in session_data and session_data[sender].get("awaiting_correction"):
+                updated = apply_correction(session_data[sender]["structured_data"], transcription)
+                session_data[sender]["structured_data"] = updated
+                session_data[sender]["awaiting_correction"] = False
+                reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
+                send_whatsapp_reply(sender, reply)
+                return "Updated with correction.", 200
+
+            structured = extract_site_report(transcription)
+
+            for field in ["impression", "time", "weather", "comments", "category"]:
+                if field in structured and not structured[field]:
+                    del structured[field]
+
+            if not structured or "site_name" not in structured:
+                send_whatsapp_reply(sender, "Hmm, I didn’t catch any clear site information. Could you try again?")
+                return "⚠️ GPT returned empty or invalid data", 200
+
+            print("🧠 Structured data:\n" + json.dumps(structured, indent=2, ensure_ascii=False))
+
+            session_data[sender] = {
+                "structured_data": structured,
+                "awaiting_correction": True
+            }
+
+            summary = summarize_data(structured)
+            confirm_msg = f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can also send corrections via text or voice."
+            send_whatsapp_reply(sender, confirm_msg)
+            return "Summary sent for confirmation.", 200
+
+        if sender in session_data and session_data[sender].get("awaiting_correction") and message:
+            updated = apply_correction(session_data[sender]["structured_data"], message)
+            session_data[sender]["structured_data"] = updated
+            session_data[sender]["awaiting_correction"] = False
+            reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
+            send_whatsapp_reply(sender, reply)
+            return "Updated with correction.", 200
+
+        send_whatsapp_reply(sender, "Thanks! You can speak your report or send a correction.")
+        return "✅ Message processed", 200
+
+    except Exception as e:
+        print(f"❌ Unhandled error in /webhook: {e}")
+        return "❌ Internal Server Error", 500
+
+# GPT Prompt
+gpt_prompt_template = """
+You are an AI assistant helping extract a construction site report based on a spoken summary from a site manager. 
+The user provided voice messages in response to 13 specific questions. You will receive their answers as one full block of text.
+You are a strict and accurate assistant. Your task is to extract structured information from a voice transcription made by a site manager on a construction site.
+
+⚠️ Only extract information that is **explicitly mentioned** in the transcribed report. 
+❌ Do NOT guess, assume, or infer any missing fields.
+❌ Do NOT fill in placeholders like “none,” “no issues,” “unspecified,” or summaries like “a productive day” unless clearly said.
+Return a JSON with only the fields that were mentioned.
+    
+Please extract the following fields as structured JSON:
+
+1. site_name (required)
+2. segment (optional)
+3. category – high-level topic or type of documentation (e.g. "Abnahme", "Mängelerfassung", "Grundriss", "Besonderheiten", "Zugang")
+4. company – list of companies mentioned (e.g. [{"name": "ABC AG"}])
+5. people – [{"name": "...", "role": "..."}]
+6. tools – [{"item": "...", "company": "..."}]
+7. service – [{"task": "...", "company": "..."}]
+8. activities – free-form list of where or how service was applied
+9. issues – [{"description": "...", "caused_by": "...", "has_photo": true/false}]
+10. time – morning / afternoon / evening / full day
+11. weather – short description
+12. impression – summary or sentiment
+13. comments – any additional notes or plans
+
+Only include fields that were explicitly mentioned in the transcribed message.
+"""
