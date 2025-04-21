@@ -193,5 +193,5 @@ Please extract the following fields as structured JSON:
 
 Only include fields that were explicitly mentioned in the transcribed message.
 Here is the full transcribed report:
-"""{{transcribed_report}}"""
+{{transcribed_report}}
 """
