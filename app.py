@@ -6,13 +6,19 @@ app = Flask(__name__)
 
 # Voice-to-text helper using Whisper
 def transcribe_audio(media_url):
-    # Download the voice message from Twilio using basic auth
-    audio_data = requests.get(media_url, auth=(
+    # Fetch the audio securely using Twilio credentials
+    response = requests.get(media_url, auth=(
         os.getenv("TWILIO_SID"), os.getenv("TWILIO_AUTH_TOKEN")
-    )).content
+    ))
 
-    # Send to Whisper for transcription
-    response = requests.post(
+    if response.status_code != 200:
+        print(f"❌ Failed to download audio. Status code: {response.status_code}")
+        return "[Download failed]"
+
+    audio_data = response.content
+
+    # Now send it to Whisper
+    whisper_response = requests.post(
         "https://api.openai.com/v1/audio/transcriptions",
         headers={
             "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"
@@ -21,9 +27,12 @@ def transcribe_audio(media_url):
         data={"model": "whisper-1"}
     )
 
-    result = response.json()
-    return result.get("text", "[No text found]")
+    if whisper_response.status_code != 200:
+        print(f"❌ Whisper error: {whisper_response.status_code} – {whisper_response.text}")
+        return "[Whisper failed]"
 
+    result = whisper_response.json()
+    return result.get("text", "[No text found]")
 @app.route("/webhook", methods=["POST"])
 def webhook():
     sender = request.form.get("From")
