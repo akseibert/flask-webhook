@@ -58,7 +58,11 @@ Please extract the following fields as structured JSON:
 11. impression – summary or sentiment
 12. comments – any additional notes or plans
 
-If a photo was sent after a message about an issue, set has_photo to true. If something is not mentioned, leave it out of the JSON.
+If a photo was sent after a message about an issue, set has_photo to true.
+Only include fields that were explicitly mentioned in the transcribed message.  
+Do not guess or infer missing values.  
+If something is unclear or not said, omit it entirely — do not fill in with defaults like "full day", "no notes", or positive impressions.  
+Return only actual information said by the user.
 
 Here is the full transcribed report:
 \"\"\"{{transcribed_report}}\"\"\"
@@ -120,7 +124,7 @@ def webhook():
             print(f"🗣 Transcription from {sender}: {transcription}")
 
             structured_data = extract_site_report(transcription)
-            print(f"🧠 Structured info:\n{json.dumps(structured_data, indent=2)}")
+            print("🧠 Structured info:\n" + json.dumps(structured_data, indent=2, ensure_ascii=False))
 
             send_whatsapp_reply(sender, "Thanks! Please now tell me who worked with you and what their roles were.")
 
