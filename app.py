@@ -81,8 +81,9 @@ def extract_site_report(transcribed_text):
 
     try:
         result = json.loads(reply)
-    except:
-        print("❌ GPT did not return valid JSON:")
+    except Exception as e:
+        print(f"❌ GPT did not return valid JSON. Error: {e}")
+        print("🧠 Raw GPT reply:")
         print(reply)
         result = {}
 
@@ -123,14 +124,27 @@ def webhook():
             transcription = transcribe_audio(media_url)
             print(f"🗣 Transcription from {sender}: {transcription}")
 
+            if transcription.strip() == "[No text found]":
+                print("❌ Whisper failed to transcribe speech.")
+                send_whatsapp_reply(sender, "Sorry, I couldn’t hear what you said. Could you please repeat it?")
+                return "⚠️ No transcribable text.", 200
+
             structured_data = extract_site_report(transcription)
+
+            if not structured_data:
+                print("❌ GPT returned no usable data.")
+                send_whatsapp_reply(sender, "Hmm, I didn’t catch any site details. Could you repeat what happened today?")
+                return "⚠️ GPT returned no data.", 200
+
             print("🧠 Structured info:\n" + json.dumps(structured_data, indent=2, ensure_ascii=False))
 
             send_whatsapp_reply(sender, "Thanks! Please now tell me who worked with you and what their roles were.")
 
             return "✅ Voice message transcribed, analyzed, and replied.", 200
+
         except Exception as e:
             print(f"❌ Error during processing: {e}")
+            send_whatsapp_reply(sender, "Oops, something went wrong while analyzing your message.")
             return "⚠️ Could not transcribe and analyze audio.", 200
 
     return "✅ Message received!", 200
