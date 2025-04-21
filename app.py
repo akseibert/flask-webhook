@@ -58,7 +58,7 @@ def summarize_data(data):
     if "category" in data:
         lines.append(f"🏷️ Category: {data['category']}")
     if "company" in data and isinstance(data["company"], list):
-        lines.append("🏗️ Companies: " + ", ".join(c["name"] for c in data["company"] if isinstance(c, dict)))
+        lines.append("🛍️ Companies: " + ", ".join(c["name"] for c in data["company"] if isinstance(c, dict)))
     if "people" in data and isinstance(data["people"], list):
         lines.append("👷 People: " + ", ".join(f"{p['name']} ({p['role']})" for p in data["people"] if isinstance(p, dict)))
     if "service" in data and isinstance(data["service"], list):
@@ -139,7 +139,7 @@ def webhook():
         structured = extract_site_report(transcription)
 
         try:
-            print("🧠 Structured info:\n" + json.dumps(structured, indent=2, ensure_ascii=False))
+            print("🧐 Structured info:\n" + json.dumps(structured, indent=2, ensure_ascii=False))
         except Exception as e:
             print(f"❌ Error printing structured data: {e}")
 
@@ -195,4 +195,4 @@ Please extract the following fields as structured JSON:
 
 Only include fields that were explicitly mentioned in the transcribed message.
 Here is the full transcribed report:
-"""{{transcribed_report}}"""
+"""
