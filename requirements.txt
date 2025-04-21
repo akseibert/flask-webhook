@@ -3,3 +3,4 @@ gunicorn
 requests
 openai==0.28
 twilio
+msal
