@@ -4,11 +4,13 @@ import os
 import openai
 import json
 from twilio.rest import Client
+from msal import ConfidentialClientApplication  # NEW
 
 app = Flask(__name__)
 
 # In-memory session store
-session_data = {}  # { "whatsapp:+4176...": {"structured_data": {...}, "awaiting_correction": True} }
+session_data = {}  # { "whatsapp:+4176...": {"structured_data": {...}} }
+
 
 def transcribe_audio(media_url):
     response = requests.get(media_url, auth=(
@@ -37,6 +39,7 @@ def transcribe_audio(media_url):
     result = whisper_response.json()
     return result.get("text", "[No text found]")
 
+
 def send_whatsapp_reply(to_number, message):
     client = Client(os.getenv("TWILIO_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
     from_number = "whatsapp:" + os.getenv("TWILIO_PHONE_NUMBER")
@@ -49,6 +52,7 @@ def send_whatsapp_reply(to_number, message):
         to=to_number
     )
 
+
 def summarize_data(data):
     lines = []
     if "site_name" in data:
@@ -58,7 +62,7 @@ def summarize_data(data):
     if "category" in data:
         lines.append(f"🏷️ Category: {data['category']}")
     if "company" in data and isinstance(data["company"], list):
-        lines.append("🛍️ Companies: " + ", ".join(c["name"] for c in data["company"] if isinstance(c, dict)))
+        lines.append("🏣 Companies: " + ", ".join(c["name"] for c in data["company"] if isinstance(c, dict)))
     if "people" in data and isinstance(data["people"], list):
         lines.append("👷 People: " + ", ".join(f"{p['name']} ({p['role']})" for p in data["people"] if isinstance(p, dict)))
     if "service" in data and isinstance(data["service"], list):
@@ -82,13 +86,6 @@ def summarize_data(data):
         lines.append(f"📝 Comments: {data['comments']}")
     return "\n".join(lines)
 
-def deep_update(original, correction):
-    for key, value in correction.items():
-        if isinstance(value, dict) and isinstance(original.get(key), dict):
-            deep_update(original[key], value)
-        else:
-            original[key] = value
-    return original
 
 def extract_site_report(text):
     prompt = gpt_prompt_template.replace("{{transcribed_report}}", text)
@@ -102,6 +99,7 @@ def extract_site_report(text):
     except:
         return {}
 
+
 def apply_correction(original_data, correction_text):
     correction_prompt = f"""
 You are helping correct structured site data. This is the original structured JSON:
@@ -110,18 +108,40 @@ You are helping correct structured site data. This is the original structured JS
 The user said:
 "{correction_text}"
 
-Return the full updated JSON (with only the corrected fields changed).
+Return the updated JSON with only the corrected fields changed.
 """
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": correction_prompt}]
     )
     try:
-        correction_patch = json.loads(response.choices[0].message["content"])
-        return deep_update(original_data, correction_patch)
-    except Exception as e:
-        print(f"❌ Correction parse error: {e}")
+        return json.loads(response.choices[0].message["content"])
+    except:
         return original_data
+
+# NEW: get Microsoft Graph access token
+def get_access_token():
+    tenant_id = os.getenv("TENANT_ID")
+    client_id = os.getenv("CLIENT_ID")
+    client_secret = os.getenv("CLIENT_SECRET")
+
+    authority = f"https://login.microsoftonline.com/{tenant_id}"
+    scope = ["https://graph.microsoft.com/.default"]
+
+    app = ConfidentialClientApplication(
+        client_id,
+        authority=authority,
+        client_credential=client_secret,
+    )
+
+    result = app.acquire_token_silent(scope, account=None)
+    if not result:
+        result = app.acquire_token_for_client(scopes=scope)
+
+    if "access_token" in result:
+        return result["access_token"]
+    else:
+        raise Exception("Authentication failed: " + json.dumps(result, indent=2))
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -134,11 +154,12 @@ def webhook():
 
     if media_url and "audio" in media_type:
         transcription = transcribe_audio(media_url)
-        print(f"🗣️ Transcription: {transcription}")
+        print(f"🔣 Transcription: {transcription}")
 
         if sender in session_data and session_data[sender].get("awaiting_correction"):
             updated = apply_correction(session_data[sender]["structured_data"], transcription)
             session_data[sender]["structured_data"] = updated
+            session_data[sender]["awaiting_correction"] = False
             reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
             send_whatsapp_reply(sender, reply)
             return "Updated with correction.", 200
@@ -146,7 +167,7 @@ def webhook():
         structured = extract_site_report(transcription)
 
         try:
-            print("🧐 Structured info:\n" + json.dumps(structured, indent=2, ensure_ascii=False))
+            print("🧠 Structured info:\n" + json.dumps(structured, indent=2, ensure_ascii=False))
         except Exception as e:
             print(f"❌ Error printing structured data: {e}")
 
@@ -169,20 +190,17 @@ def webhook():
         return "Summary sent for confirmation.", 200
 
     if sender in session_data and session_data[sender].get("awaiting_correction"):
-        confirmation = message.strip().lower()
-        if confirmation in ["yes", "correct", "ok", "yep", "confirm", "confirmed"]:
-            session_data[sender]["awaiting_correction"] = False
-            send_whatsapp_reply(sender, "Thanks, your entry has been confirmed and saved.")
-            return "Correction mode exited.", 200
-        else:
-            updated = apply_correction(session_data[sender]["structured_data"], message)
-            session_data[sender]["structured_data"] = updated
-            reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
-            send_whatsapp_reply(sender, reply)
-            return "Updated with correction.", 200
+        updated = apply_correction(session_data[sender]["structured_data"], message)
+        session_data[sender]["structured_data"] = updated
+        session_data[sender]["awaiting_correction"] = False
+        reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
+        send_whatsapp_reply(sender, reply)
+        return "Updated with correction.", 200
 
     send_whatsapp_reply(sender, "Thanks! You can speak your report or send a correction.")
     return "✅ Message processed", 200
+
+# GPT Prompt
 
 gpt_prompt_template = """
 You are an AI assistant helping extract a construction site report based on a spoken summary from a site manager. 
@@ -206,5 +224,4 @@ Please extract the following fields as structured JSON:
 
 Only include fields that were explicitly mentioned in the transcribed message.
 Here is the full transcribed report:
-{{transcribed_report}}
-"""
+"""{{transcribed_report}}"""
