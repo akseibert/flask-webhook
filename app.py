@@ -117,7 +117,7 @@ Below is the current structured JSON that was extracted from a voice message:
 {json.dumps(original_data, indent=2)}
 
 The user has sent this correction:
-"{correction_text}"
+"""{correction_text}"""
 
 ✅ Please:
 - Correct **any spelling mistakes** in company or person names.
@@ -140,57 +140,62 @@ Important: Only change what the user asked to correct. Keep all other values fro
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    sender = request.form.get("From")
-    message = request.form.get("Body")
-    media_url = request.form.get("MediaUrl0")
-    media_type = request.form.get("MediaContentType0")
+    try:
+        sender = request.form.get("From")
+        message = request.form.get("Body")
+        media_url = request.form.get("MediaUrl0")
+        media_type = request.form.get("MediaContentType0")
 
-    print(f"📩 Message from {sender}: {message}")
+        print(f"📩 Message from {sender}: {message}")
 
-    if media_url and "audio" in media_type:
-        transcription = transcribe_audio(media_url)
-        print(f"🗣 Transcription: {transcription}")
+        if media_url and "audio" in media_type:
+            transcription = transcribe_audio(media_url)
+            print(f"🗣 Transcription: {transcription}")
 
-        if sender in session_data and session_data[sender].get("awaiting_correction"):
-            updated = apply_correction(session_data[sender]["structured_data"], transcription)
+            if sender in session_data and session_data[sender].get("awaiting_correction"):
+                updated = apply_correction(session_data[sender]["structured_data"], transcription)
+                session_data[sender]["structured_data"] = updated
+                session_data[sender]["awaiting_correction"] = False
+                reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
+                send_whatsapp_reply(sender, reply)
+                return "Updated with correction.", 200
+
+            structured = extract_site_report(transcription)
+
+            for field in ["impression", "time", "weather", "comments", "category"]:
+                if field in structured and not structured[field]:
+                    del structured[field]
+
+            if not structured or "site_name" not in structured:
+                send_whatsapp_reply(sender, "Hmm, I didn’t catch any clear site information. Could you try again?")
+                return "⚠️ GPT returned empty or invalid data", 200
+
+            print("🧠 Structured data:\n" + json.dumps(structured, indent=2, ensure_ascii=False))
+
+            session_data[sender] = {
+                "structured_data": structured,
+                "awaiting_correction": True
+            }
+
+            summary = summarize_data(structured)
+            confirm_msg = f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can also send corrections via text or voice."
+            send_whatsapp_reply(sender, confirm_msg)
+            return "Summary sent for confirmation.", 200
+
+        if sender in session_data and session_data[sender].get("awaiting_correction") and message:
+            updated = apply_correction(session_data[sender]["structured_data"], message)
             session_data[sender]["structured_data"] = updated
             session_data[sender]["awaiting_correction"] = False
             reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
             send_whatsapp_reply(sender, reply)
             return "Updated with correction.", 200
 
-        structured = extract_site_report(transcription)
+        send_whatsapp_reply(sender, "Thanks! You can speak your report or send a correction.")
+        return "✅ Message processed", 200
 
-        for field in ["impression", "time", "weather", "comments", "category"]:
-            if field in structured and not structured[field]:
-                del structured[field]
-
-        if not structured or "site_name" not in structured:
-            send_whatsapp_reply(sender, "Hmm, I didn’t catch any clear site information. Could you try again?")
-            return "⚠️ GPT returned empty or invalid data", 200
-
-        print("🧠 Structured data:\n" + json.dumps(structured, indent=2, ensure_ascii=False))
-
-        session_data[sender] = {
-            "structured_data": structured,
-            "awaiting_correction": True
-        }
-
-        summary = summarize_data(structured)
-        confirm_msg = f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can also send corrections via text or voice."
-        send_whatsapp_reply(sender, confirm_msg)
-        return "Summary sent for confirmation.", 200
-
-    if sender in session_data and session_data[sender].get("awaiting_correction") and message:
-        updated = apply_correction(session_data[sender]["structured_data"], message)
-        session_data[sender]["structured_data"] = updated
-        session_data[sender]["awaiting_correction"] = False
-        reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
-        send_whatsapp_reply(sender, reply)
-        return "Updated with correction.", 200
-
-    send_whatsapp_reply(sender, "Thanks! You can speak your report or send a correction.")
-    return "✅ Message processed", 200
+    except Exception as e:
+        print(f"❌ Unhandled error in /webhook: {e}")
+        return "❌ Internal Server Error", 500
 
 # GPT Prompt
 gpt_prompt_template = """
