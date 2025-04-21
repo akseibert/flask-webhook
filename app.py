@@ -9,6 +9,11 @@ from datetime import datetime
 
 app = Flask(__name__)
 
+# Health check route
+@app.route("/", methods=["GET"])
+def index():
+    return "Running", 200
+
 # Validate environment setup
 if not all([os.getenv("TENANT_ID"), os.getenv("CLIENT_ID"), os.getenv("CLIENT_SECRET")]):
     raise ValueError("❌ Missing one or more required environment variables: TENANT_ID, CLIENT_ID, CLIENT_SECRET")
