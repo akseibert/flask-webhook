@@ -82,23 +82,24 @@ def summarize_data(data):
         lines.append(f"📝 Comments: {data['comments']}")
     return "\n".join(lines)
 
+def deep_update(original, correction):
+    for key, value in correction.items():
+        if isinstance(value, dict) and isinstance(original.get(key), dict):
+            deep_update(original[key], value)
+        else:
+            original[key] = value
+    return original
+
 def extract_site_report(text):
-    prompt = gpt_prompt_template + f'\n"""\n{text}\n"""'
+    prompt = gpt_prompt_template.replace("{{transcribed_report}}", text)
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         temperature=0.3,
         messages=[{"role": "user", "content": prompt}]
     )
-    raw_reply = response.choices[0].message["content"]
-
     try:
-        parsed = json.loads(raw_reply)
-        return parsed
-    except Exception as e:
-        print("❌ GPT reply was not valid JSON.")
-        print("🧾 Raw GPT reply:")
-        print(raw_reply)
-        print("🧾 Parsing error:", e)
+        return json.loads(response.choices[0].message["content"])
+    except:
         return {}
 
 def apply_correction(original_data, correction_text):
@@ -109,7 +110,7 @@ You are helping correct structured site data. This is the original structured JS
 The user said:
 "{correction_text}"
 
-Return the updated JSON with only the corrected fields changed.
+Return the full updated JSON (with only the corrected fields changed).
 """
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
@@ -117,9 +118,9 @@ Return the updated JSON with only the corrected fields changed.
     )
     try:
         correction_patch = json.loads(response.choices[0].message["content"])
-        original_data.update(correction_patch)
-        return original_data
-    except:
+        return deep_update(original_data, correction_patch)
+    except Exception as e:
+        print(f"❌ Correction parse error: {e}")
         return original_data
 
 @app.route("/webhook", methods=["POST"])
@@ -202,4 +203,5 @@ Please extract the following fields as structured JSON:
 
 Only include fields that were explicitly mentioned in the transcribed message.
 Here is the full transcribed report:
+{{transcribed_report}}
 """
