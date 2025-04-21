@@ -117,7 +117,7 @@ Below is the current structured JSON that was extracted from a voice message:
 {json.dumps(original_data, indent=2)}
 
 The user has sent this correction:
-"""{correction_text}"""
+"{correction_text}"
 
 ✅ Please:
 - Correct **any spelling mistakes** in company or person names.
