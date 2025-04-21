@@ -81,7 +81,23 @@ def extract_site_report(transcribed_text):
         result = {}
 
     return result
+    
+#Programmable Messaging API   
+from twilio.rest import Client
+def send_whatsapp_reply(to_number, message):
+    account_sid = os.getenv("TWILIO_SID")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    client = Client(account_sid, auth_token)
 
+    from_number = "whatsapp:" + os.getenv("TWILIO_PHONE_NUMBER")
+    to_number = "whatsapp:" + to_number.replace("whatsapp:", "")  # just in case
+
+    client.messages.create(
+        body=message,
+        from_=from_number,
+        to=to_number
+    )
+    
 @app.route("/webhook", methods=["POST"])
 def webhook():
     sender = request.form.get("From")
