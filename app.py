@@ -76,10 +76,13 @@ def summarize_data(data):
     if "activities" in data and isinstance(data["activities"], list):
         lines.append("📋 Activities: " + ", ".join(data["activities"]))
     if "issues" in data and isinstance(data["issues"], list):
-        lines.append("⚠️ Issues:")
-        for i in data["issues"]:
-            if isinstance(i, dict):
-                lines.append(f"• {i['description']} (by {i['caused_by']}){' 📸' if i['has_photo'] else ''}")
+    lines.append("⚠️ Issues:")
+    for i in data["issues"]:
+        if isinstance(i, dict):
+            description = i.get("description", "No description")
+            caused_by = i.get("caused_by", "unknown")
+            photo_flag = " 📸" if i.get("has_photo") else ""
+            lines.append(f"• {description} (by {caused_by}){photo_flag}")
     if "time" in data:
         lines.append(f"⏰ Time: {data['time']}")
     if "weather" in data:
