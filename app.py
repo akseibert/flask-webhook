@@ -83,15 +83,22 @@ def summarize_data(data):
     return "\n".join(lines)
 
 def extract_site_report(text):
-    prompt = gpt_prompt_template.replace("{{transcribed_report}}", text)
+    prompt = gpt_prompt_template + f'\n"""\n{text}\n"""'
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         temperature=0.3,
         messages=[{"role": "user", "content": prompt}]
     )
+    raw_reply = response.choices[0].message["content"]
+
     try:
-        return json.loads(response.choices[0].message["content"])
-    except:
+        parsed = json.loads(raw_reply)
+        return parsed
+    except Exception as e:
+        print("❌ GPT reply was not valid JSON.")
+        print("🧾 Raw GPT reply:")
+        print(raw_reply)
+        print("🧾 Parsing error:", e)
         return {}
 
 def apply_correction(original_data, correction_text):
