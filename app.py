@@ -84,7 +84,9 @@ def summarize_data(data):
     return "\n".join(lines)
 
 def extract_site_report(text):
-    prompt = gpt_prompt_template.replace("{{transcribed_report}}", text)
+    prompt = gpt_prompt_template + f"""
+{text}
+"""
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         temperature=0.3,
@@ -137,6 +139,56 @@ def get_access_token():
     else:
         raise Exception("Authentication failed: " + json.dumps(result, indent=2))
 
+def post_to_sharepoint(data):
+    access_token = get_access_token()
+    site_url = "https://graph.microsoft.com/v1.0/sites/netorgft8023287.sharepoint.com:/sites/Chatbot"
+    list_url = site_url + "/lists/Chatbot_StoredRecords/items"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+
+    # flatten people, tools, services into multiple rows
+    def create_payload(entry):
+        return {
+            "fields": entry
+        }
+
+    base_fields = {
+        "SiteName": data.get("site_name"),
+        "Segment": data.get("segment"),
+        "Category": data.get("category"),
+        "Time": data.get("time"),
+        "Weather": data.get("weather"),
+        "Impression": data.get("impression"),
+        "Comments": data.get("comments"),
+    }
+
+    for person in data.get("people", []):
+        fields = base_fields.copy()
+        fields.update({"People": person["name"], "Role": person["role"]})
+        requests.post(list_url, headers=headers, json=create_payload(fields))
+
+    for tool in data.get("tools", []):
+        fields = base_fields.copy()
+        fields.update({"Tools": tool["item"], "Company": tool["company"]})
+        requests.post(list_url, headers=headers, json=create_payload(fields))
+
+    for service in data.get("service", []):
+        fields = base_fields.copy()
+        fields.update({"Services": service["task"], "Company": service["company"]})
+        requests.post(list_url, headers=headers, json=create_payload(fields))
+
+    for activity in data.get("activities", []):
+        fields = base_fields.copy()
+        fields.update({"Activities": activity})
+        requests.post(list_url, headers=headers, json=create_payload(fields))
+
+    for issue in data.get("issues", []):
+        fields = base_fields.copy()
+        fields.update({"Issues": issue["description"]})
+        requests.post(list_url, headers=headers, json=create_payload(fields))
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     sender = request.form.get("From")
@@ -154,6 +206,7 @@ def webhook():
             updated = apply_correction(session_data[sender]["structured_data"], transcription)
             session_data[sender]["structured_data"] = updated
             session_data[sender]["awaiting_correction"] = False
+            post_to_sharepoint(updated)
             reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
             send_whatsapp_reply(sender, reply)
             return "Updated with correction.", 200
@@ -161,7 +214,7 @@ def webhook():
         structured = extract_site_report(transcription)
 
         try:
-            print("🧠 Structured info:\n" + json.dumps(structured, indent=2, ensure_ascii=False))
+            print("🧐 Structured info:\n" + json.dumps(structured, indent=2, ensure_ascii=False))
         except Exception as e:
             print(f"❌ Error printing structured data: {e}")
 
@@ -187,6 +240,7 @@ def webhook():
         updated = apply_correction(session_data[sender]["structured_data"], message)
         session_data[sender]["structured_data"] = updated
         session_data[sender]["awaiting_correction"] = False
+        post_to_sharepoint(updated)
         reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
         send_whatsapp_reply(sender, reply)
         return "Updated with correction.", 200
@@ -216,5 +270,4 @@ Please extract the following fields as structured JSON:
 13. comments – any additional notes or plans
 
 Only include fields that were explicitly mentioned in the transcribed message.
-Here is the full transcribed report:
 """
