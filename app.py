@@ -32,10 +32,16 @@ def webhook():
     media_type = request.form.get("MediaContentType0")
 
     print(f"📩 Message from {sender}: {message}")
+    print(f"📎 Media URL: {media_url}")
+    print(f"📎 Media Type: {media_type}")
 
     if media_url and "audio" in media_type:
-        transcription = transcribe_audio(media_url)
-        print(f"🗣 Transcription from {sender}: {transcription}")
-        return "✅ Voice message transcribed!", 200
+        try:
+            transcription = transcribe_audio(media_url)
+            print(f"🗣 Transcription from {sender}: {transcription}")
+            return "✅ Voice message transcribed!", 200
+        except Exception as e:
+            print(f"❌ Error transcribing: {e}")
+            return "⚠️ Could not transcribe audio.", 200
 
     return "✅ Message received!", 200
