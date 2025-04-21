@@ -113,3 +113,45 @@ def enrich_with_date(data):
             print("❌ Date format invalid, defaulting to today.", e)
             data["date"] = today_str
     return data
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    sender = request.form.get("From")
+    message = request.form.get("Body")
+    media_url = request.form.get("MediaUrl0")
+    media_type = request.form.get("MediaContentType0")
+
+    print(f"📩 Message from {sender}: {message}")
+
+    if not sender:
+        return "⚠️ No sender", 400
+
+    if media_url and "audio" in media_type:
+        transcription = transcribe_audio(media_url)
+        print(f"🗣 Transcription: {transcription}")
+        message = transcription
+
+    if sender not in session_data:
+        session_data[sender] = {"structured_data": {}, "awaiting_correction": False}
+
+    structured = session_data[sender].get("structured_data", {})
+
+    if session_data[sender]["awaiting_correction"]:
+        updated = apply_correction(structured, message)
+        session_data[sender]["structured_data"] = updated
+        session_data[sender]["awaiting_correction"] = True  # Allow multiple corrections
+        summary = summarize_data(updated)
+        send_whatsapp_reply(sender, f"✅ Got it! Updated version:\n\n{summary}\n\n✅ Anything else to correct?")
+        return "Updated with correction.", 200
+
+    extracted = extract_site_report(message)
+    if not extracted or "site_name" not in extracted:
+        send_whatsapp_reply(sender, "⚠️ Sorry, I couldn't detect site info. Please try again.")
+        return "Missing required fields", 200
+
+    enriched = enrich_with_date(extracted)
+    session_data[sender]["structured_data"] = enriched
+    session_data[sender]["awaiting_correction"] = True
+    summary = summarize_data(enriched)
+
+    send_whatsapp_reply(sender, f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can still send corrections.")
+    return "Summary sent", 200
