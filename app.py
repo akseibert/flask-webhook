@@ -8,7 +8,7 @@ from twilio.rest import Client
 app = Flask(__name__)
 
 # In-memory session store
-session_data = {}  # { "whatsapp:+4176...": {"structured_data": {...}} }
+session_data = {}  # { "whatsapp:+4176...": {"structured_data": {...}, "awaiting_correction": True} }
 
 def transcribe_audio(media_url):
     response = requests.get(media_url, auth=(
@@ -139,7 +139,6 @@ def webhook():
         if sender in session_data and session_data[sender].get("awaiting_correction"):
             updated = apply_correction(session_data[sender]["structured_data"], transcription)
             session_data[sender]["structured_data"] = updated
-            session_data[sender]["awaiting_correction"] = False
             reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
             send_whatsapp_reply(sender, reply)
             return "Updated with correction.", 200
@@ -170,17 +169,21 @@ def webhook():
         return "Summary sent for confirmation.", 200
 
     if sender in session_data and session_data[sender].get("awaiting_correction"):
-        updated = apply_correction(session_data[sender]["structured_data"], message)
-        session_data[sender]["structured_data"] = updated
-        session_data[sender]["awaiting_correction"] = False
-        reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
-        send_whatsapp_reply(sender, reply)
-        return "Updated with correction.", 200
+        confirmation = message.strip().lower()
+        if confirmation in ["yes", "correct", "ok", "yep", "confirm", "confirmed"]:
+            session_data[sender]["awaiting_correction"] = False
+            send_whatsapp_reply(sender, "Thanks, your entry has been confirmed and saved.")
+            return "Correction mode exited.", 200
+        else:
+            updated = apply_correction(session_data[sender]["structured_data"], message)
+            session_data[sender]["structured_data"] = updated
+            reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
+            send_whatsapp_reply(sender, reply)
+            return "Updated with correction.", 200
 
     send_whatsapp_reply(sender, "Thanks! You can speak your report or send a correction.")
     return "✅ Message processed", 200
 
-# Reuse GPT prompt from earlier
 gpt_prompt_template = """
 You are an AI assistant helping extract a construction site report based on a spoken summary from a site manager. 
 The user provided voice messages in response to 10 specific questions. You will receive their answers as one full block of text.
