@@ -109,7 +109,9 @@ Return the updated JSON with only the corrected fields changed.
         messages=[{"role": "user", "content": correction_prompt}]
     )
     try:
-        return json.loads(response.choices[0].message["content"])
+        correction_patch = json.loads(response.choices[0].message["content"])
+        original_data.update(correction_patch)
+        return original_data
     except:
         return original_data
 
@@ -193,5 +195,4 @@ Please extract the following fields as structured JSON:
 
 Only include fields that were explicitly mentioned in the transcribed message.
 Here is the full transcribed report:
-{{transcribed_report}}
-"""
+"""{{transcribed_report}}"""
