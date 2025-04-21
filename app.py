@@ -28,9 +28,7 @@ def transcribe_audio(media_url):
 
     whisper_response = requests.post(
         "https://api.openai.com/v1/audio/transcriptions",
-        headers={
-            "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"
-        },
+        headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"},
         files={"file": ("audio.ogg", audio_data, "audio/ogg")},
         data={"model": "whisper-1"}
     )
@@ -50,12 +48,7 @@ def send_whatsapp_reply(to_number, message):
 
     print(f"📤 Sending WhatsApp message from {from_number} to {to_number}")
     print(f"📤 Message content: {message}")
-
-    client.messages.create(
-        body=message,
-        from_=from_number,
-        to=to_number
-    )
+    client.messages.create(body=message, from_=from_number, to=to_number)
 
 def summarize_data(data):
     lines = []
@@ -91,17 +84,20 @@ def summarize_data(data):
     return "\n".join(lines)
 
 def extract_site_report(text):
-    prompt = gpt_prompt_template + f"""
-{text}
-"""
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        temperature=0.3,
-        messages=[{"role": "user", "content": prompt}]
-    )
+    prompt = gpt_prompt_template + f"\n{text}"
+    messages = [
+        {"role": "system", "content": "You only return fields explicitly mentioned in the transcribed message. Never guess or fill missing info."},
+        {"role": "user", "content": prompt}
+    ]
     try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            temperature=0.3,
+            messages=messages
+        )
         return json.loads(response.choices[0].message["content"])
-    except:
+    except Exception as e:
+        print(f"❌ GPT parsing failed: {e}")
         return {}
 
 def apply_correction(original_data, correction_text):
@@ -116,11 +112,15 @@ Return the updated JSON with only the corrected fields changed.
 """
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": correction_prompt}]
+        messages=[
+            {"role": "system", "content": "Update only what the user explicitly corrected. Never guess."},
+            {"role": "user", "content": correction_prompt}
+        ]
     )
     try:
         return json.loads(response.choices[0].message["content"])
-    except:
+    except Exception as e:
+        print(f"❌ GPT correction failed: {e}")
         return original_data
 
 @app.route("/webhook", methods=["POST"])
@@ -154,6 +154,8 @@ def webhook():
             send_whatsapp_reply(sender, "Hmm, I didn’t catch any clear site information. Could you try again?")
             return "⚠️ GPT returned empty or invalid data", 200
 
+        print("🧠 Structured data:\n" + json.dumps(structured, indent=2, ensure_ascii=False))
+
         session_data[sender] = {
             "structured_data": structured,
             "awaiting_correction": True
@@ -178,23 +180,27 @@ def webhook():
 # GPT Prompt
 gpt_prompt_template = """
 You are an AI assistant helping extract a construction site report based on a spoken summary from a site manager. 
-The user provided voice messages in response to 10 specific questions. You will receive their answers as one full block of text.
+The user provided voice messages in response to 13 specific questions. You will receive their answers as one full block of text.
+You are a strict and accurate assistant. Your task is to extract structured information from a voice transcription made by a site manager on a construction site.
 
+⚠️ Only extract information that is **explicitly mentioned** in the transcribed report. 
+❌ Do NOT guess, assume, or infer any missing fields.
+❌ Do NOT fill in placeholders like “none,” “no issues,” “unspecified,” or summaries like “a productive day” unless clearly said.
+Return a JSON with only the fields that were mentioned.
+    
 Please extract the following fields as structured JSON:
 
 1. site_name (required)
 2. segment (optional)
-3. category – high-level topic or type of documentation (e.g. "Abnahme", "Mängelerfassung", "Grundriss", "Besonderheiten", "Zugang")
+3. category
 4. company – list of companies mentioned (e.g. [{"name": "ABC AG"}])
 5. people – [{"name": "...", "role": "..."}]
 6. tools – [{"item": "...", "company": "..."}]
 7. service – [{"task": "...", "company": "..."}]
-8. activities – free-form list of where or how service was applied
+8. activities
 9. issues – [{"description": "...", "caused_by": "...", "has_photo": true/false}]
-10. time – morning / afternoon / evening / full day
-11. weather – short description
-12. impression – summary or sentiment
-13. comments – any additional notes or plans
-
-Only include fields that were explicitly mentioned in the transcribed message.
+10. time
+11. weather
+12. impression
+13. comments
 """
