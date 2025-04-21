@@ -3,6 +3,7 @@ import requests
 import os
 import openai
 import json
+from twilio.rest import Client  # Twilio Messaging for auto-reply
 
 app = Flask(__name__)
 
@@ -45,7 +46,7 @@ Please extract the following fields as structured JSON:
 
 1. site_name (required)
 2. segment (optional)
-3. people – [{"name": "...", "role": "..."}]- Only include individuals. If a company is mentioned as working, it should go under service or tools instead.
+3. people – [{"name": "...", "role": "..."}] - Only include individuals. If a company is mentioned as working, it should go under service or tools instead.
 4. tools – [{"item": "...", "company": "..."}]
 5. service – [{"task": "...", "company": "..."}]
 6. activities
@@ -81,23 +82,22 @@ def extract_site_report(transcribed_text):
         result = {}
 
     return result
-    
-#Programmable Messaging API   
-from twilio.rest import Client
+
+# Twilio reply helper
 def send_whatsapp_reply(to_number, message):
     account_sid = os.getenv("TWILIO_SID")
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
     client = Client(account_sid, auth_token)
 
     from_number = "whatsapp:" + os.getenv("TWILIO_PHONE_NUMBER")
-    to_number = "whatsapp:" + to_number.replace("whatsapp:", "")  # just in case
+    to_number = "whatsapp:" + to_number.replace("whatsapp:", "")  # normalize
 
     client.messages.create(
         body=message,
         from_=from_number,
         to=to_number
     )
-    
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     sender = request.form.get("From")
@@ -114,11 +114,14 @@ def webhook():
             transcription = transcribe_audio(media_url)
             print(f"🗣 Transcription from {sender}: {transcription}")
 
-            # NEW: GPT extracts structured report from transcription
+            # GPT extracts structured report from transcription
             structured_data = extract_site_report(transcription)
             print(f"🧠 Structured info:\n{json.dumps(structured_data, indent=2)}")
 
-            return "✅ Voice message transcribed and analyzed!", 200
+            # Auto-reply to move to next question
+            send_whatsapp_reply(sender, "Thanks! Please now tell me who worked with you and what their roles were.")
+
+            return "✅ Voice message transcribed, analyzed, and replied.", 200
         except Exception as e:
             print(f"❌ Error during processing: {e}")
             return "⚠️ Could not transcribe and analyze audio.", 200
