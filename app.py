@@ -9,7 +9,6 @@ app = Flask(__name__)
 
 # Voice-to-text helper using Whisper
 def transcribe_audio(media_url):
-    # Fetch the audio securely using Twilio credentials
     response = requests.get(media_url, auth=(
         os.getenv("TWILIO_SID"), os.getenv("TWILIO_AUTH_TOKEN")
     ))
@@ -20,7 +19,6 @@ def transcribe_audio(media_url):
 
     audio_data = response.content
 
-    # Now send it to Whisper
     whisper_response = requests.post(
         "https://api.openai.com/v1/audio/transcriptions",
         headers={
@@ -46,19 +44,19 @@ Please extract the following fields as structured JSON:
 
 1. site_name (required)
 2. segment (optional)
-3. company -  [{"company": "..."}]
-4. people – [{"name": "...", "role": "..."}]
+3. company – list of companies mentioned (e.g. [{"name": "ABC AG"}, {"name": "Müller Tiefbau"}])
+4. people – [{"name": "...", "role": "..."}]  
 - Only include named individuals.  
 - If a company is mentioned as working with its employees or team, do not list placeholder people.  
-- Instead, just list the company under `company` or and skip the `people` field.
-5. tools – [{"item": "...", "company": "..."}]
-6. service – [{"task": "...", "company": "..."}]
-7. activities
+- Instead, list the company in the `company` field and skip `people` for that case.
+5. tools – [{"item": "...", "company": "..."}] – company may be listed more than once here
+6. service – [{"task": "...", "company": "..."}] – one entry per task per company
+7. activities – free-form list of activities done
 8. issues – [{"description": "...", "caused_by": "...", "has_photo": true/false}]
-9. time
-10. weather
-11. impression
-12. comments
+9. time – morning / afternoon / evening / full day
+10. weather – short description
+11. impression – summary or sentiment
+12. comments – any additional notes or plans
 
 If a photo was sent after a message about an issue, set has_photo to true. If something is not mentioned, leave it out of the JSON.
 
@@ -66,7 +64,6 @@ Here is the full transcribed report:
 \"\"\"{{transcribed_report}}\"\"\"
 """
 
-# GPT function to extract structured data
 def extract_site_report(transcribed_text):
     full_prompt = gpt_prompt_template.replace("{{transcribed_report}}", transcribed_text)
 
@@ -94,7 +91,11 @@ def send_whatsapp_reply(to_number, message):
     client = Client(account_sid, auth_token)
 
     from_number = "whatsapp:" + os.getenv("TWILIO_PHONE_NUMBER")
-    to_number = "whatsapp:" + to_number.replace("whatsapp:", "")  # normalize
+    if not to_number.startswith("whatsapp:"):
+        to_number = "whatsapp:" + to_number
+
+    print(f"📤 Sending WhatsApp reply to: {to_number}")
+    print(f"📤 From bot number: {from_number}")
 
     client.messages.create(
         body=message,
@@ -118,11 +119,9 @@ def webhook():
             transcription = transcribe_audio(media_url)
             print(f"🗣 Transcription from {sender}: {transcription}")
 
-            # GPT extracts structured report from transcription
             structured_data = extract_site_report(transcription)
             print(f"🧠 Structured info:\n{json.dumps(structured_data, indent=2)}")
 
-            # Auto-reply to move to next question
             send_whatsapp_reply(sender, "Thanks! Please now tell me who worked with you and what their roles were.")
 
             return "✅ Voice message transcribed, analyzed, and replied.", 200
