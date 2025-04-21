@@ -4,13 +4,12 @@ import os
 import openai
 import json
 from twilio.rest import Client
-from msal import ConfidentialClientApplication  # NEW
+from msal import ConfidentialClientApplication
 
 app = Flask(__name__)
 
 # In-memory session store
 session_data = {}  # { "whatsapp:+4176...": {"structured_data": {...}} }
-
 
 def transcribe_audio(media_url):
     response = requests.get(media_url, auth=(
@@ -39,7 +38,6 @@ def transcribe_audio(media_url):
     result = whisper_response.json()
     return result.get("text", "[No text found]")
 
-
 def send_whatsapp_reply(to_number, message):
     client = Client(os.getenv("TWILIO_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
     from_number = "whatsapp:" + os.getenv("TWILIO_PHONE_NUMBER")
@@ -51,7 +49,6 @@ def send_whatsapp_reply(to_number, message):
         from_=from_number,
         to=to_number
     )
-
 
 def summarize_data(data):
     lines = []
@@ -86,7 +83,6 @@ def summarize_data(data):
         lines.append(f"📝 Comments: {data['comments']}")
     return "\n".join(lines)
 
-
 def extract_site_report(text):
     prompt = gpt_prompt_template.replace("{{transcribed_report}}", text)
     response = openai.ChatCompletion.create(
@@ -98,7 +94,6 @@ def extract_site_report(text):
         return json.loads(response.choices[0].message["content"])
     except:
         return {}
-
 
 def apply_correction(original_data, correction_text):
     correction_prompt = f"""
@@ -119,7 +114,6 @@ Return the updated JSON with only the corrected fields changed.
     except:
         return original_data
 
-# NEW: get Microsoft Graph access token
 def get_access_token():
     tenant_id = os.getenv("TENANT_ID")
     client_id = os.getenv("CLIENT_ID")
@@ -201,7 +195,6 @@ def webhook():
     return "✅ Message processed", 200
 
 # GPT Prompt
-
 gpt_prompt_template = """
 You are an AI assistant helping extract a construction site report based on a spoken summary from a site manager. 
 The user provided voice messages in response to 10 specific questions. You will receive their answers as one full block of text.
@@ -224,4 +217,4 @@ Please extract the following fields as structured JSON:
 
 Only include fields that were explicitly mentioned in the transcribed message.
 Here is the full transcribed report:
-"""{{transcribed_report}}"""
+"""
