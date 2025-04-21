@@ -126,7 +126,7 @@ def webhook():
 
     if media_url and "audio" in media_type:
         transcription = transcribe_audio(media_url)
-        print(f"🗣 Transcription: {transcription}")
+        print(f"🗣️ Transcription: {transcription}")
 
         if sender in session_data and session_data[sender].get("awaiting_correction"):
             updated = apply_correction(session_data[sender]["structured_data"], transcription)
