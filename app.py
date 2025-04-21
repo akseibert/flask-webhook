@@ -45,7 +45,7 @@ Please extract the following fields as structured JSON:
 
 1. site_name (required)
 2. segment (optional)
-3. people – [{"name": "...", "role": "..."}]
+3. people – [{"name": "...", "role": "..."}]- Only include individuals. If a company is mentioned as working, it should go under service or tools instead.
 4. tools – [{"item": "...", "company": "..."}]
 5. service – [{"task": "...", "company": "..."}]
 6. activities
