@@ -8,6 +8,10 @@ from msal import ConfidentialClientApplication
 
 app = Flask(__name__)
 
+# Validate environment setup
+if not all([os.getenv("TENANT_ID"), os.getenv("CLIENT_ID"), os.getenv("CLIENT_SECRET")]):
+    raise ValueError("❌ Missing one or more required environment variables: TENANT_ID, CLIENT_ID, CLIENT_SECRET")
+
 # In-memory session store
 session_data = {}  # { "whatsapp:+4176...": {"structured_data": {...}} }
 
@@ -43,6 +47,9 @@ def send_whatsapp_reply(to_number, message):
     from_number = "whatsapp:" + os.getenv("TWILIO_PHONE_NUMBER")
     if not to_number.startswith("whatsapp:"):
         to_number = "whatsapp:" + to_number
+
+    print(f"📤 Sending WhatsApp message from {from_number} to {to_number}")
+    print(f"📤 Message content: {message}")
 
     client.messages.create(
         body=message,
@@ -115,138 +122,6 @@ Return the updated JSON with only the corrected fields changed.
         return json.loads(response.choices[0].message["content"])
     except:
         return original_data
-
-def get_access_token():
-    tenant_id = os.getenv("TENANT_ID")
-    client_id = os.getenv("CLIENT_ID")
-    client_secret = os.getenv("CLIENT_SECRET")
-
-    authority = f"https://login.microsoftonline.com/{tenant_id}"
-    scope = ["https://graph.microsoft.com/.default"]
-
-    app = ConfidentialClientApplication(
-        client_id,
-        authority=authority,
-        client_credential=client_secret,
-    )
-
-    result = app.acquire_token_silent(scope, account=None)
-    if not result:
-        result = app.acquire_token_for_client(scopes=scope)
-
-    if "access_token" in result:
-        return result["access_token"]
-    else:
-        raise Exception("Authentication failed: " + json.dumps(result, indent=2))
-
-def post_to_sharepoint(data):
-    access_token = get_access_token()
-    site_url = "https://graph.microsoft.com/v1.0/sites/netorgft8023287.sharepoint.com:/sites/Chatbot"
-    list_url = site_url + "/lists/Chatbot_StoredRecords/items"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
-    }
-
-    # flatten people, tools, services into multiple rows
-    def create_payload(entry):
-        return {
-            "fields": entry
-        }
-
-    base_fields = {
-        "SiteName": data.get("site_name"),
-        "Segment": data.get("segment"),
-        "Category": data.get("category"),
-        "Time": data.get("time"),
-        "Weather": data.get("weather"),
-        "Impression": data.get("impression"),
-        "Comments": data.get("comments"),
-    }
-
-    for person in data.get("people", []):
-        fields = base_fields.copy()
-        fields.update({"People": person["name"], "Role": person["role"]})
-        requests.post(list_url, headers=headers, json=create_payload(fields))
-
-    for tool in data.get("tools", []):
-        fields = base_fields.copy()
-        fields.update({"Tools": tool["item"], "Company": tool["company"]})
-        requests.post(list_url, headers=headers, json=create_payload(fields))
-
-    for service in data.get("service", []):
-        fields = base_fields.copy()
-        fields.update({"Services": service["task"], "Company": service["company"]})
-        requests.post(list_url, headers=headers, json=create_payload(fields))
-
-    for activity in data.get("activities", []):
-        fields = base_fields.copy()
-        fields.update({"Activities": activity})
-        requests.post(list_url, headers=headers, json=create_payload(fields))
-
-    for issue in data.get("issues", []):
-        fields = base_fields.copy()
-        fields.update({"Issues": issue["description"]})
-        requests.post(list_url, headers=headers, json=create_payload(fields))
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    sender = request.form.get("From")
-    message = request.form.get("Body")
-    media_url = request.form.get("MediaUrl0")
-    media_type = request.form.get("MediaContentType0")
-
-    print(f"📩 Message from {sender}: {message}")
-
-    if media_url and "audio" in media_type:
-        transcription = transcribe_audio(media_url)
-        print(f"🔣 Transcription: {transcription}")
-
-        if sender in session_data and session_data[sender].get("awaiting_correction"):
-            updated = apply_correction(session_data[sender]["structured_data"], transcription)
-            session_data[sender]["structured_data"] = updated
-            session_data[sender]["awaiting_correction"] = False
-            post_to_sharepoint(updated)
-            reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
-            send_whatsapp_reply(sender, reply)
-            return "Updated with correction.", 200
-
-        structured = extract_site_report(transcription)
-
-        try:
-            print("🧐 Structured info:\n" + json.dumps(structured, indent=2, ensure_ascii=False))
-        except Exception as e:
-            print(f"❌ Error printing structured data: {e}")
-
-        for field in ["impression", "time", "weather", "comments", "category"]:
-            if field in structured and not structured[field]:
-                del structured[field]
-
-        if not structured or "site_name" not in structured:
-            send_whatsapp_reply(sender, "Hmm, I didn’t catch any clear site information. Could you try again?")
-            return "⚠️ GPT returned empty or invalid data", 200
-
-        session_data[sender] = {
-            "structured_data": structured,
-            "awaiting_correction": True
-        }
-
-        summary = summarize_data(structured)
-        confirm_msg = f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can also send corrections via text or voice."
-        send_whatsapp_reply(sender, confirm_msg)
-        return "Summary sent for confirmation.", 200
-
-    if sender in session_data and session_data[sender].get("awaiting_correction"):
-        updated = apply_correction(session_data[sender]["structured_data"], message)
-        session_data[sender]["structured_data"] = updated
-        session_data[sender]["awaiting_correction"] = False
-        post_to_sharepoint(updated)
-        reply = f"✅ Got it! Here's the updated version:\n\n{summarize_data(updated)}"
-        send_whatsapp_reply(sender, reply)
-        return "Updated with correction.", 200
-
-    send_whatsapp_reply(sender, "Thanks! You can speak your report or send a correction.")
-    return "✅ Message processed", 200
 
 # GPT Prompt
 gpt_prompt_template = """
