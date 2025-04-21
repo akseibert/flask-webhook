@@ -57,20 +57,21 @@ def summarize_data(data):
         lines.append(f"📦 Segment: {data['segment']}")
     if "category" in data:
         lines.append(f"🏷️ Category: {data['category']}")
-    if "company" in data:
-        lines.append("🏗️ Companies: " + ", ".join(c["name"] for c in data["company"]))
-    if "people" in data:
-        lines.append("👷 People: " + ", ".join(f"{p['name']} ({p['role']})" for p in data["people"]))
-    if "service" in data:
-        lines.append("🔧 Services: " + ", ".join(f"{s['task']} ({s['company']})" for s in data["service"]))
-    if "tools" in data:
-        lines.append("🛠️ Tools: " + ", ".join(f"{t['item']} ({t['company']})" for t in data["tools"]))
-    if "activities" in data:
+    if "company" in data and isinstance(data["company"], list):
+        lines.append("🏗️ Companies: " + ", ".join(c["name"] for c in data["company"] if isinstance(c, dict)))
+    if "people" in data and isinstance(data["people"], list):
+        lines.append("👷 People: " + ", ".join(f"{p['name']} ({p['role']})" for p in data["people"] if isinstance(p, dict)))
+    if "service" in data and isinstance(data["service"], list):
+        lines.append("🔧 Services: " + ", ".join(f"{s['task']} ({s['company']})" for s in data["service"] if isinstance(s, dict)))
+    if "tools" in data and isinstance(data["tools"], list):
+        lines.append("🛠️ Tools: " + ", ".join(f"{t['item']} ({t['company']})" for t in data["tools"] if isinstance(t, dict)))
+    if "activities" in data and isinstance(data["activities"], list):
         lines.append("📋 Activities: " + ", ".join(data["activities"]))
-    if "issues" in data:
+    if "issues" in data and isinstance(data["issues"], list):
         lines.append("⚠️ Issues:")
         for i in data["issues"]:
-            lines.append(f"• {i['description']} (by {i['caused_by']}){' 📸' if i['has_photo'] else ''}")
+            if isinstance(i, dict):
+                lines.append(f"• {i['description']} (by {i['caused_by']}){' 📸' if i['has_photo'] else ''}")
     if "time" in data:
         lines.append(f"⏰ Time: {data['time']}")
     if "weather" in data:
