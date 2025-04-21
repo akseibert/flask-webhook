@@ -134,9 +134,19 @@ def webhook():
             return "Updated with correction.", 200
 
         structured = extract_site_report(transcription)
+
+        try:
+            print("🧠 Structured info:\n" + json.dumps(structured, indent=2, ensure_ascii=False))
+        except Exception as e:
+            print(f"❌ Error printing structured data: {e}")
+
         for field in ["impression", "time", "weather", "comments", "category"]:
             if field in structured and not structured[field]:
                 del structured[field]
+
+        if not structured or "site_name" not in structured:
+            send_whatsapp_reply(sender, "Hmm, I didn’t catch any clear site information. Could you try again?")
+            return "⚠️ GPT returned empty or invalid data", 200
 
         session_data[sender] = {
             "structured_data": structured,
@@ -148,7 +158,6 @@ def webhook():
         send_whatsapp_reply(sender, confirm_msg)
         return "Summary sent for confirmation.", 200
 
-    # If plain text message (maybe a correction)
     if sender in session_data and session_data[sender].get("awaiting_correction"):
         updated = apply_correction(session_data[sender]["structured_data"], message)
         session_data[sender]["structured_data"] = updated
@@ -183,5 +192,5 @@ Please extract the following fields as structured JSON:
 
 Only include fields that were explicitly mentioned in the transcribed message.
 Here is the full transcribed report:
-
+"""{{transcribed_report}}"""
 """
