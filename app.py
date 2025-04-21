@@ -44,24 +44,22 @@ Please extract the following fields as structured JSON:
 
 1. site_name (required)
 2. segment (optional)
-3. company – list of companies mentioned (e.g. [{"name": "ABC AG"}, {"name": "Müller Tiefbau"}])
+3. category – high-level topic or type of documentation (e.g. "Abnahme", "Mängelerfassung", "Grundriss", "Besonderheiten", "Zugang")
+4. company – list of companies mentioned (e.g. [{"name": "ABC AG"}, {"name": "Müller Tiefbau"}])
 Only include named individuals under "people".  
 - If the input says “Company Müller” or “Müller AG worked with its team,” treat "Müller" as a company, not a person.  
 - Do not invent people or roles unless explicitly stated.  
 - If a company worked but no individual names are mentioned, list it only under `company`, `tools`, or `service`, and leave out `people`.
-4. people – [{"name": "...", "role": "..."}]  
-- Only include named individuals.  
-- If a company is mentioned as working with its employees or team, do not list placeholder people.  
-- Instead, list the company in the `company` field and skip `people` for that case.
 
-5. tools – [{"item": "...", "company": "..."}] – company may be listed more than once here
-6. service – [{"task": "...", "company": "..."}] – one entry per task per company
-7. activities – free-form list of activities done
-8. issues – [{"description": "...", "caused_by": "...", "has_photo": true/false}]
-9. time – morning / afternoon / evening / full day
-10. weather – short description
-11. impression – summary or sentiment
-12. comments – any additional notes or plans
+5. people – [{"name": "...", "role": "..."}]  
+6. tools – [{"item": "...", "company": "..."}] – company may be listed more than once here
+7. service – [{"task": "...", "company": "..."}] – what was done (e.g. "tiling", "concrete pouring")
+8. activities – free-form list of where or how service was applied (e.g. "on ground floor", "in unit 4A")
+9. issues – [{"description": "...", "caused_by": "...", "has_photo": true/false}]
+10. time – morning / afternoon / evening / full day
+11. weather – short description
+12. impression – summary or sentiment
+13. comments – any additional notes or plans
 
 If a photo was sent after a message about an issue, set has_photo to true.
 Only include fields that were explicitly mentioned in the transcribed message.  
@@ -73,7 +71,6 @@ Here is the full transcribed report:
 \"\"\"{{transcribed_report}}\"\"\"
 """
 
-# GPT extraction function
 def extract_site_report(transcribed_text):
     full_prompt = gpt_prompt_template.replace("{{transcribed_report}}", transcribed_text)
 
@@ -114,7 +111,6 @@ def send_whatsapp_reply(to_number, message):
         to=to_number
     )
 
-# Webhook to handle incoming messages
 @app.route("/webhook", methods=["POST"])
 def webhook():
     sender = request.form.get("From")
@@ -144,13 +140,12 @@ def webhook():
                 return "⚠️ GPT returned no data.", 200
 
             # Clean out optional fields with empty strings
-            for key in ["impression", "time", "weather", "comments"]:
+            for key in ["impression", "time", "weather", "comments", "category"]:
                 if key in structured_data and (structured_data[key] == "" or structured_data[key] is None):
                     del structured_data[key]
 
             print("🧠 Structured info:\n" + json.dumps(structured_data, indent=2, ensure_ascii=False))
 
-            # Friendly response (not repetitive)
             send_whatsapp_reply(sender, "Thanks! I’ve received your update. Let me know who worked with you and what their roles were, if you haven’t said that yet.")
 
             return "✅ Voice message transcribed, analyzed, and replied.", 200
