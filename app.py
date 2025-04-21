@@ -45,10 +45,15 @@ Please extract the following fields as structured JSON:
 1. site_name (required)
 2. segment (optional)
 3. company – list of companies mentioned (e.g. [{"name": "ABC AG"}, {"name": "Müller Tiefbau"}])
+Only include named individuals under "people".  
+- If the input says “Company Müller” or “Müller AG worked with its team,” treat "Müller" as a company, not a person.  
+- Do not invent people or roles unless explicitly stated.  
+- If a company worked but no individual names are mentioned, list it only under `company`, `tools`, or `service`, and leave out `people`.
 4. people – [{"name": "...", "role": "..."}]  
 - Only include named individuals.  
 - If a company is mentioned as working with its employees or team, do not list placeholder people.  
 - Instead, list the company in the `company` field and skip `people` for that case.
+
 5. tools – [{"item": "...", "company": "..."}] – company may be listed more than once here
 6. service – [{"task": "...", "company": "..."}] – one entry per task per company
 7. activities – free-form list of activities done
@@ -63,6 +68,7 @@ Only include fields that were explicitly mentioned in the transcribed message.
 Do not guess or infer missing values.  
 If something is unclear or not said, omit it entirely — do not fill in with defaults like "full day", "no notes", or positive impressions.  
 Return only actual information said by the user.
+
 
 Here is the full transcribed report:
 \"\"\"{{transcribed_report}}\"\"\"
