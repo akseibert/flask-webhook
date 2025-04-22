@@ -103,15 +103,22 @@ def enrich_with_date(d):
 def extract_site_report(text):
     prompt = gpt_prompt_template + "\n" + text
     msgs = [
-        {"role":"system", "content":"You ONLY extract explicitly mentioned fields. Do NOT guess or fill missing values."},
-        {"role":"user",   "content":prompt}
+        {"role":"system",
+         "content":"You ONLY extract explicitly mentioned fields. Do NOT guess or fill in missing values."},
+        {"role":"user", "content":prompt}
     ]
+    print("🔖 GPT prompt:\n", prompt)
     try:
         resp = client.chat.completions.create(
-            model="gpt-3.5-turbo", messages=msgs, temperature=0.2
+            model="gpt-3.5-turbo",
+            messages=msgs,
+            temperature=0.2
         )
-        raw = resp.choices[0].message.content
-        print("🧠 GPT raw reply:", raw)
+        raw = resp.choices[0].message.content or ""
+        print("🧠 GPT raw reply:", repr(raw))
+        if not raw.strip().startswith("{"):
+            print("⚠️ GPT reply isn’t JSON → returning empty.")
+            return {}
         return json.loads(raw)
     except Exception as e:
         print("❌ GPT parsing failed:", e)
@@ -123,14 +130,18 @@ def apply_correction(original, correction_text):
         f"User correction:\n\"\"\"{correction_text}\"\"\"\n\n"
         "Return only the fields that changed in valid JSON."
     )
+    print("🔖 Correction prompt:\n", prompt)
     try:
         resp = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role":"user","content":prompt}],
             temperature=0.2
         )
-        raw = resp.choices[0].message.content
-        print("🧠 Correction raw reply:", raw)
+        raw = resp.choices[0].message.content or ""
+        print("🧠 Correction raw reply:", repr(raw))
+        if not raw.strip().startswith("{"):
+            print("⚠️ Correction reply isn’t JSON → no changes.")
+            return {}
         return json.loads(raw)
     except Exception as e:
         print("❌ Correction parsing failed:", e)
@@ -146,24 +157,26 @@ def webhook():
         chat_id = str(msg.get("chat",{}).get("id",""))
         text = msg.get("text","") or ""
 
-        # 1) EXPLICIT RESET
-        if text.strip().lower() in ("/new", "start over", "new report"):
+        # RESET command
+        if text.strip().lower() in ("/new","start over","new report"):
             session_data.pop(chat_id, None)
             send_telegram_message(chat_id,
                 "🔄 Starting a fresh report. Please describe today’s site work."
             )
             return "reset", 200
 
-        # 2) VOICE → TEXT
+        # VOICE → TEXT
         if not text and msg.get("voice"):
             text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
             if not text:
-                send_telegram_message(chat_id, "⚠️ Couldn't understand audio. Please send again.")
+                send_telegram_message(chat_id,
+                    "⚠️ Couldn't understand audio. Please send again."
+                )
                 return "no transcription", 200
 
         print(f"📩 From {chat_id}: {text}")
 
-        # 3) DATE‐BASED RESET
+        # DATE‑BASED RESET if user mentions a new date
         import re
         m = re.search(r"\b(\d{1,2}-\d{1,2}-\d{4})\b", text)
         if m:
@@ -174,18 +187,16 @@ def webhook():
                 send_telegram_message(chat_id,
                     f"📅 Detected new date {new_date}. Starting a new report session."
                 )
-                # fall through to treat message as first of new session
 
-        # 4) INIT SESSION
+        # INIT
         if chat_id not in session_data:
             session_data[chat_id] = {"structured_data": {}, "awaiting_correction": False}
 
         stored = session_data[chat_id]["structured_data"]
 
-        # 5) CORRECTION BRANCH
+        # CORRECTION
         if session_data[chat_id]["awaiting_correction"]:
             delta = apply_correction(stored, text)
-            # merge delta
             for k,v in delta.items():
                 stored[k] = v
             session_data[chat_id]["structured_data"] = stored
@@ -197,7 +208,7 @@ def webhook():
             )
             return "corrected", 200
 
-        # 6) INITIAL EXTRACTION
+        # INITIAL EXTRACTION
         extracted = extract_site_report(text)
         if not extracted.get("site_name"):
             send_telegram_message(chat_id,
