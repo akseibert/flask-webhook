@@ -150,33 +150,38 @@ def webhook():
         if "message" not in data:
             return "No message found", 400
 
-        message_data = data["message"]
-        chat_id = str(message_data["chat"]["id"])
-        message_text = message_data.get("text")
+        msg = data["message"]
+        chat_id = str(msg["chat"]["id"])
+        text = msg.get("text")
 
-        if not message_text and "voice" in message_data:
-            file_id = message_data["voice"]["file_id"]
-            message_text = transcribe_from_telegram_voice(file_id)
-            if not message_text:
+        # if voice, transcribe
+        if not text and "voice" in msg:
+            text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
+            if not text:
                 send_telegram_message(chat_id, "⚠️ Sorry, I couldn't understand the audio message. Please try again.")
                 return "No transcription", 200
 
-        print(f"📩 Message from Telegram user {chat_id}: {message_text}")
+        print(f"📩 Message from Telegram user {chat_id}: {text}")
 
         if chat_id not in session_data:
             session_data[chat_id] = {"structured_data": {}, "awaiting_correction": False}
 
-        structured = session_data[chat_id].get("structured_data", {})
+        stored = session_data[chat_id]["structured_data"]
 
+        # Correction branch
         if session_data[chat_id]["awaiting_correction"]:
-            updated = apply_correction(structured, message_text)
+            updated = apply_correction(stored, text)
+            # **Consolidate**: update full data, keep correction mode on
             session_data[chat_id]["structured_data"] = updated
             session_data[chat_id]["awaiting_correction"] = True
-            summary = summarize_data(updated)
-            send_telegram_message(chat_id, f"✅ Got it! Updated version:\n\n{summary}\n\n✅ Anything else to correct?")
-            return "Updated with correction.", 200
+            full_summary = summarize_data(updated)
+            send_telegram_message(chat_id,
+                f"✅ Got it! Here’s the **full** updated report:\n\n{full_summary}\n\n✅ Anything else to correct?"
+            )
+            return "Updated with correction", 200
 
-        extracted = extract_site_report(message_text)
+        # Initial extraction
+        extracted = extract_site_report(text)
         if not extracted or "site_name" not in extracted:
             send_telegram_message(chat_id, "⚠️ Sorry, I couldn't detect site info. Please try again.")
             return "Missing required fields", 200
@@ -186,7 +191,9 @@ def webhook():
         session_data[chat_id]["awaiting_correction"] = True
         summary = summarize_data(enriched)
 
-        send_telegram_message(chat_id, f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can still send corrections.")
+        send_telegram_message(chat_id,
+            f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can still send corrections."
+        )
         return "Summary sent", 200
 
     except Exception as e:
