@@ -1,6 +1,5 @@
-flask
-gunicorn
-requests
-openai==0.28
-twilio
-msal
+Flask==2.2.5
+requests==2.31.0
+openai>=1.3.9
+msal==1.25.0
+gunicorn==21.2.0
