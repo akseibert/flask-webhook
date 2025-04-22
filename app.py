@@ -82,7 +82,7 @@ def enrich_with_date(data):
 def extract_site_report(text):
     prompt = gpt_prompt_template + f"\n{text}"
     messages = [
-        {"role": "system", "content": "You are a strict assistant. You ONLY extract fields that are *explicitly* mentioned. You are careful but flexible. Extract clearly stated or reasonably implied information from realistic, unstructured reports."},
+        {"role": "system", "content": "You are a strict assistant. You ONLY extract fields that are *explicitly* mentioned. Never guess, generalize, or fill in missing values."},
         {"role": "user", "content": prompt}
     ]
     try:
@@ -165,7 +165,7 @@ def webhook():
 gpt_prompt_template = """
 You are an AI assistant helping extract a construction site report based on a spoken or written summary from a site manager.
 
-Your task is to interpret realistic human input that may not be structured. People may speak freely or informally. Extract what is clearly stated or reasonably implied, but do NOT invent details.
+⚠️ Only extract information that is **explicitly mentioned** in the input. Do NOT infer or guess missing information. Leave out any field that was not clearly stated.
 
 Return the following fields as JSON (omit any not mentioned):
 - site_name
@@ -182,6 +182,4 @@ Return the following fields as JSON (omit any not mentioned):
 - impression
 - comments
 - date (format: dd-mm-yyyy)
-
-Your output must be valid JSON with double quotes. Do not return explanations or extra text.
 """
