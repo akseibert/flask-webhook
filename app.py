@@ -26,6 +26,7 @@ def send_telegram_message(chat_id, text):
     print("📤 Payload:", json.dumps(payload, indent=2))
     response = requests.post(url, json=payload)
     print("✅ Telegram message sent:", response.status_code, response.text)
+    print("🔐 TELEGRAM_BOT_TOKEN used:", os.getenv("TELEGRAM_BOT_TOKEN"))
 
 def summarize_data(data):
     lines = []
