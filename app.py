@@ -3,8 +3,6 @@ import requests
 import os
 import openai
 import json
-from twilio.rest import Client
-from msal import ConfidentialClientApplication
 from datetime import datetime
 
 app = Flask(__name__)
@@ -14,54 +12,15 @@ app = Flask(__name__)
 def index():
     return "Running", 200
 
-# Validate environment setup
-if not all([os.getenv("TENANT_ID"), os.getenv("CLIENT_ID"), os.getenv("CLIENT_SECRET")]):
-    raise ValueError("❌ Missing one or more required environment variables: TENANT_ID, CLIENT_ID, CLIENT_SECRET")
-
 # In-memory session store
-session_data = {}  # { "whatsapp:+4176...": {"structured_data": {...}} }
+session_data = {}  # { telegram_user_id: {"structured_data": {...}, "awaiting_correction": True/False} }
 
-def transcribe_audio(media_url):
-    response = requests.get(media_url, auth=(
-        os.getenv("TWILIO_SID"), os.getenv("TWILIO_AUTH_TOKEN")
-    ))
-
-    if response.status_code != 200:
-        print(f"❌ Failed to download audio. Status code: {response.status_code}")
-        return "[Download failed]"
-
-    audio_data = response.content
-
-    whisper_response = requests.post(
-        "https://api.openai.com/v1/audio/transcriptions",
-        headers={
-            "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"
-        },
-        files={"file": ("audio.ogg", audio_data, "audio/ogg")},
-        data={"model": "whisper-1"}
-    )
-
-    if whisper_response.status_code != 200:
-        print(f"❌ Whisper error: {whisper_response.status_code} – {whisper_response.text}")
-        return "[Whisper failed]"
-
-    result = whisper_response.json()
-    return result.get("text", "[No text found]")
-
-def send_whatsapp_reply(to_number, message):
-    client = Client(os.getenv("TWILIO_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
-    from_number = "whatsapp:" + os.getenv("TWILIO_PHONE_NUMBER")
-    if not to_number.startswith("whatsapp:"):
-        to_number = "whatsapp:" + to_number
-
-    print(f"📤 Sending WhatsApp message from {from_number} to {to_number}")
-    print(f"📤 Message content: {message}")
-
-    client.messages.create(
-        body=message,
-        from_=from_number,
-        to=to_number
-    )
+def send_telegram_message(chat_id, text):
+    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    response = requests.post(url, json=payload)
+    print("✅ Telegram message sent:", response.status_code, response.text)
 
 def summarize_data(data):
     lines = []
@@ -113,45 +72,48 @@ def enrich_with_date(data):
             print("❌ Date format invalid, defaulting to today.", e)
             data["date"] = today_str
     return data
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    sender = request.form.get("From")
-    message = request.form.get("Body")
-    media_url = request.form.get("MediaUrl0")
-    media_type = request.form.get("MediaContentType0")
+    try:
+        data = request.get_json()
+        print("📩 Telegram webhook received:", json.dumps(data, indent=2))
 
-    print(f"📩 Message from {sender}: {message}")
+        if "message" not in data:
+            return "No message found", 400
 
-    if not sender:
-        return "⚠️ No sender", 400
+        message_data = data["message"]
+        chat_id = str(message_data["chat"]["id"])
+        message_text = message_data.get("text", "[No text found]")
 
-    if media_url and "audio" in media_type:
-        transcription = transcribe_audio(media_url)
-        print(f"🗣 Transcription: {transcription}")
-        message = transcription
+        print(f"📩 Message from Telegram user {chat_id}: {message_text}")
 
-    if sender not in session_data:
-        session_data[sender] = {"structured_data": {}, "awaiting_correction": False}
+        if chat_id not in session_data:
+            session_data[chat_id] = {"structured_data": {}, "awaiting_correction": False}
 
-    structured = session_data[sender].get("structured_data", {})
+        structured = session_data[chat_id].get("structured_data", {})
 
-    if session_data[sender]["awaiting_correction"]:
-        updated = apply_correction(structured, message)
-        session_data[sender]["structured_data"] = updated
-        session_data[sender]["awaiting_correction"] = True  # Allow multiple corrections
-        summary = summarize_data(updated)
-        send_whatsapp_reply(sender, f"✅ Got it! Updated version:\n\n{summary}\n\n✅ Anything else to correct?")
-        return "Updated with correction.", 200
+        if session_data[chat_id]["awaiting_correction"]:
+            updated = apply_correction(structured, message_text)
+            session_data[chat_id]["structured_data"] = updated
+            session_data[chat_id]["awaiting_correction"] = True  # Allow multiple corrections
+            summary = summarize_data(updated)
+            send_telegram_message(chat_id, f"✅ Got it! Updated version:\n\n{summary}\n\n✅ Anything else to correct?")
+            return "Updated with correction.", 200
 
-    extracted = extract_site_report(message)
-    if not extracted or "site_name" not in extracted:
-        send_whatsapp_reply(sender, "⚠️ Sorry, I couldn't detect site info. Please try again.")
-        return "Missing required fields", 200
+        extracted = extract_site_report(message_text)
+        if not extracted or "site_name" not in extracted:
+            send_telegram_message(chat_id, "⚠️ Sorry, I couldn't detect site info. Please try again.")
+            return "Missing required fields", 200
 
-    enriched = enrich_with_date(extracted)
-    session_data[sender]["structured_data"] = enriched
-    session_data[sender]["awaiting_correction"] = True
-    summary = summarize_data(enriched)
+        enriched = enrich_with_date(extracted)
+        session_data[chat_id]["structured_data"] = enriched
+        session_data[chat_id]["awaiting_correction"] = True
+        summary = summarize_data(enriched)
 
-    send_whatsapp_reply(sender, f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can still send corrections.")
-    return "Summary sent", 200
+        send_telegram_message(chat_id, f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can still send corrections.")
+        return "Summary sent", 200
+
+    except Exception as e:
+        print("❌ Error in Telegram webhook:", e)
+        return "Error", 500
