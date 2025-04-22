@@ -16,8 +16,7 @@ def index():
     return "Running", 200
 
 # In‑memory session store
-# session_data = { telegram_user_id: { "structured_data": {...}, "awaiting_correction": bool } }
-session_data = {}
+session_data = {}  # { telegram_user_id: { "structured_data": {...}, "awaiting_correction": True/False } }
 
 def send_telegram_message(chat_id, text):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -36,22 +35,20 @@ def get_telegram_file_path(file_id):
 
 def transcribe_from_telegram_voice(file_id):
     try:
-        download_url = get_telegram_file_path(file_id)
-        print("🔗 Downloading audio from:", download_url)
-        audio_r = requests.get(download_url)
-        print("📥 Audio fetch status:", audio_r.status_code)
+        audio_url = get_telegram_file_path(file_id)
+        print("🔗 Fetching audio:", audio_url)
+        audio_r = requests.get(audio_url)
         whisper = requests.post(
             "https://api.openai.com/v1/audio/transcriptions",
             headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"},
             files={"file": ("voice.ogg", audio_r.content, "audio/ogg")},
             data={"model": "whisper-1"}
         )
-        print("🗣 Whisper status:", whisper.status_code)
         result = whisper.json()
         print("🗣 Whisper JSON:", json.dumps(result, indent=2))
         return result.get("text", "")
     except Exception as e:
-        print("❌ Transcription error:", e)
+        print("❌ Transcription failed:", e)
         return ""
 
 def summarize_data(d):
@@ -60,19 +57,15 @@ def summarize_data(d):
     if d.get("segment"):     lines.append(f"📆 Segment: {d['segment']}")
     if d.get("category"):    lines.append(f"🌿 Category: {d['category']}")
     if isinstance(d.get("company"), list):
-        comps = ", ".join(c["name"] for c in d["company"] if c.get("name"))
-        lines.append(f"🏣 Companies: {comps}")
+        lines.append("🏣 Companies: " + ", ".join(c["name"] for c in d["company"]))
     if isinstance(d.get("people"), list):
-        ppl = ", ".join(f"{p['name']} ({p['role']})" for p in d["people"])
-        lines.append(f"👷 People: {ppl}")
+        lines.append("👷 People: " + ", ".join(f"{p['name']} ({p['role']})" for p in d["people"]))
     if isinstance(d.get("service"), list):
-        svcs = ", ".join(f"{s['task']} ({s['company']})" for s in d["service"])
-        lines.append(f"🔧 Services: {svcs}")
+        lines.append("🔧 Services: " + ", ".join(f"{s['task']} ({s['company']})" for s in d["service"]))
     if isinstance(d.get("tools"), list):
-        tls = ", ".join(f"{t['item']} ({t['company']})" for t in d["tools"])
-        lines.append(f"🛠️ Tools: {tls}")
+        lines.append("🛠️ Tools: " + ", ".join(f"{t['item']} ({t['company']})" for t in d["tools"]))
     if isinstance(d.get("activities"), list):
-        lines.append(f"📋 Activities: {', '.join(d['activities'])}")
+        lines.append("📋 Activities: " + ", ".join(d["activities"]))
     if isinstance(d.get("issues"), list):
         lines.append("⚠️ Issues:")
         for i in d["issues"]:
@@ -88,17 +81,24 @@ def summarize_data(d):
     return "\n".join(lines)
 
 def enrich_with_date(d):
-    today = datetime.now().strftime("%d-%m-%Y")
+    today_str = datetime.now().strftime("%d-%m-%Y")
     if not d.get("date"):
-        d["date"] = today
+        d["date"] = today_str
     else:
         try:
             parsed = datetime.strptime(d["date"], "%d-%m-%Y")
             if parsed > datetime.now():
-                d["date"] = today
+                d["date"] = today_str
         except:
-            d["date"] = today
+            d["date"] = today_str
     return d
+
+def strip_code_fences(raw: str) -> str:
+    """
+    Remove leading/trailing ```json fences so we can parse pure JSON.
+    """
+    # Remove ```json or ``` markers
+    return raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
 
 def extract_site_report(text):
     prompt = gpt_prompt_template + "\n" + text
@@ -107,7 +107,7 @@ def extract_site_report(text):
          "content":"You ONLY extract explicitly mentioned fields. Do NOT guess or fill in missing values."},
         {"role":"user", "content":prompt}
     ]
-    print("🔖 GPT prompt:\n", prompt)
+    print("🔖 GPT Prompt:", prompt)
     try:
         resp = client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -115,11 +115,11 @@ def extract_site_report(text):
             temperature=0.2
         )
         raw = resp.choices[0].message.content or ""
-        print("🧠 GPT raw reply:", repr(raw))
-        if not raw.strip().startswith("{"):
-            print("⚠️ GPT reply isn’t JSON → returning empty.")
-            return {}
-        return json.loads(raw)
+        print("🧠 GPT Raw Reply:", repr(raw))
+        # strip any ```json fences
+        clean = strip_code_fences(raw)
+        data = json.loads(clean)
+        return data
     except Exception as e:
         print("❌ GPT parsing failed:", e)
         return {}
@@ -130,7 +130,7 @@ def apply_correction(original, correction_text):
         f"User correction:\n\"\"\"{correction_text}\"\"\"\n\n"
         "Return only the fields that changed in valid JSON."
     )
-    print("🔖 Correction prompt:\n", prompt)
+    print("🔖 Correction Prompt:", prompt)
     try:
         resp = client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -138,11 +138,9 @@ def apply_correction(original, correction_text):
             temperature=0.2
         )
         raw = resp.choices[0].message.content or ""
-        print("🧠 Correction raw reply:", repr(raw))
-        if not raw.strip().startswith("{"):
-            print("⚠️ Correction reply isn’t JSON → no changes.")
-            return {}
-        return json.loads(raw)
+        print("🧠 Correction Raw Reply:", repr(raw))
+        clean = strip_code_fences(raw)
+        return json.loads(clean)
     except Exception as e:
         print("❌ Correction parsing failed:", e)
         return {}
@@ -151,55 +149,41 @@ def apply_correction(original, correction_text):
 def webhook():
     try:
         update = request.get_json()
-        print("📩 Telegram update:", json.dumps(update, indent=2))
+        print("📩 Update:", json.dumps(update, indent=2))
 
         msg = update.get("message", {})
         chat_id = str(msg.get("chat",{}).get("id",""))
         text = msg.get("text","") or ""
 
-        # RESET command
-        if text.strip().lower() in ("/new","start over","new report"):
-            session_data.pop(chat_id, None)
-            send_telegram_message(chat_id,
-                "🔄 Starting a fresh report. Please describe today’s site work."
-            )
-            return "reset", 200
-
-        # VOICE → TEXT
+        # Voice-to-text
         if not text and msg.get("voice"):
             text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
             if not text:
-                send_telegram_message(chat_id,
-                    "⚠️ Couldn't understand audio. Please send again."
-                )
+                send_telegram_message(chat_id, "⚠️ Couldn't understand audio. Please send again.")
                 return "no transcription", 200
 
-        print(f"📩 From {chat_id}: {text}")
+        print(f"📩 From {chat_id}:", text)
 
-        # DATE‑BASED RESET if user mentions a new date
-        import re
-        m = re.search(r"\b(\d{1,2}-\d{1,2}-\d{4})\b", text)
-        if m:
-            new_date = m.group(1)
-            old_date = session_data.get(chat_id,{}).get("structured_data",{}).get("date")
-            if old_date and new_date != old_date:
-                session_data.pop(chat_id, None)
-                send_telegram_message(chat_id,
-                    f"📅 Detected new date {new_date}. Starting a new report session."
-                )
+        # Reset on /new
+        if text.strip().lower() in ("/new","start over"):
+            session_data.pop(chat_id, None)
+            send_telegram_message(chat_id, "🔄 Starting new report. Please describe today’s site work.")
+            return "reset", 200
 
-        # INIT
+        # Initialize session
         if chat_id not in session_data:
             session_data[chat_id] = {"structured_data": {}, "awaiting_correction": False}
 
         stored = session_data[chat_id]["structured_data"]
 
-        # CORRECTION
+        # Correction iteration
         if session_data[chat_id]["awaiting_correction"]:
             delta = apply_correction(stored, text)
+            # merge changes
             for k,v in delta.items():
                 stored[k] = v
             session_data[chat_id]["structured_data"] = stored
+            # still allow more corrections
             session_data[chat_id]["awaiting_correction"] = True
 
             full = summarize_data(stored)
@@ -208,12 +192,10 @@ def webhook():
             )
             return "corrected", 200
 
-        # INITIAL EXTRACTION
+        # First extraction
         extracted = extract_site_report(text)
         if not extracted.get("site_name"):
-            send_telegram_message(chat_id,
-                "⚠️ Sorry, I couldn't detect site info. Please try again."
-            )
+            send_telegram_message(chat_id, "⚠️ Sorry, I couldn't detect site info. Please try again.")
             return "missing fields", 200
 
         enriched = enrich_with_date(extracted)
@@ -225,7 +207,7 @@ def webhook():
         return "extracted", 200
 
     except Exception as e:
-        print("❌ Error in webhook:", e)
+        print("❌ Webhook error:", e)
         return "error", 500
 
 # GPT extraction prompt
