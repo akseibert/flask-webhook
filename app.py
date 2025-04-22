@@ -26,7 +26,6 @@ def send_telegram_message(chat_id, text):
     print("📤 Payload:", json.dumps(payload, indent=2))
     response = requests.post(url, json=payload)
     print("✅ Telegram message sent:", response.status_code, response.text)
-    print("🔐 TELEGRAM_BOT_TOKEN used:", os.getenv("TELEGRAM_BOT_TOKEN"))
 
 def summarize_data(data):
     lines = []
@@ -66,13 +65,14 @@ def summarize_data(data):
     return "\n".join(lines)
 
 def enrich_with_date(data):
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now()
+    today_str = today.strftime("%d-%m-%Y")
     if "date" not in data or not data["date"]:
         data["date"] = today_str
     else:
         try:
-            input_date = datetime.strptime(data["date"], "%Y-%m-%d")
-            if input_date > datetime.now():
+            parsed_date = datetime.strptime(data["date"], "%d-%m-%Y")
+            if parsed_date > today:
                 data["date"] = today_str
         except Exception as e:
             print("❌ Date format invalid, defaulting to today.", e)
@@ -171,15 +171,15 @@ Return the following fields as JSON (omit any not mentioned):
 - site_name
 - segment
 - category
-- company: list of {{"name": "..."}}
-- people: list of {{"name": "...", "role": "..."}}
-- tools: list of {{"item": "...", "company": "..."}}
-- service: list of {{"task": "...", "company": "..."}}
+- company: list of {"name": "..."}
+- people: list of {"name": "...", "role": "..."}
+- tools: list of {"item": "...", "company": "..."}
+- service: list of {"task": "...", "company": "..."}
 - activities: list of strings
-- issues: list of {{"description": "...", "caused_by": "...", "has_photo": true/false}}
+- issues: list of {"description": "...", "caused_by": "...", "has_photo": true/false}
 - time
 - weather
 - impression
 - comments
-- date
+- date (format: dd-mm-yyyy)
 """
