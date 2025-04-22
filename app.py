@@ -22,6 +22,8 @@ def send_telegram_message(chat_id, text):
     telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
     url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
+    print("📤 Sending to Telegram:", url)
+    print("📤 Payload:", json.dumps(payload, indent=2))
     response = requests.post(url, json=payload)
     print("✅ Telegram message sent:", response.status_code, response.text)
 
@@ -30,9 +32,9 @@ def summarize_data(data):
     if "site_name" in data:
         lines.append(f"📍 Site: {data['site_name']}")
     if "segment" in data:
-        lines.append(f"📦 Segment: {data['segment']}")
+        lines.append(f"📆 Segment: {data['segment']}")
     if "category" in data:
-        lines.append(f"🏷️ Category: {data['category']}")
+        lines.append(f"🌿 Category: {data['category']}")
     if "company" in data and isinstance(data["company"], list):
         lines.append("🏣 Companies: " + ", ".join(c["name"] for c in data["company"] if isinstance(c, dict)))
     if "people" in data and isinstance(data["people"], list):
@@ -59,7 +61,7 @@ def summarize_data(data):
     if "comments" in data:
         lines.append(f"📝 Comments: {data['comments']}")
     if "date" in data:
-        lines.append(f"📅 Date: {data['date']}")
+        lines.append(f"🗓️ Date: {data['date']}")
     return "\n".join(lines)
 
 def enrich_with_date(data):
