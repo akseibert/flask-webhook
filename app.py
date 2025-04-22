@@ -82,14 +82,14 @@ def enrich_with_date(data):
 def extract_site_report(text):
     prompt = gpt_prompt_template + f"\n{text}"
     messages = [
-        {"role": "system", "content": "You only return fields explicitly mentioned in the transcribed message. Never guess or fill missing info."},
+        {"role": "system", "content": "You are a strict assistant. You ONLY extract fields that are *explicitly* mentioned. Never guess, generalize, or fill in missing values."},
         {"role": "user", "content": prompt}
     ]
     try:
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=messages,
-            temperature=0.3
+            temperature=0.2
         )
         return json.loads(response.choices[0].message.content)
     except Exception as e:
@@ -165,7 +165,7 @@ def webhook():
 gpt_prompt_template = """
 You are an AI assistant helping extract a construction site report based on a spoken or written summary from a site manager.
 
-⚠️ Only extract information that is **explicitly mentioned** in the input. Do NOT infer or guess missing information.
+⚠️ Only extract information that is **explicitly mentioned** in the input. Do NOT infer or guess missing information. Leave out any field that was not clearly stated.
 
 Return the following fields as JSON (omit any not mentioned):
 - site_name
