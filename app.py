@@ -10,170 +10,200 @@ client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = Flask(__name__)
 
-# Health check route
+# Health check
 @app.route("/", methods=["GET"])
 def index():
     return "Running", 200
 
-# In-memory session store
-session_data = {}  # { telegram_user_id: {"structured_data": {...}, "awaiting_correction": True/False} }
+# In‑memory session store
+# session_data = { telegram_user_id: { "structured_data": {...}, "awaiting_correction": bool } }
+session_data = {}
 
 def send_telegram_message(chat_id, text):
-    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
     print("📤 Sending to Telegram:", url)
     print("📤 Payload:", json.dumps(payload, indent=2))
-    resp = requests.post(url, json=payload)
-    print("✅ Telegram message sent:", resp.status_code, resp.text)
+    r = requests.post(url, json=payload)
+    print("✅ Telegram response:", r.status_code, r.text)
 
 def get_telegram_file_path(file_id):
-    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    url = f"https://api.telegram.org/bot{telegram_token}/getFile?file_id={file_id}"
-    resp = requests.get(url)
-    file_path = resp.json()["result"]["file_path"]
-    return f"https://api.telegram.org/file/bot{telegram_token}/{file_path}"
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    url = f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}"
+    r = requests.get(url)
+    return f"https://api.telegram.org/file/bot{token}/{r.json()['result']['file_path']}"
 
 def transcribe_from_telegram_voice(file_id):
     try:
-        audio_url = get_telegram_file_path(file_id)
-        audio_resp = requests.get(audio_url)
-        if audio_resp.status_code != 200:
-            print("❌ Failed to fetch audio from Telegram")
-            return ""
-        whisper_resp = requests.post(
+        download_url = get_telegram_file_path(file_id)
+        print("🔗 Downloading audio from:", download_url)
+        audio_r = requests.get(download_url)
+        print("📥 Audio fetch status:", audio_r.status_code)
+        whisper = requests.post(
             "https://api.openai.com/v1/audio/transcriptions",
             headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"},
-            files={"file": ("voice.ogg", audio_resp.content, "audio/ogg")},
+            files={"file": ("voice.ogg", audio_r.content, "audio/ogg")},
             data={"model": "whisper-1"}
         )
-        return whisper_resp.json().get("text", "")
+        print("🗣 Whisper status:", whisper.status_code)
+        result = whisper.json()
+        print("🗣 Whisper JSON:", json.dumps(result, indent=2))
+        return result.get("text", "")
     except Exception as e:
-        print("❌ Transcription failed:", e)
+        print("❌ Transcription error:", e)
         return ""
 
-def summarize_data(data):
+def summarize_data(d):
     lines = []
-    if "site_name" in data:      lines.append(f"📍 Site: {data['site_name']}")
-    if "segment" in data:        lines.append(f"📆 Segment: {data['segment']}")
-    if "category" in data:       lines.append(f"🌿 Category: {data['category']}")
-    if "company" in data and isinstance(data["company"], list):
-        lines.append("🏣 Companies: " + ", ".join(c["name"] for c in data["company"] if isinstance(c, dict)))
-    if "people" in data and isinstance(data["people"], list):
-        lines.append("👷 People: " + ", ".join(f"{p['name']} ({p['role']})" for p in data["people"] if isinstance(p, dict)))
-    if "service" in data and isinstance(data["service"], list):
-        lines.append("🔧 Services: " + ", ".join(f"{s['task']} ({s['company']})" for s in data["service"] if isinstance(s, dict)))
-    if "tools" in data and isinstance(data["tools"], list):
-        lines.append("🛠️ Tools: " + ", ".join(f"{t['item']} ({t['company']})" for t in data["tools"] if isinstance(t, dict)))
-    if "activities" in data and isinstance(data["activities"], list):
-        lines.append("📋 Activities: " + ", ".join(data["activities"]))
-    if "issues" in data and isinstance(data["issues"], list):
+    if d.get("site_name"):   lines.append(f"📍 Site: {d['site_name']}")
+    if d.get("segment"):     lines.append(f"📆 Segment: {d['segment']}")
+    if d.get("category"):    lines.append(f"🌿 Category: {d['category']}")
+    if isinstance(d.get("company"), list):
+        comps = ", ".join(c["name"] for c in d["company"] if c.get("name"))
+        lines.append(f"🏣 Companies: {comps}")
+    if isinstance(d.get("people"), list):
+        ppl = ", ".join(f"{p['name']} ({p['role']})" for p in d["people"])
+        lines.append(f"👷 People: {ppl}")
+    if isinstance(d.get("service"), list):
+        svcs = ", ".join(f"{s['task']} ({s['company']})" for s in d["service"])
+        lines.append(f"🔧 Services: {svcs}")
+    if isinstance(d.get("tools"), list):
+        tls = ", ".join(f"{t['item']} ({t['company']})" for t in d["tools"])
+        lines.append(f"🛠️ Tools: {tls}")
+    if isinstance(d.get("activities"), list):
+        lines.append(f"📋 Activities: {', '.join(d['activities'])}")
+    if isinstance(d.get("issues"), list):
         lines.append("⚠️ Issues:")
-        for i in data["issues"]:
-            if isinstance(i, dict):
-                caused_by = i.get("caused_by","unknown")
-                has_photo = i.get("has_photo",False)
-                lines.append(f"• {i['description']} (by {caused_by}){' 📸' if has_photo else ''}")
-    if "time" in data:           lines.append(f"⏰ Time: {data['time']}")
-    if "weather" in data:        lines.append(f"🌦️ Weather: {data['weather']}")
-    if "impression" in data:     lines.append(f"💬 Impression: {data['impression']}")
-    if "comments" in data:       lines.append(f"📝 Comments: {data['comments']}")
-    if "date" in data:           lines.append(f"🗓️ Date: {data['date']}")
+        for i in d["issues"]:
+            desc = i.get("description","")
+            by   = i.get("caused_by","unknown")
+            photo = " 📸" if i.get("has_photo") else ""
+            lines.append(f"• {desc} (by {by}){photo}")
+    if d.get("time"):       lines.append(f"⏰ Time: {d['time']}")
+    if d.get("weather"):    lines.append(f"🌦️ Weather: {d['weather']}")
+    if d.get("impression"): lines.append(f"💬 Impression: {d['impression']}")
+    if d.get("comments"):   lines.append(f"📝 Comments: {d['comments']}")
+    if d.get("date"):       lines.append(f"🗓️ Date: {d['date']}")
     return "\n".join(lines)
 
-def enrich_with_date(data):
+def enrich_with_date(d):
     today = datetime.now().strftime("%d-%m-%Y")
-    if not data.get("date"):
-        data["date"] = today
+    if not d.get("date"):
+        d["date"] = today
     else:
         try:
-            parsed = datetime.strptime(data["date"], "%d-%m-%Y")
+            parsed = datetime.strptime(d["date"], "%d-%m-%Y")
             if parsed > datetime.now():
-                data["date"] = today
+                d["date"] = today
         except:
-            data["date"] = today
-    return data
+            d["date"] = today
+    return d
 
 def extract_site_report(text):
-    prompt = gpt_prompt_template + f"\n{text}"
-    messages = [
-        {"role":"system","content":"You ONLY extract explicitly mentioned fields; never infer or guess."},
-        {"role":"user","content":prompt}
+    prompt = gpt_prompt_template + "\n" + text
+    msgs = [
+        {"role":"system", "content":"You ONLY extract explicitly mentioned fields. Do NOT guess or fill missing values."},
+        {"role":"user",   "content":prompt}
     ]
     try:
         resp = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.2
+            model="gpt-3.5-turbo", messages=msgs, temperature=0.2
         )
-        return json.loads(resp.choices[0].message.content)
+        raw = resp.choices[0].message.content
+        print("🧠 GPT raw reply:", raw)
+        return json.loads(raw)
     except Exception as e:
         print("❌ GPT parsing failed:", e)
         return {}
 
 def apply_correction(original, correction_text):
-    prompt = f"""
-Original JSON:
-{json.dumps(original)}
-
-User said correction:
-\"\"\"{correction_text}\"\"\"
-
-Return ONLY the fields that change, in valid JSON."""
+    prompt = (
+        f"Original JSON:\n{json.dumps(original,indent=2)}\n\n"
+        f"User correction:\n\"\"\"{correction_text}\"\"\"\n\n"
+        "Return only the fields that changed in valid JSON."
+    )
     try:
         resp = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[{"role":"user","content":prompt}]
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.2
         )
-        return json.loads(resp.choices[0].message.content)
+        raw = resp.choices[0].message.content
+        print("🧠 Correction raw reply:", raw)
+        return json.loads(raw)
     except Exception as e:
-        print("❌ Correction GPT parsing failed:", e)
+        print("❌ Correction parsing failed:", e)
         return {}
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        data = request.get_json()
-        print("📩 Telegram webhook received:", json.dumps(data, indent=2))
-        if "message" not in data:
-            return "No message", 400
+        update = request.get_json()
+        print("📩 Telegram update:", json.dumps(update, indent=2))
 
-        msg = data["message"]
-        chat_id = str(msg["chat"]["id"])
-        text = msg.get("text") or ""
+        msg = update.get("message", {})
+        chat_id = str(msg.get("chat",{}).get("id",""))
+        text = msg.get("text","") or ""
+
+        # 1) EXPLICIT RESET
+        if text.strip().lower() in ("/new", "start over", "new report"):
+            session_data.pop(chat_id, None)
+            send_telegram_message(chat_id,
+                "🔄 Starting a fresh report. Please describe today’s site work."
+            )
+            return "reset", 200
+
+        # 2) VOICE → TEXT
         if not text and msg.get("voice"):
             text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
             if not text:
-                send_telegram_message(chat_id, "⚠️ Couldn't understand the audio. Please retry.")
-                return "No transcription", 200
+                send_telegram_message(chat_id, "⚠️ Couldn't understand audio. Please send again.")
+                return "no transcription", 200
 
-        # init session
+        print(f"📩 From {chat_id}: {text}")
+
+        # 3) DATE‐BASED RESET
+        import re
+        m = re.search(r"\b(\d{1,2}-\d{1,2}-\d{4})\b", text)
+        if m:
+            new_date = m.group(1)
+            old_date = session_data.get(chat_id,{}).get("structured_data",{}).get("date")
+            if old_date and new_date != old_date:
+                session_data.pop(chat_id, None)
+                send_telegram_message(chat_id,
+                    f"📅 Detected new date {new_date}. Starting a new report session."
+                )
+                # fall through to treat message as first of new session
+
+        # 4) INIT SESSION
         if chat_id not in session_data:
-            session_data[chat_id] = {"structured_data":{}, "awaiting_correction":False}
+            session_data[chat_id] = {"structured_data": {}, "awaiting_correction": False}
 
         stored = session_data[chat_id]["structured_data"]
 
-        # **Correction branch**
+        # 5) CORRECTION BRANCH
         if session_data[chat_id]["awaiting_correction"]:
             delta = apply_correction(stored, text)
-            # **Merge** only changed fields back into the full data
+            # merge delta
             for k,v in delta.items():
                 stored[k] = v
             session_data[chat_id]["structured_data"] = stored
-            # still allow further corrections
             session_data[chat_id]["awaiting_correction"] = True
 
             full = summarize_data(stored)
             send_telegram_message(chat_id,
                 f"✅ Got it! Here’s the **full** updated report:\n\n{full}\n\n✅ Anything else to correct?"
             )
-            return "Corrected", 200
+            return "corrected", 200
 
-        # **Initial extraction branch**
+        # 6) INITIAL EXTRACTION
         extracted = extract_site_report(text)
-        if not extracted or "site_name" not in extracted:
-            send_telegram_message(chat_id, "⚠️ Sorry, I couldn't detect site info. Please try again.")
-            return "Missing fields", 200
+        if not extracted.get("site_name"):
+            send_telegram_message(chat_id,
+                "⚠️ Sorry, I couldn't detect site info. Please try again."
+            )
+            return "missing fields", 200
 
         enriched = enrich_with_date(extracted)
         session_data[chat_id] = {"structured_data": enriched, "awaiting_correction": True}
@@ -181,30 +211,30 @@ def webhook():
         send_telegram_message(chat_id,
             f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can still send corrections."
         )
-        return "Extracted", 200
+        return "extracted", 200
 
     except Exception as e:
-        print("❌ Error in Telegram webhook:", e)
-        return "Error", 500
+        print("❌ Error in webhook:", e)
+        return "error", 500
 
-# Prompt template
+# GPT extraction prompt
 gpt_prompt_template = """
-You are an AI assistant extracting a construction site report from the user’s input.
-⚠️ Only extract fields the user **explicitly** mentions. Never infer or guess missing data.
+You are an AI assistant extracting a construction site report. Only pull out fields explicitly mentioned.
+Do NOT guess, infer, or supply any missing fields.
 
-Return JSON with any of these, omitting unmentioned fields:
+Return JSON with any of these (omit unmentioned):
 - site_name
 - segment
 - category
-- company: [{"name": "..."}]
-- people: [{"name": "...","role":"..."}]
-- tools: [{"item":"...","company":"..."}]
-- service: [{"task":"...","company":"..."}]
+- company: [ {"name":"..."} ]
+- people:  [ {"name":"...","role":"..."} ]
+- tools:   [ {"item":"...","company":"..."} ]
+- service: [ {"task":"...","company":"..."} ]
 - activities: [ "...", ... ]
-- issues: [{"description":"...","caused_by":"...","has_photo":true/false}]
+- issues: [ {"description":"...","caused_by":"...","has_photo":true/false} ]
 - time
 - weather
 - impression
 - comments
-- date (dd-mm-yyyy)
+- date (dd‑mm‑yyyy)
 """
