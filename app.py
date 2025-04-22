@@ -27,6 +27,31 @@ def send_telegram_message(chat_id, text):
     response = requests.post(url, json=payload)
     print("✅ Telegram message sent:", response.status_code, response.text)
 
+def get_telegram_file_path(file_id):
+    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    url = f"https://api.telegram.org/bot{telegram_token}/getFile?file_id={file_id}"
+    response = requests.get(url)
+    file_path = response.json()["result"]["file_path"]
+    return f"https://api.telegram.org/file/bot{telegram_token}/{file_path}"
+
+def transcribe_from_telegram_voice(file_id):
+    try:
+        audio_url = get_telegram_file_path(file_id)
+        audio_response = requests.get(audio_url)
+        if audio_response.status_code != 200:
+            print("❌ Failed to fetch audio from Telegram")
+            return ""
+        whisper_response = requests.post(
+            "https://api.openai.com/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"},
+            files={"file": ("voice.ogg", audio_response.content, "audio/ogg")},
+            data={"model": "whisper-1"}
+        )
+        return whisper_response.json().get("text", "")
+    except Exception as e:
+        print("❌ Transcription failed:", e)
+        return ""
+
 def summarize_data(data):
     lines = []
     if "site_name" in data:
@@ -127,7 +152,14 @@ def webhook():
 
         message_data = data["message"]
         chat_id = str(message_data["chat"]["id"])
-        message_text = message_data.get("text", "[No text found]")
+        message_text = message_data.get("text")
+
+        if not message_text and "voice" in message_data:
+            file_id = message_data["voice"]["file_id"]
+            message_text = transcribe_from_telegram_voice(file_id)
+            if not message_text:
+                send_telegram_message(chat_id, "⚠️ Sorry, I couldn't understand the audio message. Please try again.")
+                return "No transcription", 200
 
         print(f"📩 Message from Telegram user {chat_id}: {message_text}")
 
