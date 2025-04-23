@@ -73,27 +73,22 @@ def summarize_data(d):
     comp = d.get("company")
     if comp:
         if isinstance(comp, list):
-            names = []
-            for c in comp:
-                if isinstance(c, dict):
-                    names.append(c.get("name",""))
-                else:
-                    names.append(str(c))
+            names = [c.get("name", c) if isinstance(c, dict) else str(c) for c in comp]
             comp_str = ", ".join(names)
         else:
             comp_str = str(comp)
         lines.append(f"🏣 Companies: {comp_str}")
     # people
     if isinstance(d.get("people"), list):
-        ppl = ", ".join(f"{p.get('name','')} ({p.get('role','')})" for p in d["people"])
+        ppl = ", ".join(f"{p.get('name','')} ({p.get('role','')})" for p in d["people"] if isinstance(p, dict))
         lines.append(f"👷 People: {ppl}")
     # services
     if isinstance(d.get("service"), list):
-        srv = ", ".join(f"{s.get('task','')} ({s.get('company','')})" for s in d["service"])
+        srv = ", ".join(f"{s.get('task','')} ({s.get('company','')})" for s in d["service"] if isinstance(s, dict))
         lines.append(f"🔧 Services: {srv}")
     # tools
     if isinstance(d.get("tools"), list):
-        tls = ", ".join(f"{t.get('item','')} ({t.get('company','')})" for t in d["tools"])
+        tls = ", ".join(f"{t.get('item','')} ({t.get('company','')})" for t in d["tools"] if isinstance(t, dict))
         lines.append(f"🛠️ Tools: {tls}")
     # activities
     if isinstance(d.get("activities"), list):
@@ -102,11 +97,12 @@ def summarize_data(d):
     if isinstance(d.get("issues"), list):
         lines.append("⚠️ Issues:")
         for i in d["issues"]:
-            desc = i.get("description","")
-            cb   = i.get("caused_by","")
-            ph   = " 📸" if i.get("has_photo") else ""
-            note = f" (by {cb})" if cb else ""
-            lines.append(f"• {desc}{note}{ph}")
+            if isinstance(i, dict):
+                desc = i.get("description","")
+                cb   = i.get("caused_by","")
+                ph   = " 📸" if i.get("has_photo") else ""
+                note = f" (by {cb})" if cb else ""
+                lines.append(f"• {desc}{note}{ph}")
     # other single fields
     if d.get("time"):
         lines.append(f"⏰ Time: {d['time']}")
@@ -123,22 +119,21 @@ def summarize_data(d):
 def merge_correction(orig, diff):
     """
     Merge GPT's diff into orig:
-     - For list-fields: extend without duplicates.
+     - For list-fields: wrap single items, extend without duplicates.
      - Otherwise: replace.
     """
+    list_keys = {"company","people","tools","service","activities","issues"}
     for k, v in diff.items():
-        if k in {"company","people","tools","service","activities","issues"}:
-            if isinstance(v, list):
-                base = orig.get(k, [])
-                if not isinstance(base, list):
-                    base = []
-                # append new items not already in base
-                for item in v:
-                    if item not in base:
-                        base.append(item)
-                orig[k] = base
-            else:
-                orig[k] = v
+        if k in list_keys:
+            # normalize v to a list
+            vals = v if isinstance(v, list) else [v]
+            base = orig.get(k, [])
+            if not isinstance(base, list):
+                base = []
+            for item in vals:
+                if item not in base:
+                    base.append(item)
+            orig[k] = base
         else:
             orig[k] = v
     return orig
@@ -148,15 +143,12 @@ def extract_report(text):
     prompt = gpt_prompt_template + "\n" + text
     messages = [
         {"role": "system", "content":
-         "You are a strict assistant. ONLY extract fields explicitly stated. "
-         "Do NOT guess or fill missing values."},
+         "You are strict: ONLY extract fields explicitly mentioned. Do NOT guess."},
         {"role": "user", "content": prompt}
     ]
     try:
         res = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.2
+            model="gpt-3.5-turbo", messages=messages, temperature=0.2
         )
         return json.loads(res.choices[0].message.content)
     except Exception as e:
@@ -219,7 +211,6 @@ def webhook():
     if sess["awaiting_correction"]:
         updated = apply_correction(sess["structured_data"], text)
         sess["structured_data"] = updated
-        # stay in correction mode
         summary = summarize_data(updated)
         send_telegram_message(chat,
             "✅ Got it! Here’s the **full** updated report:\n\n"
