@@ -46,33 +46,53 @@ def transcribe_from_telegram_voice(file_id: str) -> str:
         return ""
 
 def summarize_data(d: dict) -> str:
-    # Join helper
-    def join_list(key, fmt):
-        return fmt.format(", ".join(key)) if key else fmt.format("")
-    lines = [
-        f"📍 Site: {d.get('site_name','')}",
-        f"📆 Segment: {d.get('segment','')}",
-        f"🌿 Category: {d.get('category','')}",
-        f"🏣 Companies: {', '.join(c.get('name','') for c in d.get('company',[]))}",
-        f"👷 People: {', '.join(f\"{p.get('name','')} ({p.get('role','')})\" for p in d.get('people',[]))}",
-        f"🔧 Services: {', '.join(f\"{s.get('task','')} ({s.get('company','')})\" for s in d.get('service',[]))}",
-        f"🛠️ Tools: {', '.join(f\"{t.get('item','')} ({t.get('company','')})\" for t in d.get('tools',[]))}",
-        f"📋 Activities: {', '.join(d.get('activities',[]))}"
-    ]
+    lines = []
+    lines.append(f"📍 Site: {d.get('site_name','')}")
+    lines.append(f"📆 Segment: {d.get('segment','')}")
+    lines.append(f"🌿 Category: {d.get('category','')}")
+    # Companies
+    comps = [c.get("name","") for c in d.get("company",[]) if isinstance(c, dict)]
+    lines.append(f"🏣 Companies: {', '.join(comps)}")
+    # People
+    people_list = []
+    for p in d.get("people", []):
+        if isinstance(p, dict):
+            name = p.get("name","")
+            role = p.get("role","")
+            people_list.append(f"{name} ({role})")
+    lines.append(f"👷 People: {', '.join(people_list)}")
+    # Services
+    serv_list = []
+    for s in d.get("service", []):
+        if isinstance(s, dict):
+            task = s.get("task","")
+            comp = s.get("company","")
+            serv_list.append(f"{task} ({comp})")
+    lines.append(f"🔧 Services: {', '.join(serv_list)}")
+    # Tools
+    tools_list = []
+    for t in d.get("tools", []):
+        if isinstance(t, dict):
+            item = t.get("item","")
+            comp = t.get("company","")
+            tools_list.append(f"{item} ({comp})")
+    lines.append(f"🛠️ Tools: {', '.join(tools_list)}")
+    # Activities
+    lines.append(f"📋 Activities: {', '.join(d.get('activities',[]))}")
+    # Issues
     if d.get("issues"):
         lines.append("⚠️ Issues:")
         for issue in d["issues"]:
-            desc = issue.get("description","")
-            cb   = issue.get("caused_by","")
-            ph   = " 📸" if issue.get("has_photo") else ""
-            lines.append(f"• {desc} (by {cb}){ph}")
-    lines += [
-        f"⏰ Time: {d.get('time','')}",
-        f"🌦️ Weather: {d.get('weather','')}",
-        f"💬 Impression: {d.get('impression','')}",
-        f"📝 Comments: {d.get('comments','')}",
-        f"🗓️ Date: {d.get('date','')}"
-    ]
+            if isinstance(issue, dict):
+                desc = issue.get("description","")
+                cb   = issue.get("caused_by","")
+                ph   = " 📸" if issue.get("has_photo") else ""
+                lines.append(f"• {desc} (by {cb}){ph}")
+    lines.append(f"⏰ Time: {d.get('time','')}")
+    lines.append(f"🌦️ Weather: {d.get('weather','')}")
+    lines.append(f"💬 Impression: {d.get('impression','')}")
+    lines.append(f"📝 Comments: {d.get('comments','')}")
+    lines.append(f"🗓️ Date: {d.get('date','')}")
     return "\n".join(lines)
 
 def enrich_with_date(d: dict) -> dict:
@@ -125,71 +145,58 @@ def handle_manual_correction(data: dict, text: str) -> bool:
     k = key.strip().lower()
     v = val.strip()
     mapping = {
-        'site': 'site_name','site_name':'site_name',
-        'segment':'segment',
-        'category':'category',
+        'site':'site_name','site_name':'site_name',
+        'segment':'segment','category':'category',
         'company':'company','companies':'company',
-        'people':'people',
-        'tools':'tools','tool':'tools',
-        'service':'service','services':'service',
+        'people':'people','tools':'tools',
+        'tool':'tools','service':'service','services':'service',
         'activities':'activities','activity':'activities',
-        'issues':'issues',
-        'time':'time','weather':'weather',
-        'impression':'impression','comments':'comments',
-        'date':'date'
+        'issues':'issues','time':'time','weather':'weather',
+        'impression':'impression','comments':'comments','date':'date'
     }
     if k not in mapping:
         return False
-    field = mapping[k]
-
-    # Single-value fields
-    if field in ('site_name','segment','category','time','weather','impression','comments','date'):
-        data[field] = v
+    fld = mapping[k]
+    # Single-value
+    if fld in ('site_name','segment','category','time','weather','impression','comments','date'):
+        data[fld] = v
         return True
-
-    # List-of-objects or list-of-strings
-    if field == 'company':
+    # Multi-value fields
+    if fld == 'company':
         arr = data.setdefault('company',[])
         for name in [x.strip() for x in v.split(",") if x.strip()]:
             arr.append({'name':name})
         return True
-
-    if field == 'people':
+    if fld == 'people':
         arr = data.setdefault('people',[])
         for part in [x.strip() for x in v.split(",") if x.strip()]:
             if 'role' in part:
-                nm, rl = part.split('role',1)
-                name = nm.strip().rstrip(",:")
-                role = rl.strip(" :")
+                nm,rl = part.split('role',1)
+                arr.append({'name':nm.strip().rstrip(":,"),
+                            'role':rl.strip(" :")})
             else:
-                name, role = part, ""
-            arr.append({'name':name,'role':role})
+                arr.append({'name':part,'role':""})
         return True
-
-    if field == 'tools':
+    if fld == 'tools':
         arr = data.setdefault('tools',[])
         for item in [x.strip() for x in v.split(",") if x.strip()]:
             arr.append({'item':item,'company':""})
         return True
-
-    if field == 'service':
+    if fld == 'service':
         arr = data.setdefault('service',[])
-        for item in [x.strip() for x in v.split(",") if x.strip()]:
-            arr.append({'task':item,'company':""})
+        for task in [x.strip() for x in v.split(",") if x.strip()]:
+            arr.append({'task':task,'company':""})
         return True
-
-    if field == 'activities':
+    if fld == 'activities':
         lst = data.setdefault('activities',[])
-        for item in [x.strip() for x in v.split(",") if x.strip()]:
-            lst.append(item)
+        for act in [x.strip() for x in v.split(",") if x.strip()]:
+            lst.append(act)
         return True
-
-    if field == 'issues':
+    if fld == 'issues':
         arr = data.setdefault('issues',[])
-        for part in [x.strip() for x in v.split(";") if x.strip()]:
-            arr.append({'description':part,'caused_by':"","has_photo":False})
+        for desc in [x.strip() for x in v.split(";") if x.strip()]:
+            arr.append({'description':desc,'caused_by':"",'has_photo':False})
         return True
-
     return False
 
 @app.route("/webhook", methods=["POST"])
@@ -200,16 +207,17 @@ def webhook():
         text = msg.get("text","") or ""
         if not text and msg.get("voice"):
             text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
-
         cmd = text.lower().strip()
+
         # RESET / NEW
         if cmd in ("new","/new","reset","/reset","new report","start over"):
             session_data[chat_id] = {"structured_data":{}, "awaiting_correction":False}
             blank = summarize_data({})
-            send_telegram_message(chat_id, f"🔄 New report:\n\n{blank}\n\n✅ Speak or type any field to begin.")
+            send_telegram_message(chat_id,
+                f"🔄 New report:\n\n{blank}\n\n✅ Speak or type any field to begin.")
             return "",200
 
-        # Ensure session
+        # Ensure session exists
         if chat_id not in session_data:
             session_data[chat_id] = {"structured_data":{}, "awaiting_correction":False}
         state = session_data[chat_id]
@@ -219,28 +227,29 @@ def webhook():
         if state["awaiting_correction"]:
             if handle_manual_correction(data, text):
                 full = summarize_data(data)
-                send_telegram_message(chat_id, f"✅ Full updated report:\n\n{full}\n\n✅ Anything else?")
+                send_telegram_message(chat_id,
+                    f"✅ Full updated report:\n\n{full}\n\n✅ Anything else?")
                 return "",200
-            # fallback to GPT correction
+            # Fallback to GPT‐based correction
             updated = apply_correction_gpt(data, text)
             session_data[chat_id]["structured_data"] = updated
             full = summarize_data(updated)
-            send_telegram_message(chat_id, f"✅ Full updated report:\n\n{full}\n\n✅ Anything else?")
+            send_telegram_message(chat_id,
+                f"✅ Full updated report:\n\n{full}\n\n✅ Anything else?")
             return "",200
 
         # FIRST EXTRACTION
         extracted = extract_site_report(text)
         if not extracted.get("site_name"):
-            send_telegram_message(chat_id, "⚠️ Sorry, I couldn't detect site info. Please try again.")
+            send_telegram_message(chat_id,
+                "⚠️ Sorry, I couldn't detect site info. Please try again.")
             return "",200
 
         enriched = enrich_with_date(extracted)
         session_data[chat_id] = {"structured_data":enriched, "awaiting_correction":True}
         full = summarize_data(enriched)
-        send_telegram_message(
-            chat_id,
-            f"Here’s what I understood:\n\n{full}\n\n✅ You can correct any field now (e.g. “Category: …”)."
-        )
+        send_telegram_message(chat_id,
+            f"Here’s what I understood:\n\n{full}\n\n✅ You can correct any field now (e.g. “Category: …”).")
         return "",200
 
     except Exception as e:
