@@ -3,50 +3,38 @@ import requests, os, json, re
 from datetime import datetime
 import openai
 
-# --- Initialize OpenAI client (new SDK style) ---
+# --- Initialize OpenAI client ---
 client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = Flask(__name__)
 
 # --- In‐memory session store ---
-# chat_id → {"structured_data": {...}, "awaiting_correction": bool}
-session_data = {}
+session_data = {}  # chat_id → {"structured_data": {...}, "awaiting_correction": bool}
 
 def blank_report():
-    """Return a fresh, empty report with today's date."""
     today = datetime.now().strftime("%d-%m-%Y")
     return {
-        "site_name": "",
-        "segment": "",
-        "category": "",
-        "company": [],
-        "people": [],
-        "tools": [],
-        "service": [],
-        "activities": [],
-        "issues": [],
-        "time": "",
-        "weather": "",
-        "impression": "",
-        "comments": "",
-        "date": today
+        "site_name": "", "segment": "", "category": "",
+        "company": [], "people": [], "tools": [], "service": [],
+        "activities": [], "issues": [],
+        "time": "", "weather": "", "impression": "",
+        "comments": "", "date": today
     }
 
 def send_telegram_message(chat_id, text):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
-    requests.post(url, json=payload)
+    requests.post(url, json={"chat_id": chat_id, "text": text})
 
 def get_telegram_file_path(file_id):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     r = requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}")
-    return "https://api.telegram.org/file/bot{}/{}".format(token, r.json()["result"]["file_path"])
+    fp = r.json()["result"]["file_path"]
+    return f"https://api.telegram.org/file/bot{token}/{fp}"
 
 def transcribe_from_telegram_voice(file_id):
     try:
-        audio_url = get_telegram_file_path(file_id)
-        audio = requests.get(audio_url).content
+        audio = requests.get(get_telegram_file_path(file_id)).content
         resp = requests.post(
             "https://api.openai.com/v1/audio/transcriptions",
             headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"},
@@ -58,69 +46,66 @@ def transcribe_from_telegram_voice(file_id):
         print("❌ Transcription failed:", e)
         return ""
 
-def enrich_with_date(data):
+def enrich_with_date(d):
     today = datetime.now().strftime("%d-%m-%Y")
-    d = data.get("date","")
-    if not d:
-        data["date"] = today
+    dt = d.get("date","")
+    if not dt:
+        d["date"] = today
     else:
         try:
-            parsed = datetime.strptime(d, "%d-%m-%Y")
-            if parsed > datetime.now():
-                data["date"] = today
+            if datetime.strptime(dt, "%d-%m-%Y") > datetime.now():
+                d["date"] = today
         except:
-            data["date"] = today
-    return data
+            d["date"] = today
+    return d
 
 def summarize_data(d):
-    lines = []
-    lines.append(f"📍 Site: {d.get('site_name','')}")
-    lines.append(f"📆 Segment: {d.get('segment','')}")
-    lines.append(f"🌿 Category: {d.get('category','')}")
-    comps = [c.get("name","") if isinstance(c,dict) else str(c) for c in d.get("company",[])]
-    lines.append("🏣 Companies: " + ", ".join(comps))
-    ppl = []
-    for p in d.get("people",[]):
-        if isinstance(p,dict):
-            name, role = p.get("name",""), p.get("role","")
-            ppl.append(f"{name} ({role})" if role else name)
-        else:
-            ppl.append(str(p))
-    lines.append("👷 People: " + ", ".join(ppl))
-    svcs = []
-    for s in d.get("service",[]):
-        if isinstance(s,dict):
-            t, c = s.get("task",""), s.get("company","")
-            svcs.append(f"{t} ({c})" if c else t)
-        else:
-            svcs.append(str(s))
-    lines.append("🔧 Services: " + ", ".join(svcs))
-    tls = []
-    for t in d.get("tools",[]):
-        if isinstance(t,dict):
-            i, c = t.get("item",""), t.get("company","")
-            tls.append(f"{i} ({c})" if c else i)
-        else:
-            tls.append(str(t))
-    lines.append("🛠️ Tools: " + ", ".join(tls))
-    lines.append("📋 Activities: " + ", ".join(d.get("activities",[])))
+    lines = [
+        f"📍 Site: {d.get('site_name','')}",
+        f"📆 Segment: {d.get('segment','')}",
+        f"🌿 Category: {d.get('category','')}",
+        "🏣 Companies: " + ", ".join(
+            (c.get("name") if isinstance(c,dict) else str(c)) for c in d.get("company",[])
+        ),
+        "👷 People: " + ", ".join(
+            (f\"{p.get('name')} ({p.get('role')})\" if isinstance(p,dict) else str(p))
+            for p in d.get("people",[])
+        ),
+        "🔧 Services: " + ", ".join(
+            (f\"{s.get('task')} ({s.get('company')})\" if isinstance(s,dict) else str(s))
+            for s in d.get("service",[])
+        ),
+        "🛠️ Tools: " + ", ".join(
+            (f\"{t.get('item')} ({t.get('company')})\" if isinstance(t,dict) else str(t))
+            for t in d.get("tools",[])
+        ),
+        "📋 Activities: " + ", ".join(d.get("activities",[]))
+    ]
+    # filter out empty‐description issues
+    valid_issues = [
+        i for i in d.get("issues",[])
+        if isinstance(i,dict) and i.get("description","").strip()
+    ]
     lines.append("⚠️ Issues:")
-    for i in d.get("issues",[]):
-        if isinstance(i,dict):
-            desc, by = i.get("description",""), i.get("caused_by","")
-            photo = " 📸" if i.get("has_photo") else ""
-            lines.append(f"• {desc} (by {by}){photo}")
-    lines.append(f"⏰ Time: {d.get('time','')}")
-    lines.append(f"🌦️ Weather: {d.get('weather','')}")
-    lines.append(f"💬 Impression: {d.get('impression','')}")
-    lines.append(f"📝 Comments: {d.get('comments','')}")
-    lines.append(f"🗓️ Date: {d.get('date','')}")
+    for i in valid_issues:
+        desc = i["description"]
+        by = i.get("caused_by","")
+        photo = " 📸" if i.get("has_photo") else ""
+        lines.append(f"• {desc}" + (f" (by {by})" if by else "") + photo)
+
+    lines += [
+        f"⏰ Time: {d.get('time','')}",
+        f"🌦️ Weather: {d.get('weather','')}",
+        f"💬 Impression: {d.get('impression','')}",
+        f"📝 Comments: {d.get('comments','')}",
+        f"🗓️ Date: {d.get('date','')}"
+    ]
     return "\n".join(lines)
 
-# GPT prompt template
+# GPT templates
 gpt_prompt = """
-You are an AI assistant extracting a construction site report. Only pull out exactly what’s mentioned.
-Return JSON with any of these fields (omit if not said):
+You are an AI assistant extracting a construction site report. Only extract exactly what’s mentioned.
+Return a JSON with any of these fields (omit if not present):
 site_name, segment, category,
 company:[{"name":...}], people:[{"name":...,"role":...}],
 tools:[{"item":...,"company":...}], service:[{"task":...,"company":...}],
@@ -134,36 +119,38 @@ def extract_site_report(text):
         {"role":"user","content":gpt_prompt + "\n" + text}
     ]
     try:
-        res = client.chat.completions.create(
+        r = client.chat.completions.create(
             model="gpt-3.5-turbo", messages=msgs, temperature=0.2
         )
-        content = res.choices[0].message.content.strip()
-        data = json.loads(content)
-        return data
+        return json.loads(r.choices[0].message.content)
     except Exception as e:
         print("❌ GPT extract error:", e)
-        # fallback: regex for “at the X segment”
+        # fallback for a site_name from “at the X segment”
         m = re.search(r'at the ([^,]+?) segment', text, re.IGNORECASE)
         if m:
             return {"site_name": m.group(1).title()}
         return {}
 
-def apply_correction(original, correction):
+def apply_correction(original, corr_text):
     prompt = f"""
 Original JSON:
 {json.dumps(original)}
 
-User correction:
-\"{correction}\"
+User said:
+\"{corr_text}\"
 
-Return the full JSON with only those fields updated.
+Return a JSON with only the corrected fields (partial).
 """
     try:
-        res = client.chat.completions.create(
+        r = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role":"user","content":prompt}]
         )
-        return json.loads(res.choices[0].message.content)
+        part = json.loads(r.choices[0].message.content)
+        # merge partial back into original
+        merged = original.copy()
+        merged.update(part)
+        return merged
     except Exception as e:
         print("❌ GPT correction error:", e)
         return original
@@ -172,7 +159,7 @@ Return the full JSON with only those fields updated.
 def webhook():
     data = request.get_json(force=True)
     if "message" not in data:
-        return "ok", 200
+        return "ok",200
 
     msg = data["message"]
     chat_id = str(msg["chat"]["id"])
@@ -186,7 +173,7 @@ def webhook():
         }
     sess = session_data[chat_id]
 
-    # new/reset
+    # New/reset command
     if text.lower() in ("new","new report","/new","reset"):
         sess["structured_data"] = blank_report()
         sess["awaiting_correction"] = True
@@ -197,16 +184,15 @@ def webhook():
         )
         return "ok",200
 
-    # voice?
+    # Voice→text
     if "voice" in msg:
-        file_id = msg["voice"]["file_id"]
-        text = transcribe_from_telegram_voice(file_id)
+        text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
         if not text:
             send_telegram_message(chat_id,
-                "⚠️ Couldn't understand audio. Please retry.")
+                "⚠️ Couldn't understand the audio. Please try again.")
             return "ok",200
 
-    # first extraction
+    # First extraction
     if not sess["awaiting_correction"]:
         extracted = extract_site_report(text)
         if not extracted.get("site_name"):
@@ -223,7 +209,7 @@ def webhook():
         )
         return "ok",200
 
-    # corrections/additions
+    # Corrections / additions
     updated = apply_correction(sess["structured_data"], text)
     updated = enrich_with_date(updated)
     sess["structured_data"] = updated
