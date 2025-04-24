@@ -6,14 +6,13 @@ import re
 from datetime import datetime
 import openai
 
-# Initialize OpenAI client (new SDK style)
+# Initialize OpenAI client
 client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = Flask(__name__)
 
-# In-memory session store
-# { chat_id: {"structured_data": {...}, "awaiting_correction": bool} }
-session_data = {}
+# In‐memory sessions
+session_data = {}  # chat_id → {"structured_data": {...}, "awaiting_correction": bool}
 
 
 def send_telegram_message(chat_id, text):
@@ -21,16 +20,16 @@ def send_telegram_message(chat_id, text):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
     print("📤 Sending to Telegram:", url)
-    print("📤 Payload:", json.dumps(payload, indent=2))
-    resp = requests.post(url, json=payload)
-    print("✅ Telegram response:", resp.status_code, resp.text)
+    print("📤 Payload:", payload)
+    r = requests.post(url, json=payload)
+    print("✅ Telegram response:", r.status_code, r.text)
 
 
 def get_telegram_file_path(file_id):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     url = f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}"
-    resp = requests.get(url)
-    return resp.json()["result"]["file_path"]
+    r = requests.get(url).json()
+    return r["result"]["file_path"]
 
 
 def transcribe_from_telegram_voice(file_id):
@@ -39,108 +38,110 @@ def transcribe_from_telegram_voice(file_id):
         audio_url = f"https://api.telegram.org/file/bot{os.getenv('TELEGRAM_BOT_TOKEN')}/{path}"
         r = requests.get(audio_url)
         if r.status_code != 200:
-            print("❌ Failed to fetch audio")
             return ""
         whisper = requests.post(
             "https://api.openai.com/v1/audio/transcriptions",
             headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"},
             files={"file": ("voice.ogg", r.content, "audio/ogg")},
             data={"model": "whisper-1"}
-        )
-        return whisper.json().get("text", "")
+        ).json()
+        return whisper.get("text", "") or ""
     except Exception as e:
         print("❌ Transcription error:", e)
         return ""
 
 
 def clean_json_reply(raw: str) -> str:
-    """
-    Strip markdown fences and any non-JSON prefix/suffix so we can safely json.loads().
-    """
-    # grab content inside ```json ... ```
     m = re.search(r"```json(.*?)```", raw, re.S)
     if m:
         raw = m.group(1)
-    # strip any leading/trailing backticks or whitespace
-    raw = raw.strip("`\n ")
-    return raw
+    return raw.strip("`\n ")
+
+
+def to_list(val):
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str) and val.strip():
+        return [val.strip()]
+    return []
 
 
 def summarize_data(d):
+    # Helper to coerce each field
     lines = []
-    if d.get("site_name"):
-        lines.append(f"📍 Site: {d['site_name']}")
-    if d.get("segment"):
-        lines.append(f"📆 Segment: {d['segment']}")
-    # Category always shown
-    cat = d.get("category","").strip()
-    lines.append(f"🌿 Category: {cat}" if cat else "🌿 Category: ")
+
+    # Always show site_name, even if blank
+    lines.append(f"📍 Site: {d.get('site_name','') or ''}")
+    lines.append(f"📆 Segment: {d.get('segment','') or ''}")
+    lines.append(f"🌿 Category: {d.get('category','') or ''}")
+
     # Companies
     comps = []
-    for c in d.get("company", []):
-        if isinstance(c, dict):
-            name = c.get("name","").strip()
-            if name: comps.append(name)
-        elif isinstance(c, str) and c.strip():
-            comps.append(c.strip())
+    for c in to_list(d.get("company")):
+        if isinstance(c, dict) and c.get("name"):
+            comps.append(c["name"])
+        elif isinstance(c, str):
+            comps.append(c)
     lines.append("🏣 Companies: " + ", ".join(comps))
+
     # People
     ppl = []
-    for p in d.get("people", []):
-        if isinstance(p, dict):
-            name = p.get("name","").strip()
-            role = p.get("role","").strip()
-            if name:
-                ppl.append(f"{name} ({role})" if role else name)
-        elif isinstance(p, str) and p.strip():
-            ppl.append(p.strip())
+    for p in to_list(d.get("people")):
+        if isinstance(p, dict) and p.get("name"):
+            role = p.get("role","")
+            ppl.append(f"{p['name']} ({role})" if role else p["name"])
+        elif isinstance(p, str):
+            ppl.append(p)
     lines.append("👷 People: " + ", ".join(ppl))
+
     # Tools
     tools = []
-    for t in d.get("tools", []):
-        if isinstance(t, dict):
-            item = t.get("item","").strip()
-            comp = t.get("company","").strip()
-            if item:
-                tools.append(f"{item} ({comp})" if comp else item)
-        elif isinstance(t, str) and t.strip():
-            tools.append(t.strip())
+    for t in to_list(d.get("tools")):
+        if isinstance(t, dict) and t.get("item"):
+            comp = t.get("company","")
+            tools.append(f"{t['item']} ({comp})" if comp else t["item"])
+        elif isinstance(t, str):
+            tools.append(t)
     lines.append("🛠️ Tools: " + ", ".join(tools))
+
     # Services
     svcs = []
-    for s in d.get("service", []):
-        if isinstance(s, dict):
-            task = s.get("task","").strip()
-            comp = s.get("company","").strip()
-            if task:
-                svcs.append(f"{task} ({comp})" if comp else task)
-        elif isinstance(s, str) and s.strip():
-            svcs.append(s.strip())
+    for s in to_list(d.get("service")):
+        if isinstance(s, dict) and s.get("task"):
+            comp = s.get("company","")
+            svcs.append(f"{s['task']} ({comp})" if comp else s["task"])
+        elif isinstance(s, str):
+            svcs.append(s)
     lines.append("🔧 Services: " + ", ".join(svcs))
+
     # Activities
-    acts = [a for a in d.get("activities", []) if isinstance(a, str)]
+    acts = [a for a in to_list(d.get("activities")) if isinstance(a, str)]
     lines.append("📋 Activities: " + ", ".join(acts))
+
     # Issues
-    issues = d.get("issues", [])
-    if issues:
+    iss = to_list(d.get("issues"))
+    if iss:
         lines.append("⚠️ Issues:")
-        for i in issues:
-            if isinstance(i, dict):
-                desc = i.get("description","").strip()
-                cause = i.get("caused_by","").strip()
+        for i in iss:
+            if isinstance(i, dict) and i.get("description"):
+                desc = i["description"]
+                cause = i.get("caused_by","")
                 photo = " 📸" if i.get("has_photo") else ""
-                lines.append(
-                    f"• {desc}" + (f" (by {cause})" if cause else "") + photo
-                )
+                lines.append(f"• {desc}" + (f" (by {cause})" if cause else "") + photo)
     else:
         lines.append("⚠️ Issues: ")
-    # Time/Weather/Impression/Comments
+
+    # Time / Weather / Impression / Comments
     lines.append(f"⏰ Time: {d.get('time','')}")
     lines.append(f"🌦️ Weather: {d.get('weather','')}")
     lines.append(f"💬 Impression: {d.get('impression','')}")
     lines.append(f"📝 Comments: {d.get('comments','')}")
+
     # Date (always present)
     lines.append(f"🗓️ Date: {d.get('date','')}")
+
     return "\n".join(lines)
 
 
@@ -151,8 +152,7 @@ def enrich_with_date(d):
         d["date"] = today
     else:
         try:
-            parsed = datetime.strptime(dt, "%d-%m-%Y")
-            if parsed > datetime.now():
+            if datetime.strptime(dt, "%d-%m-%Y") > datetime.now():
                 d["date"] = today
         except:
             d["date"] = today
@@ -162,28 +162,26 @@ def enrich_with_date(d):
 def extract_site_report(text):
     prompt = gpt_prompt_template + "\n" + text
     msgs = [
-        {"role":"system","content":"You only extract fields explicitly mentioned; never guess."},
+        {"role":"system","content":"Only extract explicitly mentioned fields; never guess."},
         {"role":"user","content":prompt}
     ]
     try:
         resp = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=msgs,
-            temperature=0.2
+            model="gpt-3.5-turbo", messages=msgs, temperature=0.2
         )
         raw = resp.choices[0].message.content
         clean = clean_json_reply(raw)
         return json.loads(clean)
     except Exception as e:
-        print("❌ GPT parsing failed:", e)
+        print("❌ GPT parse fail:", e)
         return {}
 
 
 def apply_correction(orig, corr_text):
     prompt = (
-        "Correct this JSON report:\n"
+        "Correct this JSON:\n"
         f"{json.dumps(orig)}\n"
-        "User said:\n"
+        "User correction:\n"
         f"{corr_text}\n"
         "Return only the updated JSON."
     )
@@ -193,57 +191,54 @@ def apply_correction(orig, corr_text):
             messages=[{"role":"user","content":prompt}],
             temperature=0.2
         )
-        raw = resp.choices[0].message.content
-        clean = clean_json_reply(raw)
+        clean = clean_json_reply(resp.choices[0].message.content)
         updated = json.loads(clean)
-        # always re‐enrich the date
         return enrich_with_date(updated)
     except Exception as e:
-        print("❌ Correction GPT failed:", e)
+        print("❌ Correction parse fail:", e)
         return orig
 
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    print("📩 Telegram update:", json.dumps(data, indent=2))
+    print("📩 Update:", json.dumps(data, indent=2))
     msg = data.get("message", {})
     chat_id = str(msg.get("chat",{}).get("id",""))
     if not chat_id:
-        return "no chat", 400
+        return "no chat id", 400
 
     # get text or transcribe voice
     text = msg.get("text","") or ""
     if not text and msg.get("voice"):
         text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
     if not text:
-        send_telegram_message(chat_id, "⚠️ I didn’t catch any text or audio. Try again.")
+        send_telegram_message(chat_id, "⚠️ I didn’t catch text or voice. Try again.")
         return "no content", 200
 
-    tl = text.strip().lower()
-    # RESET
-    if tl in ("new","/new","reset","/reset","new report","start","/start"):
+    cmd = text.strip().lower()
+    # RESET / NEW
+    if cmd in ("new","/new","reset","/reset","start","/start","new report"):
         session_data[chat_id] = {"structured_data": {}, "awaiting_correction": False}
         blank = (
-            "🔄 Starting a fresh report:\n\n"
+            "🔄 **Starting a fresh report**\n\n"
             "📍 Site: \n📆 Segment: \n🌿 Category: \n"
             "🏣 Companies: \n👷 People: \n🛠️ Tools: \n"
             "🔧 Services: \n📋 Activities: \n⚠️ Issues: \n"
             "⏰ Time: \n🌦️ Weather: \n💬 Impression: \n"
             "📝 Comments: \n"
             f"🗓️ Date: {datetime.now().strftime('%d-%m-%Y')}\n\n"
-            "✅ You can now speak or type your first field."
+            "✅ Now please speak or type your first field."
         )
         send_telegram_message(chat_id, blank)
         return "reset", 200
 
     sess = session_data.setdefault(chat_id, {"structured_data": {}, "awaiting_correction": False})
 
-    # CORRECTION
+    # CORRECTION MODE
     if sess["awaiting_correction"]:
         updated = apply_correction(sess["structured_data"], text)
         sess["structured_data"] = updated
-        # stay in correction mode
         summary = summarize_data(updated)
         send_telegram_message(
             chat_id,
@@ -251,10 +246,10 @@ def webhook():
         )
         return "corrected", 200
 
-    # FIRST‐PASS EXTRACTION
+    # FIRST PASS EXTRACTION
     extracted = extract_site_report(text)
     if not extracted.get("site_name"):
-        send_telegram_message(chat_id, "⚠️ Sorry, I couldn’t detect the site name. Please try again.")
+        send_telegram_message(chat_id, "⚠️ Couldn’t detect `site_name`. Please try again.")
         return "retry", 200
 
     enriched = enrich_with_date(extracted)
@@ -263,7 +258,7 @@ def webhook():
     summary = summarize_data(enriched)
     send_telegram_message(
         chat_id,
-        f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can now reply with corrections."
+        f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can reply with corrections."
     )
     return "extracted", 200
 
@@ -271,7 +266,7 @@ def webhook():
 # GPT prompt skeleton
 gpt_prompt_template = """
 You are an AI assistant extracting a construction‐site report.
-Only pull out fields explicitly mentioned; never invent or fill in defaults.
+Only pull out fields explicitly mentioned; never invent or guess.
 Return JSON with exactly these keys (omit any you don’t see):
 - site_name
 - segment
