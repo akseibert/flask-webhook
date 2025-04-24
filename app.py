@@ -66,7 +66,10 @@ def summarize_data(d: dict) -> str:
     if isinstance(d.get("issues"), list):
         lines.append("⚠️ Issues:")
         for i in d["issues"]:
-            lines.append(f"• {i.get('description','')} (by {i.get('caused_by','')})" + (" 📸" if i.get("has_photo") else ""))
+            lines.append(
+                f"• {i.get('description','')} (by {i.get('caused_by','')})"
+                + (" 📸" if i.get("has_photo") else "")
+            )
     if d.get("time"):      lines.append(f"⏰ Time: {d['time']}")
     if d.get("weather"):   lines.append(f"🌦️ Weather: {d['weather']}")
     if d.get("impression"):lines.append(f"💬 Impression: {d['impression']}")
@@ -122,7 +125,7 @@ def apply_correction(orig: dict, corr: str) -> dict:
         print("❌ Correction parse failed:", e)
         return orig
 
-# fields we allow manual shorthand for:
+# manual‐field shorthand
 _manual_fields = {
     "site":      "site_name",
     "segment":   "segment",
@@ -145,9 +148,8 @@ def webhook():
     data = request.get_json(force=True)
     msg  = data.get("message", {})
     chat = str(msg.get("chat",{}).get("id",""))
-    text = msg.get("text", None)
+    text = msg.get("text")
 
-    # voice → text
     if not text and msg.get("voice"):
         text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
         send_telegram_message(chat, f"ℹ️ I heard: “{text}”")
@@ -155,71 +157,66 @@ def webhook():
             send_telegram_message(chat, "⚠️ Couldn't understand audio. Please repeat the site name.")
             return "ok",200
 
-    # ensure session
+    # start session
     if chat not in session_data:
         session_data[chat] = {"structured_data": {}, "awaiting_correction": False}
-
     sess = session_data[chat]
     sd   = sess["structured_data"]
 
-    # reset/new
+    # ——— NEW / RESET logic ———
     if text and text.strip().lower() in ("new","/new","reset","start again"):
-        sess["structured_data"] = {}
-        sess["awaiting_correction"] = False
+        session_data[chat] = {"structured_data": {}, "awaiting_correction": False}
         blank = summarize_data(enrich_with_date({}))
-        send_telegram_message(chat, "🔄 Starting a fresh report:\n\n" + blank + "\n\nPlease say the site name.")
+        send_telegram_message(chat,
+            "🔄 **Starting a fresh report**\n\n" + blank +
+            "\n\nPlease say the site name."
+        )
         return "ok",200
 
-    # if we're in correction mode, try manual shorthand first
+    # if awaiting correction, try manual shorthand
     if sess["awaiting_correction"]:
         lc = text.strip()
         low = lc.lower()
         for key, field in _manual_fields.items():
             if low.startswith(key + ":") or low.startswith(key + " "):
                 val = lc.split(":",1)[-1].strip() if ":" in lc else lc.split(" ",1)[-1].strip()
-                # inject accordingly
-                if field == "company":
+                # inject
+                if field=="company":
                     sd["company"] = [{"name":val}]
-                elif field == "people":
-                    parts = val.split(None,1)
-                    name = parts[0]
-                    role = parts[1] if len(parts)>1 else ""
+                elif field=="people":
+                    parts=val.split(None,1); name=parts[0]; role=parts[1] if len(parts)>1 else ""
                     sd.setdefault("people",[]).append({"name":name,"role":role})
                 elif field in ("tools","service","activities","issues"):
-                    # for simplicity, single-item lists
                     if field=="tools":
                         sd.setdefault("tools",[]).append({"item":val,"company":""})
                     elif field=="service":
                         sd.setdefault("service",[]).append({"task":val,"company":""})
                     elif field=="activities":
                         sd.setdefault("activities",[]).append(val)
-                    else:  # issues
+                    else:
                         sd.setdefault("issues",[]).append({"description":val,"caused_by":"","has_photo":False})
                 else:
                     sd[field] = val
-                # always return full summary
                 summary = summarize_data(sd)
                 send_telegram_message(chat, "✅ Full updated report:\n\n" + summary + "\n\nAnything else?")
                 return "ok",200
 
-        # fallback to GPT correction
+        # fallback GPT‐based correction
         updated = apply_correction(sd, text)
         session_data[chat]["structured_data"] = updated
         summary = summarize_data(updated)
         send_telegram_message(chat, "✅ Full updated report:\n\n" + summary + "\n\nAnything else?")
         return "ok",200
 
-    # first‐time extraction
+    # ——— First‐time extraction ———
     extracted = extract_site_report(text or "")
     if not extracted.get("site_name"):
-        # echo what we got
         send_telegram_message(chat,
             "⚠️ I couldn’t detect a site name. I heard:\n\n“" + (text or "") +
             "”\nPlease say the site name."
         )
         return "ok",200
 
-    # enrich, store, ask for confirmation
     sess["structured_data"] = enrich_with_date(extracted)
     sess["awaiting_correction"] = True
     summary = summarize_data(sess["structured_data"])
