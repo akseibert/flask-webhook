@@ -34,13 +34,13 @@ def get_telegram_file_path(file_id: str) -> str:
 def transcribe_from_telegram_voice(file_id: str) -> str:
     try:
         audio_url = get_telegram_file_path(file_id)
-        audio_resp = requests.get(audio_url)
-        if audio_resp.status_code != 200:
+        resp = requests.get(audio_url)
+        if resp.status_code != 200:
             return ""
         whisper = requests.post(
             "https://api.openai.com/v1/audio/transcriptions",
             headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"},
-            files={"file": ("voice.ogg", audio_resp.content, "audio/ogg")},
+            files={"file": ("voice.ogg", resp.content, "audio/ogg")},
             data={"model": "whisper-1"}
         )
         return whisper.json().get("text", "").strip()
@@ -125,7 +125,7 @@ def apply_correction(orig: dict, corr: str) -> dict:
         print("❌ Correction parse failed:", e)
         return orig
 
-# manual‐field shorthand
+# shorthand field updates
 _manual_fields = {
     "site":      "site_name",
     "segment":   "segment",
@@ -150,20 +150,20 @@ def webhook():
     chat = str(msg.get("chat",{}).get("id",""))
     text = msg.get("text")
 
+    # handle voice → text once
     if not text and msg.get("voice"):
         text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
-        send_telegram_message(chat, f"ℹ️ I heard: “{text}”")
         if not text:
-            send_telegram_message(chat, "⚠️ Couldn't understand audio. Please repeat the site name.")
+            send_telegram_message(chat, "⚠️ Couldn't understand audio. Please repeat.")
             return "ok",200
 
-    # start session
+    # init session
     if chat not in session_data:
         session_data[chat] = {"structured_data": {}, "awaiting_correction": False}
     sess = session_data[chat]
     sd   = sess["structured_data"]
 
-    # ——— NEW / RESET logic ———
+    # NEW / RESET
     if text and text.strip().lower() in ("new","/new","reset","start again"):
         session_data[chat] = {"structured_data": {}, "awaiting_correction": False}
         blank = summarize_data(enrich_with_date({}))
@@ -173,58 +173,61 @@ def webhook():
         )
         return "ok",200
 
-    # if awaiting correction, try manual shorthand
+    # CORRECTION round
     if sess["awaiting_correction"]:
-        lc = text.strip()
-        low = lc.lower()
-        for key, field in _manual_fields.items():
-            if low.startswith(key + ":") or low.startswith(key + " "):
-                val = lc.split(":",1)[-1].strip() if ":" in lc else lc.split(" ",1)[-1].strip()
-                # inject
-                if field=="company":
-                    sd["company"] = [{"name":val}]
-                elif field=="people":
-                    parts=val.split(None,1); name=parts[0]; role=parts[1] if len(parts)>1 else ""
-                    sd.setdefault("people",[]).append({"name":name,"role":role})
-                elif field in ("tools","service","activities","issues"):
-                    if field=="tools":
-                        sd.setdefault("tools",[]).append({"item":val,"company":""})
-                    elif field=="service":
-                        sd.setdefault("service",[]).append({"task":val,"company":""})
-                    elif field=="activities":
-                        sd.setdefault("activities",[]).append(val)
+        try:
+            lc = text.strip().lower()
+            # manual shorthand first
+            for key, field in _manual_fields.items():
+                if lc.startswith(key + ":") or lc.startswith(key + " "):
+                    val = text.split(":",1)[-1].strip() if ":" in text else text.split(" ",1)[-1].strip()
+                    if field == "company":
+                        sd["company"] = [{"name": val}]
+                    elif field == "people":
+                        parts = val.split(None,1)
+                        name, role = parts[0], (parts[1] if len(parts)>1 else "")
+                        sd.setdefault("people",[]).append({"name":name,"role":role})
+                    elif field in ("tools","service","activities","issues"):
+                        if field=="tools":
+                            sd.setdefault("tools",[]).append({"item":val,"company":""})
+                        elif field=="service":
+                            sd.setdefault("service",[]).append({"task":val,"company":""})
+                        elif field=="activities":
+                            sd.setdefault("activities",[]).append(val)
+                        else:
+                            sd.setdefault("issues",[]).append({"description":val,"caused_by":"","has_photo":False})
                     else:
-                        sd.setdefault("issues",[]).append({"description":val,"caused_by":"","has_photo":False})
-                else:
-                    sd[field] = val
-                summary = summarize_data(sd)
-                send_telegram_message(chat, "✅ Full updated report:\n\n" + summary + "\n\nAnything else?")
-                return "ok",200
-
-        # fallback GPT‐based correction
-        updated = apply_correction(sd, text)
-        session_data[chat]["structured_data"] = updated
-        summary = summarize_data(updated)
-        send_telegram_message(chat, "✅ Full updated report:\n\n" + summary + "\n\nAnything else?")
+                        sd[field] = val
+                    summary = summarize_data(sd)
+                    send_telegram_message(chat, "✅ Full updated report:\n\n" + summary + "\n\nAnything else?")
+                    return "ok",200
+            # fallback GPT correction
+            updated = apply_correction(sd, text)
+            session_data[chat]["structured_data"] = updated
+            summary = summarize_data(updated)
+            send_telegram_message(chat, "✅ Full updated report:\n\n" + summary + "\n\nAnything else?")
+        except Exception as e:
+            print("❌ Correction error:", e)
+            send_telegram_message(chat, "⚠️ Something went wrong applying your correction. Try again.")
         return "ok",200
 
-    # ——— First‐time extraction ———
+    # FIRST‐TIME extraction
     extracted = extract_site_report(text or "")
     if not extracted.get("site_name"):
         send_telegram_message(chat,
-            "⚠️ I couldn’t detect a site name. I heard:\n\n“" + (text or "") +
-            "”\nPlease say the site name."
+            "⚠️ I couldn’t detect a site name. Please say it clearly."
         )
         return "ok",200
 
+    # save & confirm
     sess["structured_data"] = enrich_with_date(extracted)
     sess["awaiting_correction"] = True
     summary = summarize_data(sess["structured_data"])
     send_telegram_message(chat,
         "Here’s what I understood:\n\n" + summary +
-        "\n\n✅ Is this correct? You can send manual updates like “Company: Smith AG” or type “new” to restart."
+        "\n\n✅ Is this correct? You can send corrections (e.g. “Company: X AG”) or type “new” to restart."
     )
     return "ok",200
 
-if __name__=="__main__":
+if __name__ == "__main__":
     app.run(port=int(os.getenv("PORT","10000")), debug=True)
