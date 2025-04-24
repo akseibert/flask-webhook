@@ -28,8 +28,7 @@ def send_telegram_message(chat_id, text):
 def get_telegram_file_path(file_id):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     url = f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}"
-    r = requests.get(url).json()
-    return r["result"]["file_path"]
+    return requests.get(url).json()["result"]["file_path"]
 
 
 def transcribe_from_telegram_voice(file_id):
@@ -70,79 +69,62 @@ def to_list(val):
 
 def summarize_data(d):
     lines = []
-
-    # Site / Segment / Category
-    lines.append(f"📍 Site: {d.get('site_name','') or ''}")
-    lines.append(f"📆 Segment: {d.get('segment','') or ''}")
-    lines.append(f"🌿 Category: {d.get('category','') or ''}")
-
-    # Companies (allow both keys)
+    lines.append(f"📍 Site: {d.get('site_name','')}")
+    lines.append(f"📆 Segment: {d.get('segment','')}")
+    lines.append(f"🌿 Category: {d.get('category','')}")
+    # Companies
     raw_comps = to_list(d.get("company")) + to_list(d.get("companies"))
-    comps = []
-    for c in raw_comps:
-        if isinstance(c, dict) and c.get("name"):
-            comps.append(c["name"])
-        elif isinstance(c, str):
-            comps.append(c)
+    comps = [(c["name"] if isinstance(c, dict) else c) for c in raw_comps]
     lines.append("🏣 Companies: " + ", ".join(comps))
-
     # People
-    raw_ppl = to_list(d.get("people"))
     ppl = []
-    for p in raw_ppl:
-        if isinstance(p, dict) and p.get("name"):
-            role = p.get("role","")
-            ppl.append(f"{p['name']} ({role})" if role else p["name"])
-        elif isinstance(p, str):
+    for p in to_list(d.get("people")):
+        if isinstance(p, dict):
+            name, role = p.get("name",""), p.get("role","")
+            ppl.append(f"{name} ({role})" if role else name)
+        else:
             ppl.append(p)
     lines.append("👷 People: " + ", ".join(ppl))
-
     # Tools
-    raw_tools = to_list(d.get("tools"))
     tools = []
-    for t in raw_tools:
-        if isinstance(t, dict) and t.get("item"):
-            comp = t.get("company","")
-            tools.append(f"{t['item']} ({comp})" if comp else t["item"])
-        elif isinstance(t, str):
+    for t in to_list(d.get("tools")):
+        if isinstance(t, dict):
+            item, comp = t.get("item",""), t.get("company","")
+            tools.append(f"{item} ({comp})" if comp else item)
+        else:
             tools.append(t)
     lines.append("🛠️ Tools: " + ", ".join(tools))
-
-    # Services (allow both keys)
+    # Services
     raw_svcs = to_list(d.get("service")) + to_list(d.get("services"))
     svcs = []
     for s in raw_svcs:
-        if isinstance(s, dict) and s.get("task"):
-            comp = s.get("company","")
-            svcs.append(f"{s['task']} ({comp})" if comp else s["task"])
-        elif isinstance(s, str):
+        if isinstance(s, dict):
+            task, comp = s.get("task",""), s.get("company","")
+            svcs.append(f"{task} ({comp})" if comp else task)
+        else:
             svcs.append(s)
     lines.append("🔧 Services: " + ", ".join(svcs))
-
     # Activities
-    acts = [a for a in to_list(d.get("activities")) if isinstance(a, str)]
+    acts = [a for a in to_list(d.get("activities"))]
     lines.append("📋 Activities: " + ", ".join(acts))
-
-    # Issues (allow both keys)
+    # Issues
     raw_issues = to_list(d.get("issues")) + to_list(d.get("issue"))
     if raw_issues:
         lines.append("⚠️ Issues:")
         for i in raw_issues:
-            if isinstance(i, dict) and i.get("description"):
-                desc = i["description"]
+            if isinstance(i, dict):
+                desc = i.get("description","")
                 cause = i.get("caused_by","")
                 photo = " 📸" if i.get("has_photo") else ""
                 lines.append(f"• {desc}" + (f" (by {cause})" if cause else "") + photo)
     else:
         lines.append("⚠️ Issues: ")
-
-    # Remainder
+    # Others
     lines.append(f"⏰ Time: {d.get('time','')}")
     lines.append(f"🌦️ Weather: {d.get('weather','')}")
     lines.append(f"💬 Impression: {d.get('impression','')}")
     lines.append(f"📝 Comments: {d.get('comments','')}")
     lines.append(f"🗓️ Date: {d.get('date','')}")
-
     return "\n".join(lines)
 
 
@@ -203,13 +185,11 @@ def apply_correction(orig, corr_text):
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    print("📩 Update:", json.dumps(data, indent=2))
     msg = data.get("message", {})
     chat_id = str(msg.get("chat",{}).get("id",""))
     if not chat_id:
         return "no chat id", 400
 
-    # get text or transcribe voice
     text = msg.get("text","") or ""
     if not text and msg.get("voice"):
         text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
@@ -233,6 +213,7 @@ def webhook():
 
     sess = session_data.setdefault(chat_id, {"structured_data": {}, "awaiting_correction": False})
 
+    # corrections flow
     if sess["awaiting_correction"]:
         updated = apply_correction(sess["structured_data"], text)
         sess["structured_data"] = updated
@@ -243,14 +224,19 @@ def webhook():
         )
         return "corrected", 200
 
+    # first or incremental extraction
     extracted = extract_site_report(text)
-    if not extracted.get("site_name"):
-        send_telegram_message(chat_id, "⚠️ Couldn’t detect `site_name`. Please try again.")
+    if not extracted:
+        send_telegram_message(chat_id, "⚠️ Couldn’t parse any fields. Please try again.")
         return "retry", 200
 
-    enriched = enrich_with_date(extracted)
+    # merge into existing
+    merged = sess["structured_data"]
+    merged.update(extracted)
+    enriched = enrich_with_date(merged)
     sess["structured_data"] = enriched
     sess["awaiting_correction"] = True
+
     summary = summarize_data(enriched)
     send_telegram_message(
         chat_id,
