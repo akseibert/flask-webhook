@@ -69,17 +69,17 @@ def to_list(val):
 
 
 def summarize_data(d):
-    # Helper to coerce each field
     lines = []
 
-    # Always show site_name, even if blank
+    # Site / Segment / Category
     lines.append(f"📍 Site: {d.get('site_name','') or ''}")
     lines.append(f"📆 Segment: {d.get('segment','') or ''}")
     lines.append(f"🌿 Category: {d.get('category','') or ''}")
 
-    # Companies
+    # Companies (allow both keys)
+    raw_comps = to_list(d.get("company")) + to_list(d.get("companies"))
     comps = []
-    for c in to_list(d.get("company")):
+    for c in raw_comps:
         if isinstance(c, dict) and c.get("name"):
             comps.append(c["name"])
         elif isinstance(c, str):
@@ -87,8 +87,9 @@ def summarize_data(d):
     lines.append("🏣 Companies: " + ", ".join(comps))
 
     # People
+    raw_ppl = to_list(d.get("people"))
     ppl = []
-    for p in to_list(d.get("people")):
+    for p in raw_ppl:
         if isinstance(p, dict) and p.get("name"):
             role = p.get("role","")
             ppl.append(f"{p['name']} ({role})" if role else p["name"])
@@ -97,8 +98,9 @@ def summarize_data(d):
     lines.append("👷 People: " + ", ".join(ppl))
 
     # Tools
+    raw_tools = to_list(d.get("tools"))
     tools = []
-    for t in to_list(d.get("tools")):
+    for t in raw_tools:
         if isinstance(t, dict) and t.get("item"):
             comp = t.get("company","")
             tools.append(f"{t['item']} ({comp})" if comp else t["item"])
@@ -106,9 +108,10 @@ def summarize_data(d):
             tools.append(t)
     lines.append("🛠️ Tools: " + ", ".join(tools))
 
-    # Services
+    # Services (allow both keys)
+    raw_svcs = to_list(d.get("service")) + to_list(d.get("services"))
     svcs = []
-    for s in to_list(d.get("service")):
+    for s in raw_svcs:
         if isinstance(s, dict) and s.get("task"):
             comp = s.get("company","")
             svcs.append(f"{s['task']} ({comp})" if comp else s["task"])
@@ -120,11 +123,11 @@ def summarize_data(d):
     acts = [a for a in to_list(d.get("activities")) if isinstance(a, str)]
     lines.append("📋 Activities: " + ", ".join(acts))
 
-    # Issues
-    iss = to_list(d.get("issues"))
-    if iss:
+    # Issues (allow both keys)
+    raw_issues = to_list(d.get("issues")) + to_list(d.get("issue"))
+    if raw_issues:
         lines.append("⚠️ Issues:")
-        for i in iss:
+        for i in raw_issues:
             if isinstance(i, dict) and i.get("description"):
                 desc = i["description"]
                 cause = i.get("caused_by","")
@@ -133,13 +136,11 @@ def summarize_data(d):
     else:
         lines.append("⚠️ Issues: ")
 
-    # Time / Weather / Impression / Comments
+    # Remainder
     lines.append(f"⏰ Time: {d.get('time','')}")
     lines.append(f"🌦️ Weather: {d.get('weather','')}")
     lines.append(f"💬 Impression: {d.get('impression','')}")
     lines.append(f"📝 Comments: {d.get('comments','')}")
-
-    # Date (always present)
     lines.append(f"🗓️ Date: {d.get('date','')}")
 
     return "\n".join(lines)
@@ -217,7 +218,6 @@ def webhook():
         return "no content", 200
 
     cmd = text.strip().lower()
-    # RESET / NEW
     if cmd in ("new","/new","reset","/reset","start","/start","new report"):
         session_data[chat_id] = {"structured_data": {}, "awaiting_correction": False}
         blank = (
@@ -225,8 +225,6 @@ def webhook():
             "📍 Site: \n📆 Segment: \n🌿 Category: \n"
             "🏣 Companies: \n👷 People: \n🛠️ Tools: \n"
             "🔧 Services: \n📋 Activities: \n⚠️ Issues: \n"
-            "⏰ Time: \n🌦️ Weather: \n💬 Impression: \n"
-            "📝 Comments: \n"
             f"🗓️ Date: {datetime.now().strftime('%d-%m-%Y')}\n\n"
             "✅ Now please speak or type your first field."
         )
@@ -235,7 +233,6 @@ def webhook():
 
     sess = session_data.setdefault(chat_id, {"structured_data": {}, "awaiting_correction": False})
 
-    # CORRECTION MODE
     if sess["awaiting_correction"]:
         updated = apply_correction(sess["structured_data"], text)
         sess["structured_data"] = updated
@@ -246,7 +243,6 @@ def webhook():
         )
         return "corrected", 200
 
-    # FIRST PASS EXTRACTION
     extracted = extract_site_report(text)
     if not extracted.get("site_name"):
         send_telegram_message(chat_id, "⚠️ Couldn’t detect `site_name`. Please try again.")
