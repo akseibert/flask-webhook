@@ -1,18 +1,23 @@
 from flask import Flask, request
-import requests
-import os
-import json
-import re
+import requests, os, json
 from datetime import datetime
 import openai
 
-# Initialize OpenAI client
+# Initialize your OpenAI client, etc.
 client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = Flask(__name__)
 
+# — Health check endpoint to keep Render alive —
+@app.route("/", methods=["GET"])
+def index():
+    return "OK", 200
+
 # In‐memory sessions
 session_data = {}  # chat_id → {"structured_data": {...}, "awaiting_correction": bool}
+
+
+
 
 
 def send_telegram_message(chat_id, text):
