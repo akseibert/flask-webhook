@@ -2,6 +2,7 @@ from flask import Flask, request
 import requests
 import os
 import json
+import re
 from datetime import datetime
 import openai
 
@@ -52,22 +53,34 @@ def transcribe_from_telegram_voice(file_id):
         return ""
 
 
+def clean_json_reply(raw: str) -> str:
+    """
+    Strip markdown fences and any non-JSON prefix/suffix so we can safely json.loads().
+    """
+    # grab content inside ```json ... ```
+    m = re.search(r"```json(.*?)```", raw, re.S)
+    if m:
+        raw = m.group(1)
+    # strip any leading/trailing backticks or whitespace
+    raw = raw.strip("`\n ")
+    return raw
+
+
 def summarize_data(d):
     lines = []
     if d.get("site_name"):
         lines.append(f"📍 Site: {d['site_name']}")
     if d.get("segment"):
         lines.append(f"📆 Segment: {d['segment']}")
-    # Category (always include the line, even if blank)
-    cat = d.get("category", "").strip()
+    # Category always shown
+    cat = d.get("category","").strip()
     lines.append(f"🌿 Category: {cat}" if cat else "🌿 Category: ")
     # Companies
     comps = []
     for c in d.get("company", []):
         if isinstance(c, dict):
             name = c.get("name","").strip()
-            if name:
-                comps.append(name)
+            if name: comps.append(name)
         elif isinstance(c, str) and c.strip():
             comps.append(c.strip())
     lines.append("🏣 Companies: " + ", ".join(comps))
@@ -116,16 +129,17 @@ def summarize_data(d):
                 desc = i.get("description","").strip()
                 cause = i.get("caused_by","").strip()
                 photo = " 📸" if i.get("has_photo") else ""
-                bullet = f"• {desc}" + (f" (by {cause})" if cause else "") + photo
-                lines.append(bullet)
+                lines.append(
+                    f"• {desc}" + (f" (by {cause})" if cause else "") + photo
+                )
     else:
         lines.append("⚠️ Issues: ")
-    # Time / Weather / Impression / Comments
+    # Time/Weather/Impression/Comments
     lines.append(f"⏰ Time: {d.get('time','')}")
     lines.append(f"🌦️ Weather: {d.get('weather','')}")
     lines.append(f"💬 Impression: {d.get('impression','')}")
     lines.append(f"📝 Comments: {d.get('comments','')}")
-    # Date
+    # Date (always present)
     lines.append(f"🗓️ Date: {d.get('date','')}")
     return "\n".join(lines)
 
@@ -148,7 +162,7 @@ def enrich_with_date(d):
 def extract_site_report(text):
     prompt = gpt_prompt_template + "\n" + text
     msgs = [
-        {"role":"system","content":"You ONLY extract explicitly mentioned fields; never guess or fill defaults."},
+        {"role":"system","content":"You only extract fields explicitly mentioned; never guess."},
         {"role":"user","content":prompt}
     ]
     try:
@@ -157,7 +171,9 @@ def extract_site_report(text):
             messages=msgs,
             temperature=0.2
         )
-        return json.loads(resp.choices[0].message.content)
+        raw = resp.choices[0].message.content
+        clean = clean_json_reply(raw)
+        return json.loads(clean)
     except Exception as e:
         print("❌ GPT parsing failed:", e)
         return {}
@@ -165,17 +181,23 @@ def extract_site_report(text):
 
 def apply_correction(orig, corr_text):
     prompt = (
-        "You are helping correct a JSON site report.\n"
-        "Original JSON:\n" + json.dumps(orig) +
-        "\nUser said:\n" + corr_text +
-        "\nReturn the updated JSON with only the changed fields."
+        "Correct this JSON report:\n"
+        f"{json.dumps(orig)}\n"
+        "User said:\n"
+        f"{corr_text}\n"
+        "Return only the updated JSON."
     )
     try:
         resp = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[{"role":"user","content":prompt}]
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.2
         )
-        return json.loads(resp.choices[0].message.content)
+        raw = resp.choices[0].message.content
+        clean = clean_json_reply(raw)
+        updated = json.loads(clean)
+        # always re‐enrich the date
+        return enrich_with_date(updated)
     except Exception as e:
         print("❌ Correction GPT failed:", e)
         return orig
@@ -190,18 +212,17 @@ def webhook():
     if not chat_id:
         return "no chat", 400
 
-    # pull text or voice
+    # get text or transcribe voice
     text = msg.get("text","") or ""
     if not text and msg.get("voice"):
         text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
     if not text:
-        send_telegram_message(chat_id, "⚠️ I didn't catch any text or audio. Try again.")
+        send_telegram_message(chat_id, "⚠️ I didn’t catch any text or audio. Try again.")
         return "no content", 200
 
-    text_lower = text.strip().lower()
-    # RESET / NEW REPORT
-    reset_cmds = ["new report","new","/new","/reset","reset","start again","start","/start"]
-    if text_lower in reset_cmds or any(text_lower.startswith(cmd + " ") for cmd in reset_cmds):
+    tl = text.strip().lower()
+    # RESET
+    if tl in ("new","/new","reset","/reset","new report","start","/start"):
         session_data[chat_id] = {"structured_data": {}, "awaiting_correction": False}
         blank = (
             "🔄 Starting a fresh report:\n\n"
@@ -216,10 +237,9 @@ def webhook():
         send_telegram_message(chat_id, blank)
         return "reset", 200
 
-    # ensure session exists
     sess = session_data.setdefault(chat_id, {"structured_data": {}, "awaiting_correction": False})
 
-    # CORRECTION FLOW
+    # CORRECTION
     if sess["awaiting_correction"]:
         updated = apply_correction(sess["structured_data"], text)
         sess["structured_data"] = updated
@@ -231,10 +251,10 @@ def webhook():
         )
         return "corrected", 200
 
-    # EXTRACTION FLOW
+    # FIRST‐PASS EXTRACTION
     extracted = extract_site_report(text)
     if not extracted.get("site_name"):
-        send_telegram_message(chat_id, "⚠️ Sorry, I couldn’t detect the site name. Try again.")
+        send_telegram_message(chat_id, "⚠️ Sorry, I couldn’t detect the site name. Please try again.")
         return "retry", 200
 
     enriched = enrich_with_date(extracted)
@@ -243,25 +263,25 @@ def webhook():
     summary = summarize_data(enriched)
     send_telegram_message(
         chat_id,
-        f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can reply with corrections or say “new report” to reset."
+        f"Here’s what I understood:\n\n{summary}\n\n✅ Is this correct? You can now reply with corrections."
     )
     return "extracted", 200
 
 
-# GPT prompt template
+# GPT prompt skeleton
 gpt_prompt_template = """
-You are an AI assistant extracting a construction‐site report from a manager’s summary.
-⚠️ Only extract fields explicitly mentioned; never guess or fill defaults.
-Return a JSON with only these fields (omit if not mentioned):
+You are an AI assistant extracting a construction‐site report.
+Only pull out fields explicitly mentioned; never invent or fill in defaults.
+Return JSON with exactly these keys (omit any you don’t see):
 - site_name
 - segment
 - category
-- company: list of {"name": "..."}
-- people: list of {"name": "...", "role": "..."}
-- tools: list of {"item": "...", "company": "..."}
-- service: list of {"task": "...", "company": "..."}
-- activities: list of strings
-- issues: list of {"description": "...", "caused_by": "...", "has_photo": true/false}
+- company: [ {name: ...} ]
+- people: [ {name: ..., role: ...} ]
+- tools: [ {item: ..., company: ...} ]
+- service: [ {task: ..., company: ...} ]
+- activities: [ string ]
+- issues: [ {description: ..., caused_by: ..., has_photo: true/false} ]
 - time
 - weather
 - impression
