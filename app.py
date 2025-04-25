@@ -101,12 +101,12 @@ def transcribe_from_telegram_voice(file_id):
         text = response.text.strip()
         if not text or len(text.split()) < 2:
             logger.warning(f"Transcription invalid or too short: '{text}'")
-            return "Issue: Unclear audio input"
+            return ""
         logger.info(f"Transcribed audio: '{text}'")
         return text
     except Exception as e:
         logger.error(f"Transcription failed: {e}")
-        return "Issue: Audio transcription failed"
+        return ""
 
 def enrich_with_date(d):
     today = datetime.now().strftime("%d-%m-%Y")
@@ -172,7 +172,7 @@ def summarize_data(d):
     return "\n".join(lines)
 
 gpt_prompt = """
-You are an AI assistant extracting a construction site report from user input. Extract only explicitly mentioned fields and return them in JSON format. If no fields are clearly identified, check for issue-related keywords and treat the input as an issue only if such keywords are present. Otherwise, return {}.
+You are an AI assistant extracting a construction site report from user input. Extract only explicitly mentioned fields and return them in JSON format. If no fields are clearly identified, check for specific keywords to map to fields or treat as comments for general statements.
 
 Fields to extract (omit if not present):
 - site_name: string (e.g., "Downtown Project")
@@ -192,37 +192,47 @@ Fields to extract (omit if not present):
 - date: string (format dd-mm-yyyy)
 
 Rules:
-- Extract fields only when explicitly mentioned with clear intent (e.g., "Site: Downtown Project", "Company: Acme Corp").
+- Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Issue:", etc., or clear intent in natural language.
 - For issues:
-  - "description" is mandatory.
   - Recognize keywords: "Issue", "Issues", "Problem", "Problems", "Delay", "Fault", "Error", or natural language (e.g., "The issue is...", "There’s a delay").
-  - "caused_by" is optional, extracted if mentioned (e.g., "caused by Supplier").
-  - "has_photo" is true only if "with photo" or "has photo" is explicitly stated.
+  - "description" is mandatory.
+  - "caused_by" is optional (e.g., "caused by Supplier").
+  - "has_photo" is true only if "with photo" or "has photo" is stated.
   - Handle multiple issues as separate objects.
-- If input is ambiguous but contains issue-related keywords (e.g., "Issue", "Problem"), treat it as an issue with the full text as "description".
-- If input lacks clear field identifiers and no issue keywords, return {}.
-- Omit unclear, empty, or inferred fields.
+- For activities:
+  - Recognize keywords: "Work", "Activity", "Task", or natural language (e.g., "Work was done", "Concrete was poured").
+- For site_name:
+  - Recognize keywords: "Site", "Location", "Project", or location-like phrases (e.g., "at the West Wing").
+- For comments:
+  - Use as a fallback for general statements that don’t clearly match other fields.
+- If input is ambiguous but contains relevant keywords, map to the most likely field (e.g., "Work was done" → activities, "at the West Wing" → site_name).
+- If no fields or keywords match, treat as comments if the input is meaningful.
+- Return {} only for irrelevant inputs (e.g., "Hello world").
 - Case-insensitive matching for keywords.
 
 Examples:
 1. Input: "Site: Downtown Project, Issue: Delayed delivery caused by Supplier with photo"
    Output: {"site_name": "Downtown Project", "issues": [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}]}
-2. Input: "Issues: Broken equipment, Missing tools caused by Beta Inc"
-   Output: {"issues": [{"description": "Broken equipment"}, {"description": "Missing tools", "caused_by": "Beta Inc"}]}
+2. Input: "Work was done at the West Wing."
+   Output: {"site_name": "West Wing", "activities": ["Work was done"]}
 3. Input: "The issue is a late delivery"
    Output: {"issues": [{"description": "Late delivery"}]}
-4. Input: "Company: Acme Corp, There’s a delay in delivery"
-   Output: {"company": [{"name": "Acme Corp"}], "issues": [{"description": "Delay in delivery"}]}
+4. Input: "Company: Acme Corp, Work was done"
+   Output: {"company": [{"name": "Acme Corp"}], "activities": ["Work was done"]}
 5. Input: "Hello world"
    Output: {}
 6. Input: "Problem: Faulty wiring detected"
    Output: {"issues": [{"description": "Faulty wiring detected"}]}
+7. Input: "Construction progressed at the East Tower"
+   Output: {"site_name": "East Tower", "activities": ["Construction progressed"]}
+8. Input: "All good today"
+   Output: {"comments": "All good today"}
 """
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def extract_site_report(text):
     messages = [
-        {"role": "system", "content": "Extract only explicitly stated fields; treat ambiguous input as an issue only if it contains issue-related keywords."},
+        {"role": "system", "content": "Extract explicitly stated fields; map ambiguous inputs to likely fields or comments based on keywords."},
         {"role": "user", "content": gpt_prompt + "\nInput text: " + text}
     ]
     try:
@@ -234,19 +244,52 @@ def extract_site_report(text):
         logger.info(f"Raw GPT response: {raw_response}")
         data = json.loads(raw_response)
         logger.info(f"Extracted report: {data}")
-        # Fallback: If no fields are extracted and input contains issue keywords, treat as issue
-        issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error)\b'
-        if not data and text.strip() and re.search(issue_keywords, text.lower()):
-            data = {"issues": [{"description": text.strip()}]}
-            logger.info(f"Fallback applied: Treated input as issue: {data}")
+        # Fallback: If no fields are extracted, check for meaningful input
+        if not data and text.strip():
+            # Check for issue keywords
+            issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error)\b'
+            if re.search(issue_keywords, text.lower()):
+                data = {"issues": [{"description": text.strip()}]}
+                logger.info(f"Fallback applied: Treated as issue: {data}")
+            # Check for activity keywords
+            activity_keywords = r'\b(work|activity|task|progress|construction)\b'
+            location_keywords = r'\b(at|in|on)\b'
+            if re.search(activity_keywords, text.lower()):
+                data = {"activities": [text.strip()]}
+                # Extract location if present
+                if re.search(location_keywords, text.lower()):
+                    location = text.lower().split("at")[-1].strip() if "at" in text.lower() else \
+                              text.lower().split("in")[-1].strip() if "in" in text.lower() else \
+                              text.lower().split("on")[-1].strip()
+                    data["site_name"] = location.title()
+                logger.info(f"Fallback applied: Treated as activity: {data}")
+            else:
+                # Fallback to comments for meaningful input
+                data = {"comments": text.strip()}
+                logger.info(f"Fallback applied: Treated as comments: {data}")
         return data
     except Exception as e:
         logger.error(f"GPT extract error for input '{text}': {e}")
-        # Fallback for extraction failure with issue keywords
+        # Fallback for extraction failure
         issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error)\b'
-        if text.strip() and re.search(issue_keywords, text.lower()):
-            logger.info(f"Extraction failed; fallback to issue: {text}")
-            return {"issues": [{"description": text.strip()}]}
+        activity_keywords = r'\b(work|activity|task|progress|construction)\b'
+        location_keywords = r'\b(at|in|on)\b'
+        if text.strip():
+            if re.search(issue_keywords, text.lower()):
+                logger.info(f"Extraction failed; fallback to issue: {text}")
+                return {"issues": [{"description": text.strip()}]}
+            elif re.search(activity_keywords, text.lower()):
+                data = {"activities": [text.strip()]}
+                if re.search(location_keywords, text.lower()):
+                    location = text.lower().split("at")[-1].strip() if "at" in text.lower() else \
+                              text.lower().split("in")[-1].strip() if "in" in text.lower() else \
+                              text.lower().split("on")[-1].strip()
+                    data["site_name"] = location.title()
+                logger.info(f"Extraction failed; fallback to activity: {data}")
+                return data
+            else:
+                logger.info(f"Extraction failed; fallback to comments: {text}")
+                return {"comments": text.strip()}
         return {}
 
 def merge_structured_data(existing, new):
@@ -259,7 +302,6 @@ def merge_structured_data(existing, new):
                 if key == "issues":
                     if not isinstance(item, dict) or "description" not in item:
                         continue
-                    # Avoid duplicates by checking description
                     if not any(existing_item.get("description") == item["description"]
                               for existing_item in existing_list
                               if isinstance(existing_item, dict)):
@@ -317,12 +359,11 @@ def webhook():
         # Voice message
         if "voice" in msg:
             text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
-            if text.startswith("Issue:"):
-                logger.info(f"Transcribed voice to text: '{text}'")
-            else:
+            if not text:
                 send_telegram_message(chat_id,
-                    f"⚠️ Couldn't understand the audio. I heard: '{text}'.\nPlease speak clearly (e.g., say 'Issue: Delayed delivery') and try again.")
+                    "⚠️ Couldn't understand the audio. I heard nothing.\nPlease speak clearly (e.g., say 'Work was done at the West Wing') and try again.")
                 return "ok", 200
+            logger.info(f"Transcribed voice to text: '{text}'")
 
         # Reset
         if text.lower() in ("new", "new report", "reset", "/new"):
@@ -340,7 +381,7 @@ def webhook():
             extracted = extract_site_report(text)
             if not extracted.get("site_name"):
                 send_telegram_message(chat_id,
-                    "🏗️ Please provide a site name to start the report (e.g., 'Site: Downtown Project').")
+                    "🏗️ Please provide a site name to start the report (e.g., 'Site: Downtown Project' or 'Work at the West Wing').")
                 return "ok", 200
             sess["structured_data"] = merge_structured_data(
                 sess["structured_data"], enrich_with_date(extracted)
