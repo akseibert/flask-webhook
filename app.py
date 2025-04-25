@@ -2,57 +2,44 @@ from flask import Flask, request
 import requests
 import os
 import json
+import re
 import logging
-import threading
-import httpx
 from datetime import datetime
 from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-# Initialize logging
+# --- Initialize logging ---
 logging.basicConfig(
     filename="app.log",
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# Initialize OpenAI client
-try:
-    client = OpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        http_client=httpx.Client(proxies=None)  # Disable proxies
-    )
-    logger.info("OpenAI client initialized successfully")
-except Exception as e:
-    logger.error(f"OpenAI client initialization failed: {e}")
-    raise
+# --- Initialize OpenAI client ---
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = Flask(__name__)
 
-# Session data persistence
-SESSION_FILE = "/opt/render/project/src/session_data.json"
-session_lock = threading.Lock()
+# --- Session data persistence ---
+SESSION_FILE = "session_data.json"
 
 def load_session_data():
-    with session_lock:
-        try:
-            if os.path.exists(SESSION_FILE):
-                with open(SESSION_FILE, "r") as f:
-                    return json.load(f)
-            return {}
-        except Exception as e:
-            logger.error(f"Failed to load session data: {e}")
-            return {}
+    try:
+        if os.path.exists(SESSION_FILE):
+            with open(SESSION_FILE, "r") as f:
+                return json.load(f)
+        return {}
+    except Exception as e:
+        logger.error(f"Failed to load session data: {e}")
+        return {}
 
 def save_session_data(data):
-    with session_lock:
-        try:
-            os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
-            with open(SESSION_FILE, "w") as f:
-                json.dump(data, f)
-        except Exception as e:
-            logger.error(f"Failed to save session data: {e}")
+    try:
+        with open(SESSION_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.error(f"Failed to save session data: {e}")
 
 session_data = load_session_data()
 
@@ -114,7 +101,7 @@ def enrich_with_date(d):
 
 def summarize_data(d):
     lines = []
-    lines.append(f"  Site: {d.get('site_name', 'Not provided')}")
+    lines.append(f"  Site: {d.get('site_name', '')}")
     lines.append(f"  Segment: {d.get('segment', '')}")
     lines.append(f"  Category: {d.get('category', '')}")
     lines.append(
@@ -144,20 +131,19 @@ def summarize_data(d):
         )
     )
     lines.append("  Activities: " + ", ".join(d.get("activities", [])))
-    lines.append("  Issues:")
+
     valid_issues = [
         i for i in d.get("issues", [])
         if isinstance(i, dict) and i.get("description", "").strip()
     ]
-    if valid_issues:
-        for i in valid_issues:
-            desc = i["description"]
-            by = i.get("caused_by", "")
-            photo = " (with photo)" if i.get("has_photo") else ""
-            extra = f" (by {by})" if by else ""
-            lines.append(f"    • {desc}{extra}{photo}")
-    else:
-        lines.append("    None reported")
+    lines.append("  Issues:")
+    for i in valid_issues:
+        desc = i["description"]
+        by = i.get("caused_by", "")
+        photo = "  " if i.get("has_photo") else ""
+        extra = f" (by {by})" if by else ""
+        lines.append(f"• {desc}{extra}{photo}")
+
     lines.append(f"  Time: {d.get('time', '')}")
     lines.append(f"  Weather: {d.get('weather', '')}")
     lines.append(f"  Impression: {d.get('impression', '')}")
@@ -166,28 +152,19 @@ def summarize_data(d):
     return "\n".join(lines)
 
 gpt_prompt = """
-You are an AI assistant extracting a construction site report. Extract only what’s explicitly mentioned in the text. Return JSON with any of these fields (omit if not present):
-- site_name: string
-- segment: string
-- category: string
-- company: list of {"name": string}
-- people: list of {"name": string, "role": string}
-- tools: list of {"item": string, "company": string}
-- service: list of {"task": string, "company": string}
-- activities: list of strings
-- issues: list of {"description": string, "caused_by": string (optional), "has_photo": boolean (optional, default false)}
-- time: string
-- weather: string
-- impression: string
-- comments: string
-- date: string (dd-mm-yyyy)
-For issues, always include the description; caused_by and has_photo are optional. If issues are mentioned, ensure they are formatted as a list of objects, even if only the description is provided.
+You are an AI assistant extracting a construction site report. Only extract what’s explicitly mentioned.
+Return JSON with any of these fields (omit if not present):
+site_name, segment, category,
+company:[{"name":...}], people:[{"name":...,"role":...}],
+tools:[{"item":...,"company":...}], service:[{"task":...,"company":...}],
+activities:[...], issues:[{"description":...,"caused_by":...,"has_photo":...}],
+time, weather, impression, comments, date (dd-mm-yyyy)
 """
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def extract_site_report(text):
     messages = [
-        {"role": "system", "content": "Extract only explicitly stated fields; never infer or guess."},
+        {"role": "system", "content": "Only extract explicitly stated fields; never guess."},
         {"role": "user", "content": gpt_prompt + "\n" + text}
     ]
     try:
@@ -197,9 +174,6 @@ def extract_site_report(text):
         data = json.loads(response.choices[0].message.content)
         logger.info(f"Extracted report: {data}")
         return data
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON parsing error in GPT response: {e}")
-        return {}
     except Exception as e:
         logger.error(f"GPT extract error: {e}")
         return {}
@@ -208,22 +182,114 @@ def merge_structured_data(existing, new):
     merged = existing.copy()
     for key, value in new.items():
         if key in ["company", "people", "tools", "service", "activities", "issues"]:
+            # Append to lists, avoiding duplicates
             existing_list = merged.get(key, [])
             new_items = value if isinstance(value, list) else []
             for item in new_items:
-                if key == "issues":
-                    if not any(existing_item.get("description") == item.get("description")
-                              for existing_item in existing_list):
-                        existing_list.append(item)
-                elif item not in existing_list:
+                if item not in existing_list:
                     existing_list.append(item)
             merged[key] = existing_list
         else:
+            # Update scalar fields if not empty
             if value:
                 merged[key] = value
     return merged
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def handle_update(update):
-    # your implementation here
-    pass
+def apply_correction(orig, corr):
+    prompt = (
+        "Original JSON:\n" + json.dumps(orig) +
+        "\n\nUser correction:\n\"" + corr + "\"\n\n"
+        "Return JSON with only corrected fields. Do not modify fields not explicitly mentioned."
+    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        partial = json.loads(response.choices[0].message.content)
+        merged = orig.copy()
+        merged.update(partial)
+        logger.info(f"Applied correction: {corr}")
+        return merged
+    except Exception as e:
+        logger.error(f"GPT correction error: {e}")
+        return orig
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    try:
+        data = request.get_json(force=True)
+        if "message" not in data:
+            return "ok", 200
+
+        msg = data["message"]
+        chat_id = str(msg["chat"]["id"])
+        text = (msg.get("text") or "").strip()
+
+        # Initialize session
+        if chat_id not in session_data:
+            session_data[chat_id] = {
+                "structured_data": blank_report(),
+                "awaiting_correction": False
+            }
+        sess = session_data[chat_id]
+
+        # Reset
+        if text.lower() in ("new", "new report", "reset", "/new"):
+            sess["structured_data"] = blank_report()
+            sess["awaiting_correction"] = False
+            save_session_data(session_data)
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                "  **Starting a fresh report**\n\n" + tpl +
+                "\n\n  Speak or type your first field (site name required)."
+            )
+            return "ok", 200
+
+        # Voice message
+        if "voice" in msg:
+            text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
+            if not text:
+                send_telegram_message(chat_id,
+                    "  Couldn't understand the audio. Please try again.")
+                return "ok", 200
+
+        # First extraction
+        if not sess["awaiting_correction"]:
+            extracted = extract_site_report(text)
+            if not extracted.get("site_name"):
+                send_telegram_message(chat_id,
+                    "  Please provide a site name to start the report.")
+                return "ok", 200
+            sess["structured_data"] = merge_structured_data(
+                sess["structured_data"], enrich_with_date(extracted)
+            )
+            sess["awaiting_correction"] = True
+            save_session_data(session_data)
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                "Here’s what I understood:\n\n" + tpl +
+                "\n\n  Is this correct? Reply with corrections or more details."
+            )
+            return "ok", 200
+
+        # Correction or addition
+        updated = apply_correction(sess["structured_data"], text)
+        sess["structured_data"] = merge_structured_data(
+            sess["structured_data"], enrich_with_date(updated)
+        )
+        save_session_data(session_data)
+        tpl = summarize_data(sess["structured_data"])
+        send_telegram_message(chat_id,
+            "  Got it! Here’s the **full** updated report:\n\n" + tpl +
+            "\n\n  Anything else to add or correct?"
+        )
+        return "ok", 200
+
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return "error", 500
+
+if __name__ == "__main__":
+    app.run(port=int(os.getenv("PORT", 5000)), debug=True)
