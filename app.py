@@ -93,18 +93,27 @@ FIELD_CONFIG = {
 # --- Telegram API utilities ---
 @settings.retry
 def send_telegram_message(chat_id: str, text: str) -> None:
-    response = requests.post(
-        f"https://api.telegram.org/bot{settings.telegram_token}/sendMessage",
-        json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-    )
-    response.raise_for_status()
+    try:
+        if not chat_id:
+            raise ValueError("Invalid chat_id")
+        response = requests.post(
+            f"https://api.telegram.org/bot{settings.telegram_token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+        )
+        response.raise_for_status()
+        logger.info(f"Sent message to chat_id={chat_id}: {text[:50]}...")
+    except Exception as e:
+        logger.error(f"Failed to send message: {e}, response: {response.text if 'response' in locals() else 'N/A'}")
+        raise
 
 @settings.retry
 def transcribe_voice(file_id: str) -> str:
     try:
         response = requests.get(f"https://api.telegram.org/bot{settings.telegram_token}/getFile?file_id={file_id}")
         response.raise_for_status()
-        file_path = response.json()["result"]["file_path"]
+        file_path = response.json().get("result", {}).get("file_path", "")
+        if not file_path:
+            raise ValueError("No file_path in response")
         audio_response = requests.get(f"https://api.telegram.org/file/bot{settings.telegram_token}/{file_path}")
         audio_response.raise_for_status()
         response = client.audio.transcriptions.create(
@@ -167,20 +176,24 @@ def _comma(items: Sequence[str]) -> str:
 
 def summarize_data(data: Dict[str, Any]) -> str:
     """Generate a formatted summary of the report data."""
-    logger.info(f"Summarizing data: {json.dumps(data, indent=2)}")
-    lines = []
-    for field, config in FIELD_CONFIG.items():
-        if field == "issues":
-            lines.append(f"{config['icon']} **Issues**:")
-            issues = [i for i in data.get(field, []) if isinstance(i, dict) and i.get("description", "").strip()]
-            lines.extend(config["format"](i) for i in issues) if issues else lines.append("  None")
-        elif config.get("scalar"):
-            lines.append(f"{config['icon']} **{field.title().replace('_', ' ')}**: {data.get(field, '') or 'None'}")
-        else:
-            items = data.get(field, [])
-            value = _comma(config["format"](item) for item in items if isinstance(item, dict))
-            lines.append(f"{config.get('icon', '📅')} **{field.title()}**: {value}")
-    return "\n".join(lines)
+    try:
+        logger.info(f"Summarizing data: {json.dumps(data, indent=2)}")
+        lines = []
+        for field, config in FIELD_CONFIG.items():
+            if field == "issues":
+                lines.append(f"{config['icon']} **Issues**:")
+                issues = [i for i in data.get(field, []) if isinstance(i, dict) and i.get("description", "").strip()]
+                lines.extend(config["format"](i) for i in issues) if issues else lines.append("  None")
+            elif config.get("scalar"):
+                lines.append(f"{config['icon']} **{field.title().replace('_', ' ')}**: {data.get(field, '') or 'None'}")
+            else:
+                items = data.get(field, [])
+                value = _comma(config["format"](item) for item in items if isinstance(item, dict))
+                lines.append(f"{config.get('icon', '📅')} **{field.title()}**: {value}")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Summarize error: {e}")
+        return "Error generating summary"
 
 @settings.retry
 def extract_site_report(text: str) -> Dict[str, Any]:
@@ -291,6 +304,7 @@ def webhook():
         with session_manager() as session_data:
             sess = session_data.setdefault(chat_id, {"structured_data": blank_report(), "awaiting_correction": False})
             data = sess.get("structured_data", blank_report())
+            logger.info(f"Session data for chat_id={chat_id}: {json.dumps(data, indent=2)}")
 
             # Handle voice input
             if "voice" in msg:
@@ -303,9 +317,10 @@ def webhook():
             # Handle reset
             if text.strip().lower() in RESET_COMMANDS:
                 logger.info(f"Resetting report for chat_id={chat_id}")
-                sess["structured_data"] = blank_report()
+                new_data = blank_report()
+                sess["structured_data"] = new_data
                 sess["awaiting_correction"] = False
-                send_telegram_message(chat_id, "**Fresh report**\n\n" + summarize_data(data) +
+                send_telegram_message(chat_id, "**Fresh report**\n\n" + summarize_data(new_data) +
                                      "\n\nEnter first field (site name required).")
                 return "ok", 200
 
