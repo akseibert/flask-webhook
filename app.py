@@ -4,6 +4,7 @@ import os
 import json
 import re
 import logging
+import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from openai import OpenAI
@@ -106,16 +107,20 @@ def send_telegram_message(chat_id: str, text: str) -> None:
             f"https://api.telegram.org/bot{settings.telegram_token}/sendMessage",
             json=payload
         )
+        response.raise_for_status()
         try:
             response_data = response.json()
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Failed to parse Telegram response: {e}, response: {response.text}")
-        if not response_data.get("ok", False):
-            error_desc = response_data.get("description", "Unknown error")
-            raise RuntimeError(f"Telegram API error: {error_desc}")
+            if not isinstance(response_data, dict) or "ok" not in response_data:
+                raise RuntimeError(f"Invalid Telegram response format: {response_data}")
+            if not response_data["ok"]:
+                error_desc = response_data.get("description", "Unknown error")
+                raise RuntimeError(f"Telegram API error: {error_desc}")
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Failed to parse Telegram response: {e}, raw response: {response.text}")
+            raise RuntimeError(f"Failed to parse Telegram response: {e}")
         logger.info(f"Sent message to chat_id={chat_id}: {text[:50]}...")
     except Exception as e:
-        logger.error(f"Failed to send message: {e}, payload: {json.dumps(payload)}, response: {response.text if 'response' in locals() else 'N/A'}")
+        logger.error(f"Failed to send message: {e}, payload: {json.dumps(payload)}, raw response: {response.text if 'response' in locals() else 'N/A'}")
         raise
 
 @settings.retry
@@ -343,7 +348,9 @@ def webhook():
                 sess["structured_data"] = new_data
                 sess["awaiting_correction"] = False
                 summary = summarize_data(new_data)
-                send_telegram_message(chat_id, f"**Fresh report**\n\n{summary}\n\nEnter first field (site name required).")
+                message = f"**Fresh report**\n\n{summary}\n\nEnter first field (site name required)."
+                send_telegram_message(chat_id, message)
+                logger.info(f"Reset completed for chat_id={chat_id}")
                 return "ok", 200
 
             # Handle commands
@@ -393,7 +400,7 @@ def webhook():
         return "ok", 200
 
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
+        logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
         return "error", 500
 
 @app.get("/")
