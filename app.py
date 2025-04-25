@@ -101,7 +101,7 @@ def enrich_with_date(d):
 
 def summarize_data(d):
     lines = []
-    lines.append(f"  Site: {d.get('site_name', '')}")
+    lines.append(f"  Site: {d.get('site_name', 'Not provided')}")
     lines.append(f"  Segment: {d.get('segment', '')}")
     lines.append(f"  Category: {d.get('category', '')}")
     lines.append(
@@ -126,24 +126,25 @@ def summarize_data(d):
     lines.append(
         "  Tools: " +
         ", ".join(
-            f"{t.get('item', '')} ({t.get('company', '')})" if isinstance(t, dict) else str(t)
+            f"{t.get('item', '')} ({t.get('company', '')})" if isinstance(t, dict) else str(s)
             for t in d.get("tools", [])
         )
     )
     lines.append("  Activities: " + ", ".join(d.get("activities", [])))
-
+    lines.append("  Issues:")
     valid_issues = [
         i for i in d.get("issues", [])
         if isinstance(i, dict) and i.get("description", "").strip()
     ]
-    lines.append("  Issues:")
-    for i in valid_issues:
-        desc = i["description"]
-        by = i.get("caused_by", "")
-        photo = "  " if i.get("has_photo") else ""
-        extra = f" (by {by})" if by else ""
-        lines.append(f"• {desc}{extra}{photo}")
-
+    if valid_issues:
+        for i in valid_issues:
+            desc = i["description"]
+            by = i.get("caused_by", "")
+            photo = " (with photo)" if i.get("has_photo") else ""
+            extra = f" (by {by})" if by else ""
+            lines.append(f"    • {desc}{extra}{photo}")
+    else:
+        lines.append("    None reported")
     lines.append(f"  Time: {d.get('time', '')}")
     lines.append(f"  Weather: {d.get('weather', '')}")
     lines.append(f"  Impression: {d.get('impression', '')}")
@@ -152,19 +153,28 @@ def summarize_data(d):
     return "\n".join(lines)
 
 gpt_prompt = """
-You are an AI assistant extracting a construction site report. Only extract what’s explicitly mentioned.
-Return JSON with any of these fields (omit if not present):
-site_name, segment, category,
-company:[{"name":...}], people:[{"name":...,"role":...}],
-tools:[{"item":...,"company":...}], service:[{"task":...,"company":...}],
-activities:[...], issues:[{"description":...,"caused_by":...,"has_photo":...}],
-time, weather, impression, comments, date (dd-mm-yyyy)
+You are an AI assistant extracting a construction site report. Extract only what’s explicitly mentioned in the text. Return JSON with any of these fields (omit if not present):
+- site_name: string
+- segment: string
+- category: string
+- company: list of {"name": string}
+- people: list of {"name": string, "role": string}
+- tools: list of {"item": string, "company": string}
+- service: list of {"task": string, "company": string}
+- activities: list of strings
+- issues: list of {"description": string, "caused_by": string (optional), "has_photo": boolean (optional, default false)}
+- time: string
+- weather: string
+- impression: string
+- comments: string
+- date: string (dd-mm-yyyy)
+For issues, always include the description; caused_by and has_photo are optional. If issues are mentioned, ensure they are formatted as a list of objects, even if only the description is provided.
 """
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def extract_site_report(text):
     messages = [
-        {"role": "system", "content": "Only extract explicitly stated fields; never guess."},
+        {"role": "system", "content": "Extract only explicitly stated fields; never infer or guess."},
         {"role": "user", "content": gpt_prompt + "\n" + text}
     ]
     try:
@@ -174,6 +184,9 @@ def extract_site_report(text):
         data = json.loads(response.choices[0].message.content)
         logger.info(f"Extracted report: {data}")
         return data
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON parsing error in GPT response: {e}")
+        return {}
     except Exception as e:
         logger.error(f"GPT extract error: {e}")
         return {}
@@ -186,7 +199,12 @@ def merge_structured_data(existing, new):
             existing_list = merged.get(key, [])
             new_items = value if isinstance(value, list) else []
             for item in new_items:
-                if item not in existing_list:
+                if key == "issues":
+                    # Avoid duplicate issues based on description
+                    if not any(existing_item.get("description") == item.get("description")
+                              for existing_item in existing_list):
+                        existing_list.append(item)
+                elif item not in existing_list:
                     existing_list.append(item)
             merged[key] = existing_list
         else:
@@ -243,7 +261,7 @@ def webhook():
             tpl = summarize_data(sess["structured_data"])
             send_telegram_message(chat_id,
                 "  **Starting a fresh report**\n\n" + tpl +
-                "\n\n  Speak or type your first field (site name required)."
+                "\n\n  Speak or type any field to begin (e.g., site name, issues, activities)."
             )
             return "ok", 200
 
@@ -258,9 +276,9 @@ def webhook():
         # First extraction
         if not sess["awaiting_correction"]:
             extracted = extract_site_report(text)
-            if not extracted.get("site_name"):
+            if not extracted:
                 send_telegram_message(chat_id,
-                    "  Please provide a site name to start the report.")
+                    "  No valid fields detected. Please provide details (e.g., site name, issues, activities).")
                 return "ok", 200
             sess["structured_data"] = merge_structured_data(
                 sess["structured_data"], enrich_with_date(extracted)
@@ -270,7 +288,9 @@ def webhook():
             tpl = summarize_data(sess["structured_data"])
             send_telegram_message(chat_id,
                 "Here’s what I understood:\n\n" + tpl +
-                "\n\n  Is this correct? Reply with corrections or more details."
+                "\n\n  Is this correct? Reply with corrections or more details." +
+                ("\n  (Note: Site name is missing; please provide it when ready.)"
+                 if not sess["structured_data"]["site_name"] else "")
             )
             return "ok", 200
 
@@ -283,7 +303,9 @@ def webhook():
         tpl = summarize_data(sess["structured_data"])
         send_telegram_message(chat_id,
             "  Got it! Here’s the **full** updated report:\n\n" + tpl +
-            "\n\n  Anything else to add or correct?"
+            "\n\n  Anything else to add or correct?" +
+            ("\n  (Note: Site name is missing; please provide it when ready.)"
+             if not sess["structured_data"]["site_name"] else "")
         )
         return "ok", 200
 
