@@ -121,10 +121,11 @@ def enrich_with_date(d):
     return d
 
 def summarize_data(d):
+    logger.info(f"Summarizing data: {json.dumps(d, indent=2)}")
     lines = []
-    lines.append(f"🏗️ **Site**: {d.get('site_name', '')}")
-    lines.append(f"🛠️ **Segment**: {d.get('segment', '')}")
-    lines.append(f"📋 **Category**: {d.get('category', '')}")
+    lines.append(f"🏗️ **Site**: {d.get('site_name', '') or 'None'}")
+    lines.append(f"🛠️ **Segment**: {d.get('segment', '') or 'None'}")
+    lines.append(f"📋 **Category**: {d.get('category', '') or 'None'}")
     lines.append(
         "🏢 **Companies**: " +
         ", ".join(c.get("name", "") if isinstance(c, dict) else str(c)
@@ -140,14 +141,14 @@ def summarize_data(d):
     lines.append(
         "🔧 **Services**: " +
         ", ".join(
-            f"{s.get('task', '')} ({s.get('company', '')})" if isinstance(s, dict) else str(s)
+            f"{s.get('task', '')} ({s.get('company', '') or 'None'})" if isinstance(s, dict) else str(s)
             for s in d.get("service", [])
         ) or "None"
     )
     lines.append(
         "🛠️ **Tools**: " +
         ", ".join(
-            f"{t.get('item', '')} ({t.get('company', '')})" if isinstance(t, dict) else str(t)
+            f"{t.get('item', '')} ({t.get('company', '') or 'None'})" if isinstance(t, dict) else str(t)
             for t in d.get("tools", [])
         ) or "None"
     )
@@ -171,15 +172,17 @@ def summarize_data(d):
     lines.append(f"😊 **Impression**: {d.get('impression', '') or 'Not specified'}")
     lines.append(f"💬 **Comments**: {d.get('comments', '') or 'None'}")
     lines.append(f"📆 **Date**: {d.get('date', '') or 'Not specified'}")
-    return "\n".join(lines)
+    summary = "\n".join(lines)
+    logger.info(f"Generated summary: {summary}")
+    return summary
 
 gpt_prompt = """
 You are an AI assistant extracting a construction site report from user input. Extract only explicitly mentioned fields and return them in JSON format. If no fields are clearly identified, check for specific keywords to map to fields or treat as comments for general statements.
 
 Fields to extract (omit if not present):
 - site_name: string (e.g., "Downtown Project")
-- segment: string
-- category: string
+- segment: string (e.g., "5", do not prefix with "Segment")
+- category: string (e.g., "3", do not prefix with "Category")
 - company: list of objects with "name" (e.g., [{"name": "Acme Corp"}])
 - people: list of objects with "name" and "role" (e.g., [{"name": "John Doe", "role": "Foreman"}])
 - tools: list of objects with "item" and "company" (e.g., [{"item": "Crane", "company": "Acme Corp"}])
@@ -195,6 +198,9 @@ Fields to extract (omit if not present):
 
 Rules:
 - Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Issue:", etc., or clear intent in natural language.
+- For segment and category:
+  - Extract the value only (e.g., "Category: 3" -> "category": "3", not "Category 3").
+  - Do not include the keyword "Segment" or "Category" in the value.
 - For issues:
   - Recognize keywords: "Issue", "Issues", "Problem", "Problems", "Delay", "Fault", "Error", or natural language (e.g., "The issue is...", "There’s a delay").
   - "description" is mandatory.
@@ -226,6 +232,8 @@ Examples:
    Output: {"comments": "All good today"}
 7. Input: "Work at the East Tower, Problem: Broken equipment"
    Output: {"site_name": "East Tower", "activities": ["Work"], "issues": [{"description": "Broken equipment"}]}
+8. Input: "Category: 3, Segment: 5"
+   Output: {"category": "3", "segment": "5"}
 """
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -243,6 +251,10 @@ def extract_site_report(text):
         logger.info(f"Raw GPT response: {raw_response}")
         data = json.loads(raw_response)
         logger.info(f"Extracted report: {data}")
+        # Post-process category and segment to remove prefixes
+        for field in ["category", "segment"]:
+            if field in data and isinstance(data[field], str):
+                data[field] = re.sub(r'^(category|segment)\s*:?\s*', '', data[field], flags=re.IGNORECASE).strip()
         if not data and text.strip():
             issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error)\b'
             if re.search(issue_keywords, text.lower()):
@@ -263,6 +275,7 @@ def extract_site_report(text):
                 else:
                     data = {"comments": text.strip()}
                     logger.info(f"Fallback applied: Treated as comments: {data}")
+        logger.info(f"Final extracted report: {data}")
         return data
     except Exception as e:
         logger.error(f"GPT extract error for input '{text}': {e}")
@@ -285,7 +298,9 @@ def extract_site_report(text):
         return {"comments": text.strip()} if text.strip() else {}
 
 def string_similarity(a, b):
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    similarity = SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    logger.info(f"String similarity between '{a}' and '{b}': {similarity}")
+    return similarity
 
 def merge_structured_data(existing, new):
     merged = existing.copy()
@@ -301,7 +316,7 @@ def merge_structured_data(existing, new):
                     replaced = False
                     for i, existing_item in enumerate(existing_list):
                         if (isinstance(existing_item, dict) and
-                            string_similarity(existing_item.get("name", ""), new_name) > 0.7):
+                            string_similarity(existing_item.get("name", ""), new_name) > 0.6):
                             existing_list[i] = new_item
                             replaced = True
                             logger.info(f"Replaced company {existing_item.get('name')} with {new_name}")
@@ -314,17 +329,19 @@ def merge_structured_data(existing, new):
                 for new_item in new_items:
                     if not isinstance(new_item, dict) or "name" not in new_item:
                         continue
+                    new_name = new_item.get("name", "")
+                    replaced = False
                     for i, existing_item in enumerate(existing_list):
                         if (isinstance(existing_item, dict) and
-                            existing_item.get("role") == new_item.get("role") and
-                            existing_item.get("name") != new_item.get("name")):
+                            string_similarity(existing_item.get("name", ""), new_name) > 0.6 and
+                            existing_item.get("role") == new_item.get("role")):
                             existing_list[i] = new_item
-                            logger.info(f"Replaced person {existing_item.get('name')} with {new_item.get('name')}")
+                            replaced = True
+                            logger.info(f"Replaced person {existing_item.get('name')} with {new_name}")
                             break
-                    else:
-                        if new_item not in existing_list:
-                            existing_list.append(new_item)
-                            logger.info(f"Added new person {new_item.get('name')}")
+                    if not replaced and new_item not in existing_list:
+                        existing_list.append(new_item)
+                        logger.info(f"Added new person {new_name}")
                 merged[key] = existing_list
             else:
                 for item in new_items:
@@ -335,26 +352,42 @@ def merge_structured_data(existing, new):
                                   for existing_item in existing_list
                                   if isinstance(existing_item, dict)):
                             existing_list.append(item)
+                    elif key in ["tools", "service"]:
+                        if not isinstance(item, dict) or ("item" not in item and "task" not in item):
+                            continue
+                        existing_items = [
+                            (existing_item.get("item") or existing_item.get("task"),
+                             existing_item.get("company"))
+                            for existing_item in existing_list if isinstance(existing_item, dict)
+                        ]
+                        new_key = item.get("item") or item.get("task")
+                        if not any(string_similarity(existing_key, new_key) > 0.6 and
+                                  string_similarity(existing_company or "", item.get("company") or "") > 0.6
+                                  for existing_key, existing_company in existing_items):
+                            existing_list.append(item)
                     elif item not in existing_list:
                         existing_list.append(item)
                 merged[key] = existing_list
         else:
             if value:
                 merged[key] = value
+    logger.info(f"Merged data: {json.dumps(merged, indent=2)}")
     return merged
 
-def delete_entry(data, field, value):
-    if field in ["company", "people", "tools", "service", "issues"]:
+def delete_entry(data, field, value=None):
+    logger.info(f"Deleting field: {field}, value: {value}")
+    if field in ["company", "people", "tools", "service", "issues"] and value:
         data[field] = [item for item in data[field]
                       if not (isinstance(item, dict) and
                               (item.get("name", "").lower() == value.lower() or
                                item.get("description", "").lower() == value.lower() or
                                item.get("item", "").lower() == value.lower() or
                                item.get("task", "").lower() == value.lower()))]
-    elif field == "activities":
+    elif field == "activities" and value:
         data[field] = [item for item in data[field] if item.lower() != value.lower()]
-    elif field in data:
+    elif field in ["site_name", "segment", "category", "time", "weather", "impression", "comments", "date"]:
         data[field] = ""
+    logger.info(f"Data after deletion: {json.dumps(data, indent=2)}")
     return data
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -362,7 +395,7 @@ def apply_correction(orig, corr):
     prompt = (
         "Original JSON:\n" + json.dumps(orig) +
         "\n\nUser correction:\n\"" + corr + "\"\n\n"
-        "Return JSON with only corrected fields. For list fields like 'company' or 'people', replace entries when correcting names (e.g., 'Electric Flow Game Behance' to 'Electric Flow GmbH' should replace the existing company). Do not add duplicates. Do not modify fields not explicitly mentioned."
+        "Return JSON with only corrected fields. For list fields like 'company' or 'people', replace entries when correcting names (e.g., 'Correct company Elektra Meyer to Elektro-Meier' should replace the existing company with the new name). Do not add new entries for corrections; update existing ones. For example, if correcting a company name, return the updated company object in the list. Do not modify fields not explicitly mentioned."
     )
     try:
         response = client.chat.completions.create(
@@ -370,9 +403,59 @@ def apply_correction(orig, corr):
             messages=[{"role": "user", "content": prompt}]
         )
         partial = json.loads(response.choices[0].message.content)
+        logger.info(f"Correction response: {partial}")
         merged = orig.copy()
-        merged.update(partial)
-        logger.info(f"Applied correction: {corr}")
+        for key, value in partial.items():
+            if key in ["company", "people", "tools", "service", "issues"]:
+                existing_list = merged.get(key, [])
+                new_items = value if isinstance(value, list) else []
+                for new_item in new_items:
+                    if not isinstance(new_item, dict):
+                        continue
+                    if key == "company" and "name" in new_item:
+                        for i, existing_item in enumerate(existing_list):
+                            if (isinstance(existing_item, dict) and
+                                string_similarity(existing_item.get("name", ""), new_item.get("name", "")) > 0.6):
+                                existing_list[i] = new_item
+                                logger.info(f"Applied correction: Replaced {existing_item.get('name')} with {new_item.get('name')}")
+                                break
+                        else:
+                            logger.warning(f"Correction: No matching {key} found for {new_item.get('name')}")
+                    elif key == "people" and "name" in new_item:
+                        for i, existing_item in enumerate(existing_list):
+                            if (isinstance(existing_item, dict) and
+                                string_similarity(existing_item.get("name", ""), new_item.get("name", "")) > 0.6 and
+                                existing_item.get("role") == new_item.get("role")):
+                                existing_list[i] = new_item
+                                logger.info(f"Applied correction: Replaced {existing_item.get('name')} with {new_item.get('name')}")
+                                break
+                        else:
+                            logger.warning(f"Correction: No matching {key} found for {new_item.get('name')}")
+                    elif key in ["tools", "service"]:
+                        key_field = "item" if key == "tools" else "task"
+                        if key_field in new_item:
+                            for i, existing_item in enumerate(existing_list):
+                                if (isinstance(existing_item, dict) and
+                                    string_similarity(existing_item.get(key_field, ""), new_item.get(key_field, "")) > 0.6 and
+                                    string_similarity(existing_item.get("company", "") or "", new_item.get("company", "") or "") > 0.6):
+                                    existing_list[i] = new_item
+                                    logger.info(f"Applied correction: Replaced {existing_item.get(key_field)} with {new_item.get(key_field)}")
+                                    break
+                            else:
+                                logger.warning(f"Correction: No matching {key} found for {new_item.get(key_field)}")
+                    elif key == "issues" and "description" in new_item:
+                        for i, existing_item in enumerate(existing_list):
+                            if (isinstance(existing_item, dict) and
+                                string_similarity(existing_item.get("description", ""), new_item.get("description", "")) > 0.6):
+                                existing_list[i] = new_item
+                                logger.info(f"Applied correction: Replaced issue {existing_item.get('description')} with {new_item.get('description')}")
+                                break
+                        else:
+                            logger.warning(f"Correction: No matching issue found for {new_item.get('description')}")
+                merged[key] = existing_list
+            else:
+                merged[key] = value
+        logger.info(f"Applied correction: {corr}, Result: {json.dumps(merged, indent=2)}")
         return merged
     except Exception as e:
         logger.error(f"GPT correction error: {e}")
@@ -416,7 +499,8 @@ def webhook():
                 "\n\nSpeak or type your first field (site name required).")
             return "ok", 200
 
-        delete_match = re.match(r'^(delete|remove)\s+(site|segment|category|company|person|tool|service|activity|issue|time|weather|impression|comments)\s*:\s*(.+)$', text, re.IGNORECASE)
+        # Handle deletion commands
+        delete_match = re.match(r'^(delete|remove)\s+(site|segment|category|company|person|tool|service|activity|issue|time|weather|impression|comments)(?:\s*:\s*(.+))?$', text, re.IGNORECASE)
         if delete_match:
             action, field, value = delete_match.groups()
             field = field.lower()
@@ -426,7 +510,7 @@ def webhook():
             save_session_data(session_data)
             tpl = summarize_data(sess["structured_data"])
             send_telegram_message(chat_id,
-                f"Removed {field}: {value}\n\nHere’s the updated report:\n\n" + tpl +
+                f"Removed {field}" + (f": {value}" if value else "") + "\n\nHere’s the updated report:\n\n" + tpl +
                 "\n\nAnything else to add or correct?")
             return "ok", 200
 
@@ -445,6 +529,30 @@ def webhook():
             send_telegram_message(chat_id,
                 "Here’s what I understood:\n\n" + tpl +
                 "\n\nIs this correct? Reply with corrections or more details.")
+            return "ok", 200
+
+        # Handle corrections explicitly
+        correction_match = re.match(r'^(correct|update)\s+(company|person)\s+(.+?)\s+to\s+(.+)$', text, re.IGNORECASE)
+        if correction_match:
+            _, field, old_value, new_value = correction_match.groups()
+            field = field.lower()
+            if field == "person":
+                field = "people"
+            updated_data = sess["structured_data"].copy()
+            if field in ["company", "people"]:
+                target_list = updated_data.get(field, [])
+                for i, item in enumerate(target_list):
+                    if isinstance(item, dict) and item.get("name", "").lower() == old_value.lower():
+                        target_list[i] = {"name": new_value, "role": item.get("role", "")} if field == "people" else {"name": new_value}
+                        logger.info(f"Corrected {field}: {old_value} to {new_value}")
+                        break
+                updated_data[field] = target_list
+            sess["structured_data"] = updated_data
+            save_session_data(session_data)
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                f"Corrected {field}: {old_value} to {new_value}\n\nHere’s the updated report:\n\n" + tpl +
+                "\n\nAnything else to add or correct?")
             return "ok", 200
 
         updated = apply_correction(sess["structured_data"], text)
