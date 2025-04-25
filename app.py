@@ -246,4 +246,144 @@ def merge_structured_data(existing, new):
                                for existing_item in existing_list
                                if isinstance(existing_item, dict)):
                         existing_list.append(item)
-                elif item not in existing
+                elif item not in existing_list:
+                    existing_list.append(item)
+            merged[key] = existing_list
+        else:
+            if value:
+                merged[key] = value
+    return merged
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def apply_correction(orig, corr):
+    prompt = (
+        "Original JSON:\n" + json.dumps(orig) +
+        "\n\nUser correction:\n\"" + corr + "\"\n\n"
+        "Return JSON with only corrected fields. Do not modify fields not explicitly mentioned."
+    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        partial = json.loads(response.choices[0].message.content)
+        merged = orig.copy()
+        merged.update(partial)
+        logger.info(f"Applied correction: {corr}")
+        return merged
+    except Exception as e:
+        logger.error(f"GPT correction error: {e}")
+        return orig
+
+def delete_from_report(structured_data, target):
+    updated = structured_data.copy()
+    t = target.strip().lower()
+    # scalar fields
+    for field in ["site_name","segment","category","time","weather","impression","comments","date"]:
+        if t == field or t.startswith(field+" "):
+            updated[field] = ""
+            return updated
+    # list fields
+    mapping = {
+        "company":"name","people":"name","tools":"item",
+        "service":"task","activities":None,"issues":"description"
+    }
+    for field, key in mapping.items():
+        if t.startswith(field+" ") or (key and t.startswith(key+" ")):
+            value = t.split(" ",1)[1].strip()
+            lst = updated.get(field,[])
+            if key:
+                lst = [i for i in lst if i.get(key,"").lower()!=value]
+            else:
+                lst = [i for i in lst if i.lower()!=value]
+            updated[field] = lst
+            return updated
+    return updated
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    try:
+        data = request.get_json(force=True)
+        if "message" not in data:
+            logger.info("No message in webhook data")
+            return "ok", 200
+
+        msg = data["message"]
+        chat_id = str(msg["chat"]["id"])
+        text = (msg.get("text") or "").strip()
+        logger.info(f"Received webhook message: chat_id={chat_id}, text='{text}'")
+
+        # Initialize session
+        if chat_id not in session_data:
+            session_data[chat_id] = {"structured_data": blank_report(), "awaiting_correction": False}
+        sess = session_data[chat_id]
+
+        # Voice handling
+        if "voice" in msg:
+            text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
+            if not text:
+                send_telegram_message(chat_id,
+                    "Couldn't understand the audio. Please speak clearly and try again.")
+                return "ok", 200
+            logger.info(f"Transcribed voice to text: '{text}'")
+
+        # Reset
+        if text.lower() in ("new","new report","reset","/new"):
+            sess["structured_data"] = blank_report()
+            sess["awaiting_correction"] = False
+            save_session_data(session_data)
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                "**Starting a fresh report**\n\n" + tpl +
+                "\n\nTell me any details about your report.")
+            return "ok", 200
+
+        # Delete
+        if text.lower().startswith("delete "):
+            target = text[7:].strip()
+            if not target:
+                send_telegram_message(chat_id,
+                    "Please specify what to delete (e.g., 'delete site_name').")
+                return "ok", 200
+            sess["structured_data"] = delete_from_report(sess["structured_data"], target)
+            save_session_data(session_data)
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                f"Deleted '{target}'. Updated report:\n\n" + tpl +
+                "\n\nAnything else?")
+            return "ok", 200
+
+        # Extract or correct
+        extracted = extract_site_report(text)
+        logger.info(f"Extracted data: {extracted}")
+
+        if not extracted and not sess["awaiting_correction"]:
+            send_telegram_message(chat_id,
+                "I couldn't extract any information. Please try again with details like 'Issue: Delayed delivery'.")
+            return "ok", 200
+
+        if sess["awaiting_correction"]:
+            updated = apply_correction(sess["structured_data"], text)
+            sess["structured_data"] = merge_structured_data(
+                sess["structured_data"], enrich_with_date(updated)
+            )
+            sess["awaiting_correction"] = False
+        else:
+            sess["structured_data"] = merge_structured_data(
+                sess["structured_data"], enrich_with_date(extracted)
+            )
+            sess["awaiting_correction"] = True
+
+        save_session_data(session_data)
+        tpl = summarize_data(sess["structured_data"])
+        send_telegram_message(chat_id,
+            "Here's what I understood:\n\n" + tpl +
+            "\n\nIs this correct? Reply with corrections or more details.")
+        return "ok", 200
+
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return "error", 500
+
+if __name__ == "__main__":
+    app.run(port=int(os.getenv("PORT", 5000)), debug=True)
