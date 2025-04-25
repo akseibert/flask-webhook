@@ -94,21 +94,32 @@ def get_telegram_file_path(file_id):
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def transcribe_from_telegram_voice(file_id):
     try:
+        # 1) fetch the file URL
         audio_url = get_telegram_file_path(file_id)
         logger.info(f"Fetching audio from: {audio_url}")
-        audio_response = requests.get(audio_url)
-        audio_response.raise_for_status()
-        audio = audio_response.content
-        response = client.audio.transcriptions.create(
+        resp = requests.get(audio_url)
+        resp.raise_for_status()
+        audio_bytes = resp.content
+
+        # 2) hit the Whisper endpoint correctly
+        result = client.audio.transcriptions.create(
             model="whisper-1",
-            file=("voice.ogg", audio, "audio/ogg")
+            file=("voice.ogg", audio_bytes, "audio/ogg")
         )
-        text = response.text.strip()
+
+        # 3) extract the actual text
+        #    (in the new client this is a dict-like with a "text" key)
+        text = result.get("text") or ""
+        text = text.strip()
+
+        # 4) sanity-check the response
         if not text:
-            logger.warning("Transcription returned empty text")
+            logger.warning(f"Whisper returned no text. Full response was: {result}")
             return ""
-        logger.info(f"Transcribed audio: '{text}'")
+
+        logger.info(f"Whisper transcription: '{text}'")
         return text
+
     except Exception as e:
         logger.error(f"Transcription failed: {e}")
         return ""
