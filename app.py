@@ -183,7 +183,7 @@ def summarize_data(data: Dict[str, Any]) -> str:
             if field == "issues":
                 lines.append(f"{config['icon']} **Issues**:")
                 issues = [i for i in data.get(field, []) if isinstance(i, dict) and i.get("description", "").strip()]
-                lines.extend(config["format"](i) for i in issues) if issues else lines.append("  None")
+                lines.extend(config["format"](i) for i in issues if isinstance(i, dict)) if issues else lines.append("  None")
             elif config.get("scalar"):
                 lines.append(f"{config['icon']} **{field.title().replace('_', ' ')}**: {data.get(field, '') or 'None'}")
             else:
