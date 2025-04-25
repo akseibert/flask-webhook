@@ -127,47 +127,50 @@ def summarize_data(d):
     lines.append(f"📋 **Category**: {d.get('category', '')}")
     lines.append(
         "🏢 **Companies**: " +
-        ", ".join(c.get("name", "") if isinstance(c, dict) else str(c) 
-                  for c in d.get("company", []))
+        ", ".join(c.get("name", "") if isinstance(c, dict) else str(c)
+                  for c in d.get("company", [])) or "None"
     )
     lines.append(
         "👷 **People**: " +
         ", ".join(
             f"{p.get('name', '')} ({p.get('role', '')})" if isinstance(p, dict) else str(p)
             for p in d.get("people", [])
-        )
+        ) or "None"
     )
     lines.append(
         "🔧 **Services**: " +
         ", ".join(
             f"{s.get('task', '')} ({s.get('company', '')})" if isinstance(s, dict) else str(s)
             for s in d.get("service", [])
-        )
+        ) or "None"
     )
     lines.append(
         "🛠️ **Tools**: " +
         ", ".join(
             f"{t.get('item', '')} ({t.get('company', '')})" if isinstance(t, dict) else str(t)
             for t in d.get("tools", [])
-        )
+        ) or "None"
     )
-    lines.append("📅 **Activities**: " + ", ".join(d.get("activities", [])))
+    lines.append("📅 **Activities**: " + ", ".join(d.get("activities", [])) or "None")
     lines.append("⚠️ **Issues**:")
     valid_issues = [
         i for i in d.get("issues", [])
         if isinstance(i, dict) and i.get("description", "").strip()
     ]
-    for i in valid_issues:
-        desc = i["description"]
-        by = i.get("caused_by", "")
-        photo = " 📸" if i.get("has_photo") else ""
-        extra = f" (by {by})" if by else ""
-        lines.append(f"  • {desc}{extra}{photo}")
-    lines.append(f"⏰ **Time**: {d.get('time', '')}")
-    lines.append(f"🌦️ **Weather**: {d.get('weather', '')}")
-    lines.append(f"😊 **Impression**: {d.get('impression', '')}")
-    lines.append(f"💬 **Comments**: {d.get('comments', '')}")
-    lines.append(f"📆 **Date**: {d.get('date', '')}")
+    if valid_issues:
+        for i in valid_issues:
+            desc = i["description"]
+            by = i.get("caused_by", "")
+            photo = " 📸" if i.get("has_photo") else ""
+            extra = f" (by {by})" if by else ""
+            lines.append(f"  • {desc}{extra}{photo}")
+    else:
+        lines.append("  None")
+    lines.append(f"⏰ **Time**: {d.get('time', '') or 'Not specified'}")
+    lines.append(f"🌦️ **Weather**: {d.get('weather', '') or 'Not specified'}")
+    lines.append(f"😊 **Impression**: {d.get('impression', '') or 'Not specified'}")
+    lines.append(f"💬 **Comments**: {d.get('comments', '') or 'None'}")
+    lines.append(f"📆 **Date**: {d.get('date', '') or 'Not specified'}")
     return "\n".join(lines)
 
 gpt_prompt = """
