@@ -16,7 +16,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-logger.addHandler(logging.StreamHandler())  # Also print to console for Render debugging
+logger.addHandler(logging.StreamHandler())
 
 # --- Initialize OpenAI client ---
 try:
@@ -97,8 +97,6 @@ def transcribe_from_telegram_voice(file_id):
             model="whisper-1",
             file=("voice.ogg", audio, "audio/ogg")
         )
-        logger.info(f"Transcription response type: {type(response)}")
-        logger.info(f"Transcription response attributes: {dir(response)}")
         text = response.text.strip()
         if not text or len(text.split()) < 2:
             logger.warning(f"Transcription invalid or too short: '{text}'")
@@ -129,7 +127,7 @@ def summarize_data(d):
     lines.append(f"📋 **Category**: {d.get('category', '')}")
     lines.append(
         "🏢 **Companies**: " +
-        ", ".join(c.get("name", "") if isinstance(c, dict) else str(c)
+        ", ".join(c.get("name", "") if isinstance(c, dict) else str(c) 
                   for c in d.get("company", []))
     )
     lines.append(
@@ -149,4 +147,318 @@ def summarize_data(d):
     lines.append(
         "🛠️ **Tools**: " +
         ", ".join(
-            f"{t.get('item', '')} ({t.get('company', '')})" if
+            f"{t.get('item', '')} ({t.get('company', '')})" if isinstance(t, dict) else str(t)
+            for t in d.get("tools", [])
+        )
+    )
+    lines.append("📅 **Activities**: " + ", ".join(d.get("activities", [])))
+    lines.append("⚠️ **Issues**:")
+    valid_issues = [
+        i for i in d.get("issues", [])
+        if isinstance(i, dict) and i.get("description", "").strip()
+    ]
+    for i in valid_issues:
+        desc = i["description"]
+        by = i.get("caused_by", "")
+        photo = " 📸" if i.get("has_photo") else ""
+        extra = f" (by {by})" if by else ""
+        lines.append(f"  • {desc}{extra}{photo}")
+    lines.append(f"⏰ **Time**: {d.get('time', '')}")
+    lines.append(f"🌦️ **Weather**: {d.get('weather', '')}")
+    lines.append(f"😊 **Impression**: {d.get('impression', '')}")
+    lines.append(f"💬 **Comments**: {d.get('comments', '')}")
+    lines.append(f"📆 **Date**: {d.get('date', '')}")
+    return "\n".join(lines)
+
+gpt_prompt = """
+You are an AI assistant extracting a construction site report from user input. Extract only explicitly mentioned fields and return them in JSON format. If no fields are clearly identified, check for specific keywords to map to fields or treat as comments for general statements.
+
+Fields to extract (omit if not present):
+- site_name: string (e.g., "Downtown Project")
+- segment: string
+- category: string
+- company: list of objects with "name" (e.g., [{"name": "Acme Corp"}])
+- people: list of objects with "name" and "role" (e.g., [{"name": "John Doe", "role": "Foreman"}])
+- tools: list of objects with "item" and "company" (e.g., [{"item": "Crane", "company": "Acme Corp"}])
+- service: list of objects with "task" and "company" (e.g., [{"task": "Excavation", "company": "Acme Corp"}])
+- activities: list of strings (e.g., ["Concrete pouring"])
+- issues: list of objects with "description" (required), "caused_by" (optional), and "has_photo" (optional, default false)
+  (e.g., [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}])
+- time: string
+- weather: string
+- impression: string
+- comments: string
+- date: string (format dd-mm-yyyy)
+
+Rules:
+- Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Issue:", etc., or clear intent in natural language.
+- For issues:
+  - Recognize keywords: "Issue", "Issues", "Problem", "Problems", "Delay", "Fault", "Error", or natural language (e.g., "The issue is...", "There’s a delay").
+  - "description" is mandatory.
+  - "caused_by" is optional (e.g., "caused_by Supplier").
+  - "has_photo" is true only if "with photo" or "has photo" is stated.
+  - Handle multiple issues as separate objects.
+- For activities:
+  - Recognize keywords: "Work", "Activity", "Task", "Progress", "Construction", or action-oriented phrases (e.g., "Work was done").
+- For site_name:
+  - Recognize keywords: "Site", "Location", "Project", or location-like phrases following "at", "in", "on" (e.g., "at ABC").
+- For comments:
+  - Use as a fallback for general statements that don’t clearly match other fields.
+- If input contains multiple fields (e.g., "Work was done at ABC, Issue: Delay"), extract all relevant fields.
+- Return {} only for irrelevant inputs (e.g., "Hello world").
+- Case-insensitive matching for keywords.
+
+Examples:
+1. Input: "Site: Downtown Project, Issue: Delayed delivery caused by Supplier with photo"
+   Output: {"site_name": "Downtown Project", "issues": [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}]}
+2. Input: "Work was done at ABC"
+   Output: {"site_name": "ABC", "activities": ["Work was done"]}
+3. Input: "Issue: Faulty wiring detected"
+   Output: {"issues": [{"description": "Faulty wiring detected"}]}
+4. Input: "Company: Acme Corp, There’s a delay"
+   Output: {"company": [{"name": "Acme Corp"}], "issues": [{"description": "Delay"}]}
+5. Input: "Hello world"
+   Output: {}
+6. Input: "All good today"
+   Output: {"comments": "All good today"}
+7. Input: "Work at the East Tower, Problem: Broken equipment"
+   Output: {"site_name": "East Tower", "activities": ["Work"], "issues": [{"description": "Broken equipment"}]}
+"""
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def extract_site_report(text):
+    messages = [
+        {"role": "system", "content": "Extract explicitly stated fields; map ambiguous inputs to likely fields or comments based on keywords."},
+        {"role": "user", "content": gpt_prompt + "\nInput text: " + text}
+    ]
+    try:
+        logger.info(f"Processing input text: '{text}'")
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo", messages=messages, temperature=0.2
+        )
+        raw_response = response.choices[0].message.content
+        logger.info(f"Raw GPT response: {raw_response}")
+        data = json.loads(raw_response)
+        logger.info(f"Extracted report: {data}")
+        if not data and text.strip():
+            issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error)\b'
+            if re.search(issue_keywords, text.lower()):
+                data = {"issues": [{"description": text.strip()}]}
+                logger.info(f"Fallback applied: Treated as issue: {data}")
+            else:
+                activity_keywords = r'\b(work|activity|task|progress|construction)\b'
+                location_keywords = r'\b(at|in|on)\b'
+                if re.search(activity_keywords, text.lower()) and re.search(location_keywords, text.lower()):
+                    location = text.lower().split("at")[-1].strip() if "at" in text.lower() else \
+                              text.lower().split("in")[-1].strip() if "in" in text.lower() else \
+                              text.lower().split("on")[-1].strip()
+                    activity = text[:text.lower().index("at")].strip() if "at" in text.lower() else \
+                              text[:text.lower().index("in")].strip() if "in" in text.lower() else \
+                              text[:text.lower().index("on")].strip()
+                    data = {"site_name": location.title(), "activities": [activity]}
+                    logger.info(f"Fallback applied: Treated as activity and site: {data}")
+                else:
+                    data = {"comments": text.strip()}
+                    logger.info(f"Fallback applied: Treated as comments: {data}")
+        return data
+    except Exception as e:
+        logger.error(f"GPT extract error for input '{text}': {e}")
+        issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error)\b'
+        if text.strip() and re.search(issue_keywords, text.lower()):
+            logger.info(f"Extraction failed; fallback to issue: {text}")
+            return {"issues": [{"description": text.strip()}]}
+        activity_keywords = r'\b(work|activity|task|progress|construction)\b'
+        location_keywords = r'\b(at|in|on)\b'
+        if text.strip() and re.search(activity_keywords, text.lower()) and re.search(location_keywords, text.lower()):
+            location = text.lower().split("at")[-1].strip() if "at" in text.lower() else \
+                      text.lower().split("in")[-1].strip() if "in" in text.lower() else \
+                      text.lower().split("on")[-1].strip()
+            activity = text[:text.lower().index("at")].strip() if "at" in text.lower() else \
+                      text[:text.lower().index("in")].strip() if "in" in text.lower() else \
+                      text[:text.lower().index("on")].strip()
+            data = {"site_name": location.title(), "activities": [activity]}
+            logger.info(f"Extraction failed; fallback to activity and site: {data}")
+            return data
+        return {"comments": text.strip()} if text.strip() else {}
+
+def string_similarity(a, b):
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+def merge_structured_data(existing, new):
+    merged = existing.copy()
+    for key, value in new.items():
+        if key in ["company", "people", "tools", "service", "activities", "issues"]:
+            existing_list = merged.get(key, [])
+            new_items = value if isinstance(value, list) else []
+            if key == "company":
+                for new_item in new_items:
+                    if not isinstance(new_item, dict) or "name" not in new_item:
+                        continue
+                    new_name = new_item.get("name", "")
+                    replaced = False
+                    for i, existing_item in enumerate(existing_list):
+                        if (isinstance(existing_item, dict) and
+                            string_similarity(existing_item.get("name", ""), new_name) > 0.7):
+                            existing_list[i] = new_item
+                            replaced = True
+                            logger.info(f"Replaced company {existing_item.get('name')} with {new_name}")
+                            break
+                    if not replaced and new_item not in existing_list:
+                        existing_list.append(new_item)
+                        logger.info(f"Added new company {new_name}")
+                merged[key] = existing_list
+            elif key == "people":
+                for new_item in new_items:
+                    if not isinstance(new_item, dict) or "name" not in new_item:
+                        continue
+                    for i, existing_item in enumerate(existing_list):
+                        if (isinstance(existing_item, dict) and
+                            existing_item.get("role") == new_item.get("role") and
+                            existing_item.get("name") != new_item.get("name")):
+                            existing_list[i] = new_item
+                            logger.info(f"Replaced person {existing_item.get('name')} with {new_item.get('name')}")
+                            break
+                    else:
+                        if new_item not in existing_list:
+                            existing_list.append(new_item)
+                            logger.info(f"Added new person {new_item.get('name')}")
+                merged[key] = existing_list
+            else:
+                for item in new_items:
+                    if key == "issues":
+                        if not isinstance(item, dict) or "description" not in item:
+                            continue
+                        if not any(existing_item.get("description") == item["description"]
+                                  for existing_item in existing_list
+                                  if isinstance(existing_item, dict)):
+                            existing_list.append(item)
+                    elif item not in existing_list:
+                        existing_list.append(item)
+                merged[key] = existing_list
+        else:
+            if value:
+                merged[key] = value
+    return merged
+
+def delete_entry(data, field, value):
+    if field in ["company", "people", "tools", "service", "issues"]:
+        data[field] = [item for item in data[field]
+                      if not (isinstance(item, dict) and
+                              (item.get("name", "").lower() == value.lower() or
+                               item.get("description", "").lower() == value.lower() or
+                               item.get("item", "").lower() == value.lower() or
+                               item.get("task", "").lower() == value.lower()))]
+    elif field == "activities":
+        data[field] = [item for item in data[field] if item.lower() != value.lower()]
+    elif field in data:
+        data[field] = ""
+    return data
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def apply_correction(orig, corr):
+    prompt = (
+        "Original JSON:\n" + json.dumps(orig) +
+        "\n\nUser correction:\n\"" + corr + "\"\n\n"
+        "Return JSON with only corrected fields. For list fields like 'company' or 'people', replace entries when correcting names (e.g., 'Electric Flow Game Behance' to 'Electric Flow GmbH' should replace the existing company). Do not add duplicates. Do not modify fields not explicitly mentioned."
+    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        partial = json.loads(response.choices[0].message.content)
+        merged = orig.copy()
+        merged.update(partial)
+        logger.info(f"Applied correction: {corr}")
+        return merged
+    except Exception as e:
+        logger.error(f"GPT correction error: {e}")
+        return orig
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    try:
+        data = request.get_json(force=True)
+        if "message" not in data:
+            logger.info("No message in webhook data")
+            return "ok", 200
+
+        msg = data["message"]
+        chat_id = str(msg["chat"]["id"])
+        text = (msg.get("text") or "").strip()
+        logger.info(f"Received webhook message: chat_id={chat_id}, text='{text}'")
+
+        if chat_id not in session_data:
+            session_data[chat_id] = {
+                "structured_data": blank_report(),
+                "awaiting_correction": False
+            }
+        sess = session_data[chat_id]
+
+        if "voice" in msg:
+            text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
+            if not text:
+                send_telegram_message(chat_id,
+                    "⚠️ Couldn't understand the audio. I heard nothing.\nPlease speak clearly (e.g., say 'Work was done at ABC') and try again.")
+                return "ok", 200
+            logger.info(f"Transcribed voice to text: '{text}'")
+
+        if text.lower() in ("new", "new report", "reset", "/new"):
+            sess["structured_data"] = blank_report()
+            sess["awaiting_correction"] = False
+            save_session_data(session_data)
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                "**Starting a fresh report**\n\n" + tpl +
+                "\n\nSpeak or type your first field (site name required).")
+            return "ok", 200
+
+        delete_match = re.match(r'^(delete|remove)\s+(site|segment|category|company|person|tool|service|activity|issue|time|weather|impression|comments)\s*:\s*(.+)$', text, re.IGNORECASE)
+        if delete_match:
+            action, field, value = delete_match.groups()
+            field = field.lower()
+            if field == "person":
+                field = "people"
+            sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
+            save_session_data(session_data)
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                f"Removed {field}: {value}\n\nHere’s the updated report:\n\n" + tpl +
+                "\n\nAnything else to add or correct?")
+            return "ok", 200
+
+        if not sess["awaiting_correction"]:
+            extracted = extract_site_report(text)
+            if not extracted.get("site_name"):
+                send_telegram_message(chat_id,
+                    "🏗️ Please provide a site name to start the report (e.g., 'Site: Downtown Project' or 'Work at ABC').")
+                return "ok", 200
+            sess["structured_data"] = merge_structured_data(
+                sess["structured_data"], enrich_with_date(extracted)
+            )
+            sess["awaiting_correction"] = True
+            save_session_data(session_data)
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                "Here’s what I understood:\n\n" + tpl +
+                "\n\nIs this correct? Reply with corrections or more details.")
+            return "ok", 200
+
+        updated = apply_correction(sess["structured_data"], text)
+        sess["structured_data"] = merge_structured_data(
+            sess["structured_data"], enrich_with_date(updated)
+        )
+        save_session_data(session_data)
+        tpl = summarize_data(sess["structured_data"])
+        send_telegram_message(chat_id,
+            "Got it! Here’s the **full** updated report:\n\n" + tpl +
+            "\n\nAnything else to add or correct?")
+        return "ok", 200
+
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return "error", 500
+
+if __name__ == "__main__":
+    logger.info("Starting Flask app")
+    app.run(port=int(os.getenv("PORT", 5000)), debug=True)
