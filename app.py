@@ -166,33 +166,51 @@ You are an AI assistant extracting a construction site report from text. Extract
 - comments: string
 - date: string (format dd-mm-yyyy)
 
-Rules:
-- Extract fields exactly as mentioned in the text; do not infer or guess.
+Rules for extraction:
+- Extract fields exactly=exactly as mentioned in the text; do not infer or guess.
 - For lists (company, people, tools, service, activities, issues), include all mentioned items as specified.
-- For issues, always include "description"; "caused_by" and "has_photo" are optional.
+- For issues, the "description" field is mandatory. "caused_by" and "has_photo" are optional. If an issue is mentioned, always include a "description" field, even if only partial information is provided.
+- "has_photo" should be true only if explicitly mentioned (e.g., "with photo", "has photo", or similar).
 - If a field is mentioned but empty or unclear, omit it from the JSON.
 - Return an empty JSON object ({}) if no fields are explicitly mentioned.
+- Handle multiple issues by creating separate objects in the "issues" list.
+- Recognize issues in various formats, such as "Issue: Delayed delivery caused by Supplier with photo", "Problem: Broken equipment", or "Issues: Missing tools, Late shipment by Vendor".
 
-Example input: "Site: Downtown Project, Company: Acme Corp, Issue: Delayed delivery caused by Supplier with photo"
-Output: {
-  "site_name": "Downtown Project",
-  "company": [{"name": "Acme Corp"}],
-  "issues": [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}]
-}
+Examples:
+1. Input: "Site: Downtown Project, Company: Acme Corp, Issue: Delayed delivery caused by Supplier with photo"
+   Output: {
+     "site_name": "Downtown Project",
+     "company": [{"name": "Acme Corp"}],
+     "issues": [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}]
+   }
+2. Input: "Issues: Broken equipment, Missing tools caused by Beta Inc"
+   Output: {
+     "issues": [
+       {"description": "Broken equipment"},
+       {"description": "Missing tools", "caused_by": "Beta Inc"}
+     ]
+   }
+3. Input: "Problem: Late delivery"
+   Output: {
+     "issues": [{"description": "Late delivery"}]
+   }
+
+Input text: {text}
 """
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def extract_site_report(text):
     messages = [
         {"role": "system", "content": "Extract only explicitly stated fields; never guess."},
-        {"role": "user", "content": gpt_prompt + "\nInput text: " + text}
+        {"role": "user", "content": gpt_prompt.replace("{text}", text)}
     ]
     try:
         response = client.chat.completions.create(
             model="gpt-3.5-turbo", messages=messages, temperature=0.2
         )
         raw_response = response.choices[0].message.content
-        logger.info(f"Raw GPT response for input '{text}': {raw_response}")
+        logger.info(f"Input text: '{text}'")
+        logger.info(f"Raw GPT response: {raw_response}")
         data = json.loads(raw_response)
         logger.info(f"Extracted report: {data}")
         return data
@@ -325,7 +343,7 @@ def webhook():
             target = text[7:].strip()  # Remove "delete " prefix
             if not target:
                 send_telegram_message(chat_id,
-                    "  Please specify what to deactivate (e.g., 'delete site_name' or 'delete issue Delayed delivery').")
+                    "  Please specify what to delete (e.g., 'delete site_name' or 'delete issue Delayed delivery').")
                 return "ok", 200
             sess["structured_data"] = delete_from_report(sess["structured_data"], target)
             save_session_data(session_data)
