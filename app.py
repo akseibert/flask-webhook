@@ -57,7 +57,7 @@ def blank_report():
 def send_telegram_message(chat_id, text):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    response = requests.post(url, json={"chat_id": chat_id, "text": text})
+    response = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
     response.raise_for_status()
     logger.info(f"Sent Telegram message to {chat_id}")
     return response
@@ -101,54 +101,52 @@ def enrich_with_date(d):
 
 def summarize_data(d):
     lines = []
-    lines.append(f"  Site: {d.get('site_name', '')}")
-    lines.append(f"  Segment: {d.get('segment', '')}")
-    lines.append(f"  Category: {d.get('category', '')}")
+    lines.append(f"🏗️ **Site**: {d.get('site_name', '')}")
+    lines.append(f"🛠️ **Segment**: {d.get('segment', '')}")
+    lines.append(f"📋 **Category**: {d.get('category', '')}")
     lines.append(
-        "  Companies: " +
+        "🏢 **Companies**: " +
         ", ".join(c.get("name", "") if isinstance(c, dict) else str(c)
                   for c in d.get("company", []))
     )
     lines.append(
-        "  People: " +
+        "👷 **People**: " +
         ", ".join(
             f"{p.get('name', '')} ({p.get('role', '')})" if isinstance(p, dict) else str(p)
             for p in d.get("people", [])
         )
     )
     lines.append(
-        "  Services: " +
+        "🔧 **Services**: " +
         ", ".join(
             f"{s.get('task', '')} ({s.get('company', '')})" if isinstance(s, dict) else str(s)
             for s in d.get("service", [])
         )
     )
     lines.append(
-        "  Tools: " +
+        "🛠️ **Tools**: " +
         ", ".join(
             f"{t.get('item', '')} ({t.get('company', '')})" if isinstance(t, dict) else str(t)
             for t in d.get("tools", [])
         )
     )
-    lines.append("  Activities: " + ", ".join(d.get("activities", [])))
-
+    lines.append("📅 **Activities**: " + ", ".join(d.get("activities", [])))
+    lines.append("⚠️ **Issues**:")
     valid_issues = [
         i for i in d.get("issues", [])
         if isinstance(i, dict) and i.get("description", "").strip()
     ]
-    lines.append("  Issues:")
     for i in valid_issues:
         desc = i["description"]
         by = i.get("caused_by", "")
-        photo = "  " if i.get("has_photo") else ""
+        photo = " 📸" if i.get("has_photo") else ""
         extra = f" (by {by})" if by else ""
-        lines.append(f"• {desc}{extra}{photo}")
-
-    lines.append(f"  Time: {d.get('time', '')}")
-    lines.append(f"  Weather: {d.get('weather', '')}")
-    lines.append(f"  Impression: {d.get('impression', '')}")
-    lines.append(f"  Comments: {d.get('comments', '')}")
-    lines.append(f"  Date: {d.get('date', '')}")
+        lines.append(f"  • {desc}{extra}{photo}")
+    lines.append(f"⏰ **Time**: {d.get('time', '')}")
+    lines.append(f"🌦️ **Weather**: {d.get('weather', '')}")
+    lines.append(f"😊 **Impression**: {d.get('impression', '')}")
+    lines.append(f"💬 **Comments**: {d.get('comments', '')}")
+    lines.append(f"📆 **Date**: {d.get('date', '')}")
     return "\n".join(lines)
 
 gpt_prompt = """
@@ -216,6 +214,46 @@ def apply_correction(orig, corr):
         logger.error(f"GPT correction error: {e}")
         return orig
 
+def delete_from_report(structured_data, target):
+    """Process a deletion request and return updated structured data."""
+    updated_data = structured_data.copy()
+    target = target.strip().lower()
+    
+    # Scalar fields
+    scalar_fields = ["site_name", "segment", "category", "time", "weather", "impression", "comments", "date"]
+    for field in scalar_fields:
+        if target == field or target.startswith(f"{field} "):
+            updated_data[field] = ""
+            logger.info(f"Deleted scalar field: {field}")
+            return updated_data
+
+    # List fields
+    list_fields = {
+        "company": "name",
+        "people": "name",
+        "tools": "item",
+        "service": "task",
+        "activities": None,  # Direct string comparison
+        "issues": "description"
+    }
+    
+    for field, key in list_fields.items():
+        if target.startswith(f"{field} ") or (key and target.startswith(f"{key} ")):
+            value = target[len(f"{field} "):].strip() if target.startswith(f"{field} ") else target[len(f"{key} "):].strip()
+            if not value:
+                continue
+            updated_list = updated_data.get(field, [])
+            if key:
+                updated_list = [item for item in updated_list if item.get(key, "").lower() != value.lower()]
+            else:
+                # For activities (simple strings)
+                updated_list = [item for item in updated_list if item.lower() != value.lower()]
+            updated_data[field] = updated_list
+            logger.info(f"Deleted from {field}: {value}")
+            return updated_data
+    
+    return updated_data
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
@@ -235,7 +273,15 @@ def webhook():
             }
         sess = session_data[chat_id]
 
-        # Reset
+        # Handle voice message
+        if "voice" in msg:
+            text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
+            if not text:
+                send_telegram_message(chat_id,
+                    "  Couldn't understand the audio. Please try again.")
+                return "ok", 200
+
+        # Handle reset commands
         if text.lower() in ("new", "new report", "reset", "/new"):
             sess["structured_data"] = blank_report()
             sess["awaiting_correction"] = False
@@ -247,15 +293,23 @@ def webhook():
             )
             return "ok", 200
 
-        # Voice message
-        if "voice" in msg:
-            text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
-            if not text:
+        # Handle deletion command
+        if text.lower().startswith("delete "):
+            target = text[7:].strip()  # Remove "delete " prefix
+            if not target:
                 send_telegram_message(chat_id,
-                    "  Couldn't understand the audio. Please try again.")
+                    "  Please specify what to delete (e.g., 'delete site_name' or 'delete issue Delayed delivery').")
                 return "ok", 200
+            sess["structured_data"] = delete_from_report(sess["structured_data"], target)
+            save_session_data(session_data)
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                f"  Deleted '{target}'. Updated report:\n\n" + tpl +
+                "\n\n  Anything else to add, correct, or delete?"
+            )
+            return "ok", 200
 
-        # First extraction
+        # Handle first extraction
         if not sess["awaiting_correction"]:
             extracted = extract_site_report(text)
             if not extracted.get("site_name"):
@@ -274,7 +328,7 @@ def webhook():
             )
             return "ok", 200
 
-        # Correction or addition
+        # Handle correction or addition
         updated = apply_correction(sess["structured_data"], text)
         sess["structured_data"] = merge_structured_data(
             sess["structured_data"], enrich_with_date(updated)
