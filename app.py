@@ -15,14 +15,20 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+# Add console logging for Render debugging
+logging.getLogger().addHandler(logging.StreamHandler())
 
 # --- Initialize OpenAI client ---
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+try:
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+except Exception as e:
+    logger.error(f"Failed to initialize OpenAI client: {e}")
+    raise
 
 app = Flask(__name__)
 
 # --- Session data persistence ---
-SESSION_FILE = "session_data.json"
+SESSION_FILE = "/opt/render/project/src/session_data.json"
 
 def load_session_data():
     try:
@@ -36,6 +42,7 @@ def load_session_data():
 
 def save_session_data(data):
     try:
+        os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
         with open(SESSION_FILE, "w") as f:
             json.dump(data, f)
     except Exception as e:
@@ -57,18 +64,26 @@ def blank_report():
 def send_telegram_message(chat_id, text):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    response = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
-    response.raise_for_status()
-    logger.info(f"Sent Telegram message to {chat_id}")
-    return response
+    try:
+        response = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+        response.raise_for_status()
+        logger.info(f"Sent Telegram message to {chat_id}")
+        return response
+    except Exception as e:
+        logger.error(f"Failed to send Telegram message: {e}")
+        raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def get_telegram_file_path(file_id):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-    response = requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}")
-    response.raise_for_status()
-    file_path = response.json()["result"]["file_path"]
-    return f"https://api.telegram.org/file/bot{token}/{file_path}"
+    try:
+        response = requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}")
+        response.raise_for_status()
+        file_path = response.json()["result"]["file_path"]
+        return f"https://api.telegram.org/file/bot{token}/{file_path}"
+    except Exception as e:
+        logger.error(f"Failed to get Telegram file path: {e}")
+        raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def transcribe_from_telegram_voice(file_id):
@@ -166,33 +181,55 @@ You are an AI assistant extracting a construction site report from text. Extract
 - comments: string
 - date: string (format dd-mm-yyyy)
 
-Rules:
+Rules for extraction:
 - Extract fields exactly as mentioned in the text; do not infer or guess.
 - For lists (company, people, tools, service, activities, issues), include all mentioned items as specified.
-- For issues, always include "description"; "caused_by" and "has_photo" are optional.
+- For issues, the "description" field is mandatory. "caused_by" and "has_photo" are optional. If an issue is mentioned, always include a "description" field, even if only partial information is provided.
+- "has_photo" should be true only if explicitly mentioned (e.g., "with photo", "has photo", or similar).
 - If a field is mentioned but empty or unclear, omit it from the JSON.
 - Return an empty JSON object ({}) if no fields are explicitly mentioned.
+- Handle multiple issues by creating separate objects in the "issues" list.
+- Recognize issues in various formats, such as "Issue: Delayed delivery caused by Supplier with photo", "Problem: Broken equipment", "Issues: Missing tools, Late shipment by Vendor", or natural language like "There's a delay in delivery due to the supplier".
 
-Example input: "Site: Downtown Project, Company: Acme Corp, Issue: Delayed delivery caused by Supplier with photo"
-Output: {
-  "site_name": "Downtown Project",
-  "company": [{"name": "Acme Corp"}],
-  "issues": [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}]
-}
+Examples:
+1. Input: "Site: Downtown Project, Company: Acme Corp, Issue: Delayed delivery caused by Supplier with photo"
+   Output: {
+     "site_name": "Downtown Project",
+     "company": [{"name": "Acme Corp"}],
+     "issues": [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}]
+   }
+2. Input: "Issues: Broken equipment, Missing tools caused by Beta Inc"
+   Output: {
+     "issues": [
+       {"description": "Broken equipment"},
+       {"description": "Missing tools", "caused_by": "Beta Inc"}
+     ]
+   }
+3. Input: "Problem: Late delivery"
+   Output: {
+     "issues": [{"description": "Late delivery"}]
+   }
+4. Input: "There's a delay in delivery due to the supplier"
+   Output: {
+     "issues": [{"description": "Delay in delivery", "caused_by": "Supplier"}]
+   }
+
+Input text: {text}
 """
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def extract_site_report(text):
     messages = [
         {"role": "system", "content": "Extract only explicitly stated fields; never guess."},
-        {"role": "user", "content": gpt_prompt + "\nInput text: " + text}
+        {"role": "user", "content": gpt_prompt.replace("{text}", text)}
     ]
     try:
         response = client.chat.completions.create(
             model="gpt-3.5-turbo", messages=messages, temperature=0.2
         )
         raw_response = response.choices[0].message.content
-        logger.info(f"Raw GPT response for input '{text}': {raw_response}")
+        logger.info(f"Input text: '{text}'")
+        logger.info(f"Raw GPT response: {raw_response}")
         data = json.loads(raw_response)
         logger.info(f"Extracted report: {data}")
         return data
@@ -207,39 +244,20 @@ def merge_structured_data(existing, new):
     merged = existing.copy()
     for key, value in new.items():
         if key in ["company", "people", "tools", "service", "activities", "issues"]:
-            # Append to lists, avoiding duplicates
             existing_list = merged.get(key, [])
             new_items = value if isinstance(value, list) else []
-            
-            # Special handling for issues to ensure proper structure
-            if key == "issues":
-                for item in new_items:
-                    # Ensure each issue has at least a description field
-                    if isinstance(item, dict) and "description" in item:
-                        # Check if this issue already exists
-                        exists = False
-                        for existing_item in existing_list:
-                            if (isinstance(existing_item, dict) and 
-                                existing_item.get("description") == item.get("description")):
-                                exists = True
-                                # Update existing issue with new fields if available
-                                if "caused_by" in item and item["caused_by"]:
-                                    existing_item["caused_by"] = item["caused_by"]
-                                if "has_photo" in item:
-                                    existing_item["has_photo"] = item["has_photo"]
-                                break
-                        
-                        if not exists:
-                            existing_list.append(item)
-            else:
-                # Default handling for other list types
-                for item in new_items:
-                    if item not in existing_list:
+            for item in new_items:
+                if key == "issues":
+                    if not isinstance(item, dict) or "description" not in item:
+                        continue
+                    if not any(existing_item.get("description") == item["description"]
+                              for existing_item in existing_list
+                              if isinstance(existing_item, dict)):
                         existing_list.append(item)
-                        
+                elif item not in existing_list:
+                    existing_list.append(item)
             merged[key] = existing_list
         else:
-            # Update scalar fields if not empty
             if value:
                 merged[key] = value
     return merged
@@ -360,53 +378,23 @@ def webhook():
             )
             return "ok", 200
 
-        # Handle first extraction
-        if not sess["awaiting_correction"]:
-            extracted = extract_site_report(text)
-            logger.info(f"Raw extracted data: {extracted}")  # Add this logging
-            
-            # Ensure issues are properly formatted if present
-            if "issues" in extracted and extracted["issues"]:
-                for i, issue in enumerate(extracted["issues"]):
-                    if not isinstance(issue, dict):
-                        extracted["issues"][i] = {"description": str(issue)}
-                    elif "description" not in issue:
-                        # If there's no description, use the first available field or skip
-                        if issue:
-                            first_key = next(iter(issue))
-                            extracted["issues"][i] = {"description": issue[first_key]}
-                        else:
-                            # Remove malformed issues
-                            extracted["issues"].pop(i)
-            
-            # Remove requirement to start with site_name
-            if not extracted:
-                send_telegram_message(chat_id,
-                    "I couldn't extract any information. Please try again with details like issues, people, site name, etc.")
-                return "ok", 200
-                
-            sess["structured_data"] = merge_structured_data(
-                sess["structured_data"], enrich_with_date(extracted)
-            )
-            sess["awaiting_correction"] = True
-            save_session_data(session_data)
-            tpl = summarize_data(sess["structured_data"])
+        # Handle extraction
+        extracted = extract_site_report(text)
+        logger.info(f"Raw extracted data: {extracted}")
+        if not extracted:
             send_telegram_message(chat_id,
-                "Here's what I understood:\n\n" + tpl +
-                "\n\n  Is this correct? Reply with corrections or more details."
-            )
+                "I couldn't extract any information. Please try again with details like issues, people, site name, etc.")
             return "ok", 200
 
-        # Handle correction or addition
-        updated = apply_correction(sess["structured_data"], text)
         sess["structured_data"] = merge_structured_data(
-            sess["structured_data"], enrich_with_date(updated)
+            sess["structured_data"], enrich_with_date(extracted)
         )
+        sess["awaiting_correction"] = True
         save_session_data(session_data)
         tpl = summarize_data(sess["structured_data"])
         send_telegram_message(chat_id,
-            "Got it! Here's the **full** updated report:\n\n" + tpl +
-            "\n\n  Anything else to add or correct?"
+            "Here's what I understood:\n\n" + tpl +
+            "\n\n  Is this correct? Reply with corrections or more details."
         )
         return "ok", 200
 
