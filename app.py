@@ -2,44 +2,57 @@ from flask import Flask, request
 import requests
 import os
 import json
-import re
 import logging
+import threading
+import httpx
 from datetime import datetime
 from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-# --- Initialize logging ---
+# Initialize logging
 logging.basicConfig(
     filename="app.log",
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# --- Initialize OpenAI client ---
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Initialize OpenAI client
+try:
+    client = OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        http_client=httpx.Client(proxies=None)  # Disable proxies
+    )
+    logger.info("OpenAI client initialized successfully")
+except Exception as e:
+    logger.error(f"OpenAI client initialization failed: {e}")
+    raise
 
 app = Flask(__name__)
 
-# --- Session data persistence ---
-SESSION_FILE = "session_data.json"
+# Session data persistence
+SESSION_FILE = "/opt/render/project/src/session_data.json"
+session_lock = threading.Lock()
 
 def load_session_data():
-    try:
-        if os.path.exists(SESSION_FILE):
-            with open(SESSION_FILE, "r") as f:
-                return json.load(f)
-        return {}
-    except Exception as e:
-        logger.error(f"Failed to load session data: {e}")
-        return {}
+    with session_lock:
+        try:
+            if os.path.exists(SESSION_FILE):
+                with open(SESSION_FILE, "r") as f:
+                    return json.load(f)
+            return {}
+        except Exception as e:
+            logger.error(f"Failed to load session data: {e}")
+            return {}
 
 def save_session_data(data):
-    try:
-        with open(SESSION_FILE, "w") as f:
-            json.dump(data, f)
-    except Exception as e:
-        logger.error(f"Failed to save session data: {e}")
+    with session_lock:
+        try:
+            os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
+            with open(SESSION_FILE, "w") as f:
+                json.dump(data, f)
+        except Exception as e:
+            logger.error(f"Failed to save session data: {e}")
 
 session_data = load_session_data()
 
@@ -126,7 +139,7 @@ def summarize_data(d):
     lines.append(
         "  Tools: " +
         ", ".join(
-            f"{t.get('item', '')} ({t.get('company', '')})" if isinstance(t, dict) else str(s)
+            f"{t.get('item', '')} ({t.get('company', '')})" if isinstance(t, dict) else str(t)
             for t in d.get("tools", [])
         )
     )
@@ -195,12 +208,10 @@ def merge_structured_data(existing, new):
     merged = existing.copy()
     for key, value in new.items():
         if key in ["company", "people", "tools", "service", "activities", "issues"]:
-            # Append to lists, avoiding duplicates
             existing_list = merged.get(key, [])
             new_items = value if isinstance(value, list) else []
             for item in new_items:
                 if key == "issues":
-                    # Avoid duplicate issues based on description
                     if not any(existing_item.get("description") == item.get("description")
                               for existing_item in existing_list):
                         existing_list.append(item)
@@ -208,110 +219,9 @@ def merge_structured_data(existing, new):
                     existing_list.append(item)
             merged[key] = existing_list
         else:
-            # Update scalar fields if not empty
             if value:
                 merged[key] = value
     return merged
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def apply_correction(orig, corr):
-    prompt = (
-        "Original JSON:\n" + json.dumps(orig) +
-        "\n\nUser correction:\n\"" + corr + "\"\n\n"
-        "Return JSON with only corrected fields. Do not modify fields not explicitly mentioned."
-    )
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        partial = json.loads(response.choices[0].message.content)
-        merged = orig.copy()
-        merged.update(partial)
-        logger.info(f"Applied correction: {corr}")
-        return merged
-    except Exception as e:
-        logger.error(f"GPT correction error: {e}")
-        return orig
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    try:
-        data = request.get_json(force=True)
-        if "message" not in data:
-            return "ok", 200
-
-        msg = data["message"]
-        chat_id = str(msg["chat"]["id"])
-        text = (msg.get("text") or "").strip()
-
-        # Initialize session
-        if chat_id not in session_data:
-            session_data[chat_id] = {
-                "structured_data": blank_report(),
-                "awaiting_correction": False
-            }
-        sess = session_data[chat_id]
-
-        # Reset
-        if text.lower() in ("new", "new report", "reset", "/new"):
-            sess["structured_data"] = blank_report()
-            sess["awaiting_correction"] = False
-            save_session_data(session_data)
-            tpl = summarize_data(sess["structured_data"])
-            send_telegram_message(chat_id,
-                "  **Starting a fresh report**\n\n" + tpl +
-                "\n\n  Speak or type any field to begin (e.g., site name, issues, activities)."
-            )
-            return "ok", 200
-
-        # Voice message
-        if "voice" in msg:
-            text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
-            if not text:
-                send_telegram_message(chat_id,
-                    "  Couldn't understand the audio. Please try again.")
-                return "ok", 200
-
-        # First extraction
-        if not sess["awaiting_correction"]:
-            extracted = extract_site_report(text)
-            if not extracted:
-                send_telegram_message(chat_id,
-                    "  No valid fields detected. Please provide details (e.g., site name, issues, activities).")
-                return "ok", 200
-            sess["structured_data"] = merge_structured_data(
-                sess["structured_data"], enrich_with_date(extracted)
-            )
-            sess["awaiting_correction"] = True
-            save_session_data(session_data)
-            tpl = summarize_data(sess["structured_data"])
-            send_telegram_message(chat_id,
-                "Here’s what I understood:\n\n" + tpl +
-                "\n\n  Is this correct? Reply with corrections or more details." +
-                ("\n  (Note: Site name is missing; please provide it when ready.)"
-                 if not sess["structured_data"]["site_name"] else "")
-            )
-            return "ok", 200
-
-        # Correction or addition
-        updated = apply_correction(sess["structured_data"], text)
-        sess["structured_data"] = merge_structured_data(
-            sess["structured_data"], enrich_with_date(updated)
-        )
-        save_session_data(session_data)
-        tpl = summarize_data(sess["structured_data"])
-        send_telegram_message(chat_id,
-            "  Got it! Here’s the **full** updated report:\n\n" + tpl +
-            "\n\n  Anything else to add or correct?" +
-            ("\n  (Note: Site name is missing; please provide it when ready.)"
-             if not sess["structured_data"]["site_name"] else "")
-        )
-        return "ok", 200
-
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        return "error", 500
-
-if __name__ == "__main__":
-    app.run(port=int(os.getenv("PORT", 5000)), debug=True)
+def
