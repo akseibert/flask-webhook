@@ -150,30 +150,57 @@ def summarize_data(d):
     return "\n".join(lines)
 
 gpt_prompt = """
-You are an AI assistant extracting a construction site report. Only extract what’s explicitly mentioned.
-Return JSON with any of these fields (omit if not present):
-site_name, segment, category,
-company:[{"name":...}], people:[{"name":...,"role":...}],
-tools:[{"item":...,"company":...}], service:[{"task":...,"company":...}],
-activities:[...], issues:[{"description":...,"caused_by":...,"has_photo":...}],
-time, weather, impression, comments, date (dd-mm-yyyy)
+You are an AI assistant extracting a construction site report from text. Extract only what is explicitly mentioned in the provided text and return a JSON object with the following fields (omit any fields not explicitly mentioned):
+- site_name: string
+- segment: string
+- category: string
+- company: list of objects with "name" (e.g., [{"name": "Acme Corp"}, {"name": "Beta Inc"}])
+- people: list of objects with "name" and "role" (e.g., [{"name": "John Doe", "role": "Foreman"}])
+- tools: list of objects with "item" and "company" (e.g., [{"item": "Crane", "company": "Acme Corp"}])
+- service: list of objects with "task" and "company" (e.g., [{"task": "Excavation", "company": "Acme Corp"}])
+- activities: list of strings (e.g., ["Concrete pouring", "Rebar installation"])
+- issues: list of objects with "description" (required), "caused_by" (optional), and "has_photo" (optional, default false) (e.g., [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}])
+- time: string
+- weather: string
+- impression: string
+- comments: string
+- date: string (format dd-mm-yyyy)
+
+Rules:
+- Extract fields exactly as mentioned in the text; do not infer or guess.
+- For lists (company, people, tools, service, activities, issues), include all mentioned items as specified.
+- For issues, always include "description"; "caused_by" and "has_photo" are optional.
+- If a field is mentioned but empty or unclear, omit it from the JSON.
+- Return an empty JSON object ({}) if no fields are explicitly mentioned.
+
+Example input: "Site: Downtown Project, Company: Acme Corp, Issue: Delayed delivery caused by Supplier with photo"
+Output: {
+  "site_name": "Downtown Project",
+  "company": [{"name": "Acme Corp"}],
+  "issues": [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}]
+}
 """
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def extract_site_report(text):
     messages = [
-        {"role": "system", "content": "Only extract explicitly stated fields; never guess."},
-        {"role": "user", "content": gpt_prompt + "\n" + text}
+        {"role": "system", "content": "Extract only explicitly stated fields; never guess."},
+        {"role": "user", "content": gpt_prompt + "\nInput text: " + text}
     ]
     try:
         response = client.chat.completions.create(
             model="gpt-3.5-turbo", messages=messages, temperature=0.2
         )
-        data = json.loads(response.choices[0].message.content)
+        raw_response = response.choices[0].message.content
+        logger.info(f"Raw GPT response for input '{text}': {raw_response}")
+        data = json.loads(raw_response)
         logger.info(f"Extracted report: {data}")
         return data
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON parsing error in GPT response: {e}, raw response: {raw_response}")
+        return {}
     except Exception as e:
-        logger.error(f"GPT extract error: {e}")
+        logger.error(f"GPT extract error for input '{text}': {e}")
         return {}
 
 def merge_structured_data(existing, new):
@@ -298,7 +325,7 @@ def webhook():
             target = text[7:].strip()  # Remove "delete " prefix
             if not target:
                 send_telegram_message(chat_id,
-                    "  Please specify what to delete (e.g., 'delete site_name' or 'delete issue Delayed delivery').")
+                    "  Please specify what to deactivate (e.g., 'delete site_name' or 'delete issue Delayed delivery').")
                 return "ok", 200
             sess["structured_data"] = delete_from_report(sess["structured_data"], target)
             save_session_data(session_data)
