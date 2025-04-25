@@ -93,21 +93,30 @@ FIELD_CONFIG = {
 # --- Telegram API utilities ---
 @settings.retry
 def send_telegram_message(chat_id: str, text: str) -> None:
+    """Send a message to Telegram with robust error handling."""
     try:
-        if not chat_id:
-            raise ValueError("Invalid chat_id")
+        if not chat_id or not isinstance(chat_id, str):
+            raise ValueError(f"Invalid chat_id: {chat_id}")
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "Markdown"
+        }
         response = requests.post(
             f"https://api.telegram.org/bot{settings.telegram_token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+            json=payload
         )
-        response.raise_for_status()
+        response_data = response.json()
+        if not response_data.get("ok"):
+            raise RuntimeError(f"Telegram API error: {response_data.get('description', 'Unknown error')}")
         logger.info(f"Sent message to chat_id={chat_id}: {text[:50]}...")
     except Exception as e:
-        logger.error(f"Failed to send message: {e}, response: {response.text if 'response' in locals() else 'N/A'}")
+        logger.error(f"Failed to send message: {e}, payload: {json.dumps(payload)}, response: {response.text if 'response' in locals() else 'N/A'}")
         raise
 
 @settings.retry
 def transcribe_voice(file_id: str) -> str:
+    """Transcribe voice message using OpenAI Whisper."""
     try:
         response = requests.get(f"https://api.telegram.org/bot{settings.telegram_token}/getFile?file_id={file_id}")
         response.raise_for_status()
@@ -129,6 +138,7 @@ def transcribe_voice(file_id: str) -> str:
 
 # --- Data processing ---
 def blank_report() -> Dict[str, Any]:
+    """Create a blank report structure."""
     return {
         "site_name": "", "segment": "", "category": "", "company": [], "people": [],
         "tools": [], "service": [], "activities": [], "issues": [], "time": "",
@@ -136,6 +146,7 @@ def blank_report() -> Dict[str, Any]:
     }
 
 def string_similarity(a: str, b: str) -> float:
+    """Calculate string similarity using SequenceMatcher."""
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 def merge_list_field(existing: List[Dict], new_items: List[Dict], key_fn: Callable[[Dict], str], threshold: float = 0.6) -> List[Dict]:
@@ -172,6 +183,7 @@ def merge_structured_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict
     return merged
 
 def _comma(items: Sequence[str]) -> str:
+    """Join items with commas, return 'None' if empty."""
     return ", ".join(items) if items else "None"
 
 def summarize_data(data: Dict[str, Any]) -> str:
@@ -287,6 +299,7 @@ RESET_COMMANDS = {"new", "new report", "reset", "/new"}
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    """Handle incoming Telegram messages."""
     try:
         data = request.get_json(force=True)
         if "message" not in data:
@@ -320,8 +333,8 @@ def webhook():
                 new_data = blank_report()
                 sess["structured_data"] = new_data
                 sess["awaiting_correction"] = False
-                send_telegram_message(chat_id, "**Fresh report**\n\n" + summarize_data(new_data) +
-                                     "\n\nEnter first field (site name required).")
+                summary = summarize_data(new_data)
+                send_telegram_message(chat_id, f"**Fresh report**\n\n{summary}\n\nEnter first field (site name required).")
                 return "ok", 200
 
             # Handle commands
@@ -376,6 +389,7 @@ def webhook():
 
 @app.get("/")
 def health():
+    """Health check endpoint."""
     return "OK", 200
 
 if __name__ == "__main__":
