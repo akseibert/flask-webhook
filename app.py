@@ -63,6 +63,9 @@ def blank_report():
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def send_telegram_message(chat_id, text):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        logger.error("TELEGRAM_BOT_TOKEN not set")
+        raise ValueError("Telegram bot token missing")
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         response = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
@@ -76,6 +79,9 @@ def send_telegram_message(chat_id, text):
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def get_telegram_file_path(file_id):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        logger.error("TELEGRAM_BOT_TOKEN not set")
+        raise ValueError("Telegram bot token missing")
     try:
         response = requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}")
         response.raise_for_status()
@@ -89,13 +95,19 @@ def get_telegram_file_path(file_id):
 def transcribe_from_telegram_voice(file_id):
     try:
         audio_url = get_telegram_file_path(file_id)
-        audio = requests.get(audio_url).content
+        logger.info(f"Fetching audio from: {audio_url}")
+        audio_response = requests.get(audio_url)
+        audio_response.raise_for_status()
+        audio = audio_response.content
         response = client.audio.transcriptions.create(
             model="whisper-1",
             file=("voice.ogg", audio, "audio/ogg")
         )
-        text = response.text
-        logger.info(f"Transcribed audio: {text}")
+        text = response.text.strip()
+        if not text:
+            logger.warning("Transcription returned empty text")
+            return ""
+        logger.info(f"Transcribed audio: '{text}'")
         return text
     except Exception as e:
         logger.error(f"Transcription failed: {e}")
@@ -165,7 +177,7 @@ def summarize_data(d):
     return "\n".join(lines)
 
 gpt_prompt = """
-You are an AI assistant extracting a construction site report from text. Your task is to parse the input text and return a JSON object containing only the fields explicitly mentioned. The possible fields are:
+You are an AI assistant extracting a construction site report from text. Parse the input text and return a JSON object with only explicitly mentioned fields. Possible fields:
 - site_name: string
 - segment: string
 - category: string
@@ -181,49 +193,39 @@ You are an AI assistant extracting a construction site report from text. Your ta
 - comments: string
 - date: string (format dd-mm-yyyy)
 
-Extraction Rules:
-- Only extract fields explicitly mentioned in the text. Do not infer or assume any information.
-- For lists (e.g., company, issues), include all mentioned items in the specified format.
+Rules:
+- Extract only explicitly mentioned fields. Do not infer or assume.
 - For issues:
-  - The "description" field is mandatory. Every issue must have a description.
-  - "caused_by" and "has_photo" are optional. Set "has_photo" to true only if explicitly mentioned (e.g., "with photo", "has photo").
-  - Extract multiple issues as separate objects in the "issues" list.
-  - Recognize issues from keywords like "Issue", "Issues", "Problem", "Problems", or natural language phrases indicating a problem (e.g., "The issue is...", "There’s a delay").
-- If a field is mentioned but empty or unclear, omit it from the JSON.
-- Return an empty JSON object ({}) if no valid fields are extracted.
-- Handle natural language inputs and structured formats (e.g., "Issue: Delayed delivery").
+  - "description" is mandatory.
+  - "caused_by" and "has_photo" are optional. Set "has_photo" to true only if "with photo" or "has photo" is mentioned.
+  - Recognize keywords: "Issue", "Issues", "Problem", "Problems", or natural language (e.g., "The issue is...", "There’s a delay").
+  - Handle multiple issues as separate objects.
+- Omit unclear or empty fields.
+- Return {} if no valid fields are extracted.
+- Normalize input: convert to lowercase for keyword matching, but preserve original text for output.
 
 Examples:
 1. Input: "Issue: Delayed delivery caused by Supplier with photo"
-   Output: {
-     "issues": [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}]
-   }
+   Output: {"issues": [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}]}
 2. Input: "Issues: Broken equipment, Missing tools caused by Beta Inc"
-   Output: {
-     "issues": [
-       {"description": "Broken equipment"},
-       {"description": "Missing tools", "caused_by": "Beta Inc"}
-     ]
-   }
+   Output: {"issues": [{"description": "Broken equipment"}, {"description": "Missing tools", "caused_by": "Beta Inc"}]}
 3. Input: "The issue is a late delivery due to the supplier"
-   Output: {
-     "issues": [{"description": "Late delivery", "caused_by": "Supplier"}]
-   }
+   Output: {"issues": [{"description": "Late delivery", "caused_by": "Supplier"}]}
 4. Input: "Problem: Faulty wiring"
-   Output: {
-     "issues": [{"description": "Faulty wiring"}]
-   }
+   Output: {"issues": [{"description": "Faulty wiring"}]}
 5. Input: "Site: Downtown Project, There’s a delay in delivery"
-   Output: {
-     "site_name": "Downtown Project",
-     "issues": [{"description": "Delay in delivery"}]
-   }
+   Output: {"site_name": "Downtown Project", "issues": [{"description": "Delay in delivery"}]}
 
 Input text: {text}
 """
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def extract_site_report(text):
+    if not text.strip():
+        logger.warning("Empty input text received")
+        return {}
+    # Normalize input for keyword matching
+    text_lower = text.lower()
     messages = [
         {"role": "system", "content": "Extract only explicitly stated fields; never guess."},
         {"role": "user", "content": gpt_prompt.replace("{text}", text)}
@@ -239,15 +241,34 @@ def extract_site_report(text):
             data = json.loads(raw_response)
         except json.JSONDecodeError:
             logger.error(f"JSON parsing failed, attempting to fix response: {raw_response}")
-            # Attempt to extract issues from malformed response
             data = {}
-            if "issues" in raw_response.lower():
+            # Fallback: extract issues from raw text
+            if any(kw in text_lower for kw in ["issue", "issues", "problem", "problems"]):
                 issues = []
-                for line in raw_response.split("\n"):
-                    if any(kw in line.lower() for kw in ["issue", "problem"]):
-                        desc = line.strip().split(":", 1)[-1].strip() if ":" in line else line.strip()
-                        if desc:
-                            issues.append({"description": desc})
+                lines = text.split(",")
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    desc = line
+                    caused_by = ""
+                    has_photo = False
+                    if "caused by" in line.lower():
+                        desc, caused_by = line.split("caused by", 1)
+                        desc = desc.strip()
+                        caused_by = caused_by.strip()
+                    if "with photo" in line.lower() or "has photo" in line.lower():
+                        has_photo = True
+                        desc = desc.replace("with photo", "").replace("has photo", "").strip()
+                    if desc and any(kw in desc.lower() for kw in ["issue", "problem"]):
+                        desc = desc.split(":", 1)[-1].strip() if ":" in desc else desc.strip()
+                    if desc:
+                        issue = {"description": desc}
+                        if caused_by:
+                            issue["caused_by"] = caused_by
+                        if has_photo:
+                            issue["has_photo"] = True
+                        issues.append(issue)
                 if issues:
                     data["issues"] = issues
             logger.info(f"Fixed extracted report: {data}")
@@ -366,7 +387,7 @@ def webhook():
             text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
             if not text:
                 send_telegram_message(chat_id,
-                    "Couldn't understand the audio. Please try again.")
+                    "Couldn't understand the audio. Please speak clearly and try again.")
                 return "ok", 200
             logger.info(f"Transcribed voice to text: '{text}'")
 
