@@ -106,9 +106,13 @@ def send_telegram_message(chat_id: str, text: str) -> None:
             f"https://api.telegram.org/bot{settings.telegram_token}/sendMessage",
             json=payload
         )
-        response_data = response.json()
-        if not response_data.get("ok"):
-            raise RuntimeError(f"Telegram API error: {response_data.get('description', 'Unknown error')}")
+        try:
+            response_data = response.json()
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Failed to parse Telegram response: {e}, response: {response.text}")
+        if not response_data.get("ok", False):
+            error_desc = response_data.get("description", "Unknown error")
+            raise RuntimeError(f"Telegram API error: {error_desc}")
         logger.info(f"Sent message to chat_id={chat_id}: {text[:50]}...")
     except Exception as e:
         logger.error(f"Failed to send message: {e}, payload: {json.dumps(payload)}, response: {response.text if 'response' in locals() else 'N/A'}")
@@ -189,6 +193,8 @@ def _comma(items: Sequence[str]) -> str:
 def summarize_data(data: Dict[str, Any]) -> str:
     """Generate a formatted summary of the report data."""
     try:
+        if not isinstance(data, dict):
+            raise ValueError(f"Invalid data type for summary: {type(data)}")
         logger.info(f"Summarizing data: {json.dumps(data, indent=2)}")
         lines = []
         for field, config in FIELD_CONFIG.items():
@@ -200,6 +206,9 @@ def summarize_data(data: Dict[str, Any]) -> str:
                 lines.append(f"{config['icon']} **{field.title().replace('_', ' ')}**: {data.get(field, '') or 'None'}")
             else:
                 items = data.get(field, [])
+                if not isinstance(items, list):
+                    logger.warning(f"Invalid items for field {field}: {items}")
+                    items = []
                 value = _comma(config["format"](item) for item in items if isinstance(item, dict))
                 lines.append(f"{config.get('icon', '📅')} **{field.title()}**: {value}")
         return "\n".join(lines)
