@@ -10,7 +10,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 # --- Initialize logging ---
 logging.basicConfig(
-    filename="app.log",
+    filename="/opt/render/project/src/app.log",
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
@@ -165,15 +165,15 @@ def summarize_data(d):
     return "\n".join(lines)
 
 gpt_prompt = """
-You are an AI assistant extracting a construction site report from text. Extract only what is explicitly mentioned in the provided text and return a JSON object with the following fields (omit any fields not explicitly mentioned):
+You are an AI assistant extracting a construction site report from text. Your task is to parse the input text and return a JSON object containing only the fields explicitly mentioned. The possible fields are:
 - site_name: string
 - segment: string
 - category: string
-- company: list of objects with "name" (e.g., [{"name": "Acme Corp"}, {"name": "Beta Inc"}])
+- company: list of objects with "name" (e.g., [{"name": "Acme Corp"}])
 - people: list of objects with "name" and "role" (e.g., [{"name": "John Doe", "role": "Foreman"}])
 - tools: list of objects with "item" and "company" (e.g., [{"item": "Crane", "company": "Acme Corp"}])
 - service: list of objects with "task" and "company" (e.g., [{"task": "Excavation", "company": "Acme Corp"}])
-- activities: list of strings (e.g., ["Concrete pouring", "Rebar installation"])
+- activities: list of strings (e.g., ["Concrete pouring"])
 - issues: list of objects with "description" (required), "caused_by" (optional), and "has_photo" (optional, default false) (e.g., [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}])
 - time: string
 - weather: string
@@ -181,21 +181,21 @@ You are an AI assistant extracting a construction site report from text. Extract
 - comments: string
 - date: string (format dd-mm-yyyy)
 
-Rules for extraction:
-- Extract fields exactly as mentioned in the text; do not infer or guess.
-- For lists (company, people, tools, service, activities, issues), include all mentioned items as specified.
-- For issues, the "description" field is mandatory. "caused_by" and "has_photo" are optional. If an issue is mentioned, always include a "description" field, even if only partial information is provided.
-- "has_photo" should be true only if explicitly mentioned (e.g., "with photo", "has photo", or similar).
+Extraction Rules:
+- Only extract fields explicitly mentioned in the text. Do not infer or assume any information.
+- For lists (e.g., company, issues), include all mentioned items in the specified format.
+- For issues:
+  - The "description" field is mandatory. Every issue must have a description.
+  - "caused_by" and "has_photo" are optional. Set "has_photo" to true only if explicitly mentioned (e.g., "with photo", "has photo").
+  - Extract multiple issues as separate objects in the "issues" list.
+  - Recognize issues from keywords like "Issue", "Issues", "Problem", "Problems", or natural language phrases indicating a problem (e.g., "The issue is...", "There’s a delay").
 - If a field is mentioned but empty or unclear, omit it from the JSON.
-- Return an empty JSON object ({}) if no fields are explicitly mentioned.
-- Handle multiple issues by creating separate objects in the "issues" list.
-- Recognize issues in various formats, such as "Issue: Delayed delivery caused by Supplier with photo", "Problem: Broken equipment", "Issues: Missing tools, Late shipment by Vendor", or natural language like "There's a delay in delivery due to the supplier".
+- Return an empty JSON object ({}) if no valid fields are extracted.
+- Handle natural language inputs and structured formats (e.g., "Issue: Delayed delivery").
 
 Examples:
-1. Input: "Site: Downtown Project, Company: Acme Corp, Issue: Delayed delivery caused by Supplier with photo"
+1. Input: "Issue: Delayed delivery caused by Supplier with photo"
    Output: {
-     "site_name": "Downtown Project",
-     "company": [{"name": "Acme Corp"}],
      "issues": [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}]
    }
 2. Input: "Issues: Broken equipment, Missing tools caused by Beta Inc"
@@ -205,13 +205,18 @@ Examples:
        {"description": "Missing tools", "caused_by": "Beta Inc"}
      ]
    }
-3. Input: "Problem: Late delivery"
+3. Input: "The issue is a late delivery due to the supplier"
    Output: {
-     "issues": [{"description": "Late delivery"}]
+     "issues": [{"description": "Late delivery", "caused_by": "Supplier"}]
    }
-4. Input: "There's a delay in delivery due to the supplier"
+4. Input: "Problem: Faulty wiring"
    Output: {
-     "issues": [{"description": "Delay in delivery", "caused_by": "Supplier"}]
+     "issues": [{"description": "Faulty wiring"}]
+   }
+5. Input: "Site: Downtown Project, There’s a delay in delivery"
+   Output: {
+     "site_name": "Downtown Project",
+     "issues": [{"description": "Delay in delivery"}]
    }
 
 Input text: {text}
@@ -224,18 +229,30 @@ def extract_site_report(text):
         {"role": "user", "content": gpt_prompt.replace("{text}", text)}
     ]
     try:
+        logger.info(f"Processing input text: '{text}'")
         response = client.chat.completions.create(
             model="gpt-3.5-turbo", messages=messages, temperature=0.2
         )
         raw_response = response.choices[0].message.content
-        logger.info(f"Input text: '{text}'")
         logger.info(f"Raw GPT response: {raw_response}")
-        data = json.loads(raw_response)
+        try:
+            data = json.loads(raw_response)
+        except json.JSONDecodeError:
+            logger.error(f"JSON parsing failed, attempting to fix response: {raw_response}")
+            # Attempt to extract issues from malformed response
+            data = {}
+            if "issues" in raw_response.lower():
+                issues = []
+                for line in raw_response.split("\n"):
+                    if any(kw in line.lower() for kw in ["issue", "problem"]):
+                        desc = line.strip().split(":", 1)[-1].strip() if ":" in line else line.strip()
+                        if desc:
+                            issues.append({"description": desc})
+                if issues:
+                    data["issues"] = issues
+            logger.info(f"Fixed extracted report: {data}")
         logger.info(f"Extracted report: {data}")
         return data
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON parsing error in GPT response: {e}, raw response: {raw_response}")
-        return {}
     except Exception as e:
         logger.error(f"GPT extract error for input '{text}': {e}")
         return {}
@@ -262,145 +279,4 @@ def merge_structured_data(existing, new):
                 merged[key] = value
     return merged
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def apply_correction(orig, corr):
-    prompt = (
-        "Original JSON:\n" + json.dumps(orig) +
-        "\n\nUser correction:\n\"" + corr + "\"\n\n"
-        "Return JSON with only corrected fields. Do not modify fields not explicitly mentioned."
-    )
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        partial = json.loads(response.choices[0].message.content)
-        merged = orig.copy()
-        merged.update(partial)
-        logger.info(f"Applied correction: {corr}")
-        return merged
-    except Exception as e:
-        logger.error(f"GPT correction error: {e}")
-        return orig
-
-def delete_from_report(structured_data, target):
-    """Process a deletion request and return updated structured data."""
-    updated_data = structured_data.copy()
-    target = target.strip().lower()
-    
-    # Scalar fields
-    scalar_fields = ["site_name", "segment", "category", "time", "weather", "impression", "comments", "date"]
-    for field in scalar_fields:
-        if target == field or target.startswith(f"{field} "):
-            updated_data[field] = ""
-            logger.info(f"Deleted scalar field: {field}")
-            return updated_data
-
-    # List fields
-    list_fields = {
-        "company": "name",
-        "people": "name",
-        "tools": "item",
-        "service": "task",
-        "activities": None,  # Direct string comparison
-        "issues": "description"
-    }
-    
-    for field, key in list_fields.items():
-        if target.startswith(f"{field} ") or (key and target.startswith(f"{key} ")):
-            value = target[len(f"{field} "):].strip() if target.startswith(f"{field} ") else target[len(f"{key} "):].strip()
-            if not value:
-                continue
-            updated_list = updated_data.get(field, [])
-            if key:
-                updated_list = [item for item in updated_list if item.get(key, "").lower() != value.lower()]
-            else:
-                # For activities (simple strings)
-                updated_list = [item for item in updated_list if item.lower() != value.lower()]
-            updated_data[field] = updated_list
-            logger.info(f"Deleted from {field}: {value}")
-            return updated_data
-    
-    return updated_data
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    try:
-        data = request.get_json(force=True)
-        if "message" not in data:
-            return "ok", 200
-
-        msg = data["message"]
-        chat_id = str(msg["chat"]["id"])
-        text = (msg.get("text") or "").strip()
-
-        # Initialize session
-        if chat_id not in session_data:
-            session_data[chat_id] = {
-                "structured_data": blank_report(),
-                "awaiting_correction": False
-            }
-        sess = session_data[chat_id]
-
-        # Handle voice message
-        if "voice" in msg:
-            text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
-            if not text:
-                send_telegram_message(chat_id,
-                    "Couldn't understand the audio. Please try again.")
-                return "ok", 200
-
-        # Handle reset commands
-        if text.lower() in ("new", "new report", "reset", "/new"):
-            sess["structured_data"] = blank_report()
-            sess["awaiting_correction"] = False
-            save_session_data(session_data)
-            tpl = summarize_data(sess["structured_data"])
-            send_telegram_message(chat_id,
-                "**Starting a fresh report**\n\n" + tpl +
-                "\n\n  Tell me any details about your report."
-            )
-            return "ok", 200
-
-        # Handle deletion command
-        if text.lower().startswith("delete "):
-            target = text[7:].strip()  # Remove "delete " prefix
-            if not target:
-                send_telegram_message(chat_id,
-                    "Please specify what to delete (e.g., 'delete site_name' or 'delete issue Delayed delivery').")
-                return "ok", 200
-            sess["structured_data"] = delete_from_report(sess["structured_data"], target)
-            save_session_data(session_data)
-            tpl = summarize_data(sess["structured_data"])
-            send_telegram_message(chat_id,
-                f"Deleted '{target}'. Updated report:\n\n" + tpl +
-                "\n\n  Anything else to add, correct, or delete?"
-            )
-            return "ok", 200
-
-        # Handle extraction
-        extracted = extract_site_report(text)
-        logger.info(f"Raw extracted data: {extracted}")
-        if not extracted:
-            send_telegram_message(chat_id,
-                "I couldn't extract any information. Please try again with details like issues, people, site name, etc.")
-            return "ok", 200
-
-        sess["structured_data"] = merge_structured_data(
-            sess["structured_data"], enrich_with_date(extracted)
-        )
-        sess["awaiting_correction"] = True
-        save_session_data(session_data)
-        tpl = summarize_data(sess["structured_data"])
-        send_telegram_message(chat_id,
-            "Here's what I understood:\n\n" + tpl +
-            "\n\n  Is this correct? Reply with corrections or more details."
-        )
-        return "ok", 200
-
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        return "error", 500
-
-if __name__ == "__main__":
-    app.run(port=int(os.getenv("PORT", 5000)), debug=True)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential
