@@ -220,7 +220,7 @@ Rules:
   - "Activities: none" or "Activities none" clears the activities list (return "activities": []).
   - Extract exact activity phrases from phrases like "Work was done" or "Laying foundation".
 - For site_name:
-  - Recognize keywords: "Site", "Location", "Project", or location-like phrases following "at", "in", "on" (e.g., "on the East Wing on Zurich downtown project" should combine locations as "East Wing, Zurich downtown project").
+  - Recognize keywords: "Site", "Location", "Project", location-like phrases following "at", "in", "on", or standalone location names (e.g., "Downtown project", "Side downtown project").
 - For people:
   - Recognize "add [name]", "People [name]", "Person: [name]", "People add [name]", or "add people [name]" to add names to the people list (e.g., ["Tobias"]).
   - Do not assign a role unless explicitly mentioned in a role-related input.
@@ -290,7 +290,9 @@ Examples:
     Output: {"time": "morning"}
 21. Input: "Impression: abc"
     Output: {"impression": "abc"}
-22. Input: "Work was done on the East Wing on Zurich downtown project by Bill Corp and Orion Corp. I was supervising and Tobias was handling the crane. Tools were crane and hammer."
+22. Input: "Side downtown project"
+    Output: {"site_name": "Side downtown project"}
+23. Input: "Work was done on the East Wing on Zurich downtown project by Bill Corp and Orion Corp. I was supervising and Tobias was handling the crane. Tools were crane and hammer."
     Output: {
         "site_name": "East Wing, Zurich downtown project",
         "company": [
@@ -316,6 +318,13 @@ def extract_site_report(text):
     if text.lower() in ("new", "new report", "reset", "/new"):
         logger.info(f"Recognized reset command: {text}")
         return {"reset": True}
+
+    # Handle site_name addition
+    site_match = re.match(r'^(?:site\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)?(.+)$', text, re.IGNORECASE)
+    if site_match and not re.search(r'\b(add|delete|remove|correct|update|none|as|role)\b', text.lower()):
+        site_name = site_match.group(1).strip()
+        logger.info(f"Extracted site_name: {site_name}")
+        return {"site_name": site_name}
 
     # Handle segment addition
     segment_match = re.match(r'^(?:segment\s*[:,]?\s*)(.+)$', text, re.IGNORECASE)
@@ -471,8 +480,9 @@ def extract_site_report(text):
                     data = {"site_name": location, "activities": [activity]}
                     logger.info(f"Fallback applied: Treated as activity and site: {data}")
                 else:
-                    data = {"comments": text.strip()}
-                    logger.info(f"Fallback applied: Treated as comments: {data}")
+                    # Treat standalone location-like phrases as site_name
+                    data = {"site_name": text.strip()}
+                    logger.info(f"Fallback applied: Treated as site_name: {data}")
         logger.info(f"Final extracted report: {data}")
         return data
     except Exception as e:
@@ -490,7 +500,8 @@ def extract_site_report(text):
             data = {"site_name": location, "activities": [activity]}
             logger.info(f"Extraction failed; fallback to activity and site: {data}")
             return data
-        return {"comments": text.strip()} if text.strip() else {}
+        logger.info(f"Extraction failed; fallback to site_name: {text}")
+        return {"site_name": text.strip()}
 
 def string_similarity(a, b):
     similarity = SequenceMatcher(None, a.lower(), b.lower()).ratio()
@@ -710,6 +721,7 @@ def apply_correction(orig, corr):
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
+        logger.info("Webhook endpoint hit")
         data = request.get_json(force=True)
         if "message" not in data:
             logger.info("No message in webhook data")
@@ -841,7 +853,7 @@ def webhook():
                 "\n\nSpeak or type your first field (site name required).")
             return "ok", 200
         # Allow updates even without site_name if there are valid fields
-        if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category"]):
+        if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
             send_telegram_message(chat_id,
                 "🏗️ Please provide a valid field (e.g., 'Site: Downtown Project', 'People add Tobias', 'Impression: abc').")
             return "ok", 200
@@ -862,9 +874,12 @@ def webhook():
 
 @app.get("/")
 def health():
-    """Health check endpoint."""
+    logger.info("Health check endpoint hit")
     return "OK", 200
 
+# Log startup
+logger.info("Initializing Flask app for deployment")
+
 if __name__ == "__main__":
-    logger.info("Starting Flask app")
+    logger.info("Starting Flask app in local mode")
     app.run(port=int(os.getenv("PORT", 5000)), debug=True)
