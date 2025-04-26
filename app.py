@@ -108,19 +108,13 @@ def send_telegram_message(chat_id: str, text: str) -> None:
             json=payload
         )
         response.raise_for_status()
-        try:
-            response_data = response.json()
-            if not isinstance(response_data, dict) or "ok" not in response_data:
-                raise RuntimeError(f"Invalid Telegram response format: {response_data}")
-            if not response_data["ok"]:
-                error_desc = response_data.get("description", "Unknown error")
-                raise RuntimeError(f"Telegram API error: {error_desc}")
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.error(f"Failed to parse Telegram response: {e}, raw response: {response.text}")
-            raise RuntimeError(f"Failed to parse Telegram response: {e}")
+        response_data = response.json()
+        if not response_data.get("ok", False):
+            error_desc = response_data.get("description", "Unknown error")
+            raise RuntimeError(f"Telegram API error: {error_desc}")
         logger.info(f"Sent message to chat_id={chat_id}: {text[:50]}...")
     except Exception as e:
-        logger.error(f"Failed to send message: {e}, payload: {json.dumps(payload)}, raw response: {response.text if 'response' in locals() else 'N/A'}")
+        logger.error(f"Failed to send message: {e}, payload: {json.dumps(payload)}, response: {response.text if 'response' in locals() else 'N/A'}")
         raise
 
 @settings.retry
@@ -215,7 +209,7 @@ def summarize_data(data: Dict[str, Any]) -> str:
                     logger.warning(f"Invalid items for field {field}: {items}")
                     items = []
                 value = _comma(config["format"](item) for item in items if isinstance(item, dict))
-                lines.append(f"{config.get('icon', '📅')} **{field.title()}**: {value}")
+                lines.append(f"{config['icon', '📅']} **{field.title()}**: {value}")
         return "\n".join(lines)
     except Exception as e:
         logger.error(f"Summarize error: {e}")
@@ -224,40 +218,42 @@ def summarize_data(data: Dict[str, Any]) -> str:
 @settings.retry
 def extract_site_report(text: str) -> Dict[str, Any]:
     """Extract report fields from text using GPT or regex fallback."""
+    logger.info(f"Processing input text for extraction: '{text}'")
     person_match = re.match(r'^(?:add\s+)?(\w+\s*\w*)\s+as\s+(\w+\s*\w*)$', text, re.IGNORECASE)
     if person_match:
         name, role = person_match.groups()
         return {"people": [{"name": name.strip(), "role": role.strip()}]}
 
-    prompt = """
-    Extract construction site report fields from input text into JSON. Only include explicitly mentioned fields. Use keywords like "Site:", "Company:", or natural language intent. For segment/category, extract value only (e.g., "Category: 3" -> "category": "3"). For issues, recognize "Issue", "Problem", etc., with optional "caused_by" and "has_photo". For activities, detect "Work", "Task", etc. For people, recognize "add [name] as [role]" or "Person: [name], role: [role]". Fallback to comments for unclear inputs. Case-insensitive.
+    # Use f-string to safely format the prompt
+    prompt = f"""
+Extract construction site report fields from input text into JSON. Only include explicitly mentioned fields. Use keywords like "Site:", "Company:", or natural language intent. For segment/category, extract value only (e.g., "Category: 3" -> "category": "3"). For issues, recognize "Issue", "Problem", etc., with optional "caused_by" and "has_photo". For activities, detect "Work", "Task", etc. For people, recognize "add [name] as [role]" or "Person: [name], role: [role]". Fallback to comments for unclear inputs. Case-insensitive.
 
-    Fields:
-    - site_name: string
-    - segment: string (no "Segment" prefix)
-    - category: string (no "Category" prefix)
-    - company: list of {"name": string}
-    - people: list of {"name": string, "role": string}
-    - tools: list of {"item": string, "company": string}
-    - service: list of {"task": string, "company": string}
-    - activities: list of strings
-    - issues: list of {"description": string, "caused_by": string (optional), "has_photo": bool (default false)}
-    - time: string
-    - weather: string
-    - impression: string
-    - comments: string
-    - date: string (dd-mm-yyyy)
+Fields:
+- site_name: string
+- segment: string (no "Segment" prefix)
+- category: string (no "Category" prefix)
+- company: list of {{"name": string}}
+- people: list of {{"name": string, "role": string}}
+- tools: list of {{"item": string, "company": string}}
+- service: list of {{"task": string, "company": string}}
+- activities: list of strings
+- issues: list of {{"description": string, "caused_by": string (optional), "has_photo": bool (default false)}}
+- time: string
+- weather: string
+- impression: string
+- comments: string
+- date: string (dd-mm-yyyy)
 
-    Examples:
-    - "Site: Downtown, Issue: Delay with photo" -> {"site_name": "Downtown", "issues": [{"description": "Delay", "has_photo": true}]}
-    - "Category: 3, Segment: 5" -> {"category": "3", "segment": "5"}
-    - "Work at ABC" -> {"site_name": "ABC", "activities": ["Work"]}
-    - "add Anna as Supervisor" -> {"people": [{"name": "Anna", "role": "Supervisor"}]}
-    - "Person: John, role: Foreman" -> {"people": [{"name": "John", "role": "Foreman"}]}
-    - "Hello" -> {}
+Examples:
+- "Site: Downtown, Issue: Delay with photo" -> {{"site_name": "Downtown", "issues": [{{"description": "Delay", "has_photo": true}}]}}
+- "Category: 3, Segment: 5" -> {{"category": "3", "segment": "5"}}
+- "Work at ABC" -> {{"site_name": "ABC", "activities": ["Work"]}}
+- "add Anna as Supervisor" -> {{"people": [{{"name": "Anna", "role": "Supervisor"}}]}}
+- "Person: John, role: Foreman" -> {{"people": [{{"name": "John", "role": "Foreman"}}]}}
+- "Hello" -> {{}}
 
-    Input: {}
-    """.format(text)
+Input: {text}
+"""
     try:
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -348,6 +344,8 @@ def webhook():
                 sess["structured_data"] = new_data
                 sess["awaiting_correction"] = False
                 summary = summarize_data(new_data)
+                if not isinstance(summary, str):
+                    raise ValueError(f"Invalid summary: {summary}")
                 message = f"**Fresh report**\n\n{summary}\n\nEnter first field (site name required)."
                 send_telegram_message(chat_id, message)
                 logger.info(f"Reset completed for chat_id={chat_id}")
