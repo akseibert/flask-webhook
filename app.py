@@ -88,7 +88,7 @@ Fields to extract (omit if not present):
 
 Commands:
 - add <category> <value>: Add a value to the category (e.g., "add site Downtown Project" -> "site_name": "Downtown Project").
-- delete <category> [value]: Remove a value or clear the category (e.g., "delete activities Laying foundation").
+- delete <category> <value>: Remove a value or clear the category (e.g., "delete company Taekwondo Agi").
 - correct <category> <old> to <new>: Update a value (e.g., "correct site Downtown to Uptown").
 - <category>: <value>: Add a value (e.g., "Services: abc" -> "service": [{"task": "abc"}]).
 - <category>: none: Clear the category (e.g., "Tools: none" -> "tools": []).
@@ -112,6 +112,9 @@ Rules:
   - Do not assign "Supervisor" unless explicitly stated.
 - For tools and service:
   - Recognize "Tool: [item]", "Service: [task]", or commands like "add service abc".
+- For companies:
+  - Recognize "add company <name>", "company: <name>", or "add <name> as company".
+  - Handle "delete company <name>" to remove the company.
 - Comments should only include non-field-specific notes.
 - Return {} for reset commands or irrelevant inputs.
 - Case-insensitive matching.
@@ -133,6 +136,8 @@ Examples:
    Output: {"people": ["Anna"], "roles": [{"name": "Anna", "role": "Engineer"}]}
 8. Input: "Activities: many"
    Output: {"activities": ["many"]}
+9. Input: "Companies: A, B, C, delete Taekwondo Agi, add Techmond ag"
+   Output: {"company": [{"name": "A"}, {"name": "B"}, {"name": "C"}, {"name": "Techmond ag"}]}
 """
 
 # --- Session data persistence ---
@@ -207,7 +212,7 @@ FIELD_PATTERNS = {
     "comments": r'^(?:add\s+comments\s+|comment\s*[:,]?\s*|comments\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|time|weather|impression)\s*:)|$)',
     "clear": r'^(issues|activities|comments|tools|service|company|people|roles)\s*[:,]?\s*none$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": r'^(?:delete|remove)\s+(site|segment|category|company|person|people|role|roles|tool|service|activity|activities|issue|issues|time|weather|impression|comments)(?:\s*:\s*(.+))?$',
+    "delete": r'^(?:delete|remove)\s+(site|segment|category|company|person|people|role|roles|tool|service|activity|activities|issue|issues|time|weather|impression|comments)\s+(.+)$',
     "correct": r'^(?:correct\s+|update\s+)(site|segment|category|company|person|people|role|roles|tool|service|activity|activities|issue|issues|time|weather|impression|comments)\s+([^,\s]+(?:\s+[^,\s]+)*)\s+to\s+([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)'
 }
 
@@ -429,25 +434,54 @@ def extract_site_report(text):
             logger.info({"event": "reset_command_detected", "input": normalized_text})
             return {"reset": True}
 
+        # Split commands, but filter out those starting with delete or other commands
         commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)[^,]*$)|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
-        if len(commands) > 1:
-            seen_fields = set()
-            for cmd in commands:
-                cmd_result = extract_single_command(cmd)
-                if cmd_result.get("reset"):
-                    return {"reset": True}
-                for key, value in cmd_result.items():
-                    if key in seen_fields and key not in ["people", "company", "roles", "tools", "service", "activities", "issues"]:
-                        continue
-                    seen_fields.add(key)
-                    if key in ["people", "company", "roles", "tools", "service", "activities", "issues"]:
-                        result.setdefault(key, []).extend(value)
-                    else:
-                        result[key] = value
-            logger.info({"event": "multi_field_extracted", "result": result})
-            return result
+        processed_result = {"company": []}  # Initialize company list for handling
+        seen_fields = set()
 
-        return extract_single_command(text)
+        for cmd in commands:
+            # Skip commands that are clearly delete or other non-field commands
+            if re.match(r'^(?:delete|remove|add|correct|update)\s+', cmd, re.IGNORECASE):
+                # Handle delete commands explicitly
+                delete_match = re.match(FIELD_PATTERNS["delete"], cmd, re.IGNORECASE)
+                if delete_match:
+                    field = delete_match.group(1).lower()
+                    value = delete_match.group(2).strip()
+                    logger.info({"event": "delete_command_in_list", "field": field, "value": value})
+                    if field == "company":
+                        processed_result["company"].append({"delete": value})
+                    continue
+                # Skip other commands like add or correct unless they are valid field additions
+                continue
+
+            cmd_result = extract_single_command(cmd)
+            if cmd_result.get("reset"):
+                return {"reset": True}
+            for key, value in cmd_result.items():
+                if key in seen_fields and key not in ["people", "company", "roles", "tools", "service", "activities", "issues"]:
+                    continue
+                seen_fields.add(key)
+                if key == "company":
+                    processed_result["company"].extend(value)
+                elif key in ["people", "roles", "tools", "service", "activities", "issues"]:
+                    result.setdefault(key, []).extend(value)
+                else:
+                    result[key] = value
+
+        # Process company additions and deletions
+        if processed_result["company"]:
+            final_companies = []
+            existing_companies = [c["name"] for c in result.get("company", [])]
+            for item in processed_result["company"]:
+                if "delete" in item:
+                    company_to_delete = item["delete"]
+                    existing_companies = [c for c in existing_companies if c.lower() != company_to_delete.lower()]
+                else:
+                    final_companies.append(item)
+            result["company"] = [{"name": c} for c in existing_companies] + final_companies
+
+        logger.info({"event": "multi_field_extracted", "result": result})
+        return result
     except Exception as e:
         logger.error({"event": "extract_site_report_error", "input": text, "error": str(e)})
         raise
@@ -520,7 +554,12 @@ def extract_single_command(text):
                     logger.info({"event": "extracted_field", "field": "roles", "value": match.group(1) or "User"})
                 elif field == "company":
                     name = match.group(2) if match.group(2) else match.group(1)
-                    result["company"] = [{"name": name.strip()}]
+                    name = name.strip()
+                    # Skip if the name looks like a command
+                    if re.match(r'^(?:delete|remove|add|correct|update)\b', name.lower()):
+                        logger.info({"event": "skipped_company", "reason": "command-like name", "value": name})
+                        continue
+                    result["company"] = [{"name": name}]
                     logger.info({"event": "extracted_field", "field": "company", "value": name})
                 elif field == "clear":
                     field_name = match.group(1).lower()
@@ -889,9 +928,15 @@ def webhook():
         # Handle deletion commands
         delete_match = re.match(FIELD_PATTERNS["delete"], text, re.IGNORECASE)
         if delete_match:
-            logger.info({"event": "delete_command_detected", "groups": [delete_match.group(i) for i in range(1, len(delete_match.groups()) + 1)]})
-            field = delete_match.group(1).lower()
+            groups = [delete_match.group(i) for i in range(len(delete_match.groups()) + 1)]
+            logger.info({"event": "delete_command_detected", "groups": groups})
+            field = delete_match.group(1).lower() if delete_match.group(1) else None
             value = delete_match.group(2).strip() if delete_match.group(2) else None
+            if not field:
+                logger.error({"event": "delete_command_error", "text": text, "error": "No field captured"})
+                send_telegram_message(chat_id,
+                    f"⚠️ Invalid delete command: '{text}'. Try formats like 'delete company Taekwondo Agi' or 'delete comments'.")
+                return "ok", 200
             if field in ["person", "people"]:
                 field = "people"
             elif field in ["role", "roles"]:
@@ -922,7 +967,7 @@ def webhook():
             return "ok", 200
         if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
             send_telegram_message(chat_id,
-                f"⚠️ Unrecognized input: '{text}'. Try formats like 'add site Downtown Project', 'add people Tobias', 'add issue Power outage', or 'delete comments'. Examples: 'add segment B', 'add time morning', 'new report' to reset, 'correct site Downtown to Uptown'.")
+                f"⚠️ Unrecognized input: '{text}'. Try formats like 'add site Downtown Project', 'add company Acme Corp', 'delete company Taekwondo Agi', or 'Companies: A, B, C'. Examples: 'add segment B', 'add time morning', 'new report' to reset, 'correct site Downtown to Uptown'.")
             return "ok", 200
         sess["command_history"].append(sess["structured_data"].copy())
         sess["structured_data"] = merge_structured_data(
