@@ -4,6 +4,8 @@ import os
 import json
 import re
 import logging
+import signal
+import sys
 from datetime import datetime
 from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -30,6 +32,14 @@ except Exception as e:
     raise
 
 app = Flask(__name__)
+
+# --- Handle shutdown signals ---
+def handle_shutdown(signum, frame):
+    logger.info({"event": "shutdown_signal", "signal": signum})
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, handle_shutdown)
+signal.signal(signal.SIGINT, handle_shutdown)
 
 # --- Validate environment variables ---
 required_env_vars = ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"]
@@ -879,15 +889,9 @@ def webhook():
         # Handle deletion commands
         delete_match = re.match(FIELD_PATTERNS["delete"], text, re.IGNORECASE)
         if delete_match:
-            logger.info({"event": "delete_command_detected", "groups": [delete_match.group(i) for i in range(len(delete_match.groups()) + 1)]})
-            action = delete_match.group(1)
-            field = delete_match.group(2).lower() if delete_match.group(2) else None
-            value = delete_match.group(3).strip() if delete_match.group(3) else None
-            if not field:
-                logger.error({"event": "delete_command_error", "text": text, "error": "No field captured"})
-                send_telegram_message(chat_id,
-                    f"⚠️ Invalid delete command: '{text}'. Try formats like 'delete comments' or 'delete issue Water Leakage'.")
-                return "ok", 200
+            logger.info({"event": "delete_command_detected", "groups": [delete_match.group(i) for i in range(1, len(delete_match.groups()) + 1)]})
+            field = delete_match.group(1).lower()
+            value = delete_match.group(2).strip() if delete_match.group(2) else None
             if field in ["person", "people"]:
                 field = "people"
             elif field in ["role", "roles"]:
@@ -947,7 +951,7 @@ logger.info({"event": "app_init", "message": "Initializing Flask app for deploym
 if __name__ == "__main__":
     try:
         logger.info({"event": "app_start", "mode": "local"})
-        app.run(port=int(os.getenv("PORT", 5000)), debug=True)
+        app.run(port=int(os.getenv("PORT", 10000)), debug=True)
     except Exception as e:
         logger.error({"event": "app_start_error", "error": str(e)})
         raise
