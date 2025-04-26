@@ -358,6 +358,7 @@ def merge_structured_data(existing, new):
                             break
                     if not replaced and new_item not in existing_list:
                         existing_list.append(new_item)
+                       .operator
                         logger.info({"event": "added_company", "name": new_name})
                 merged[key] = existing_list
             elif key == "roles":
@@ -615,6 +616,10 @@ def webhook():
         send_telegram_message(chat_id,
             f"Here’s what I understood:\n\n{tpl}\n\nIs this correct? Reply with corrections or more details.")
         return "ok", 200
+
+    except Exception as e:
+        logger.error({"event": "webhook_error", "error": str(e)})
+        return "error", 500
 
 @app.get("/")
 def health():
