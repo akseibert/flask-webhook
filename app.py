@@ -16,34 +16,44 @@ from reportlab.lib.styles import getSampleStyleSheet
 import io
 
 # --- Initialize logging ---
-logging.basicConfig(
-    filename="/opt/render/project/src/app.log",
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-logger.addHandler(logging.StreamHandler())
+try:
+    logging.basicConfig(
+        filename="/opt/render/project/src/app.log",
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+    logger.addHandler(logging.StreamHandler())
+    logger.info({"event": "logging_initialized"})
+except Exception as e:
+    print(f"Failed to initialize logging: {e}")
+    raise
+
+app = Flask(__name__)
 
 # --- Validate environment variables ---
 required_env_vars = ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"]
 optional_env_vars = ["SHAREPOINT_CLIENT_ID", "SHAREPOINT_CLIENT_SECRET", "SHAREPOINT_TENANT_ID", "SHAREPOINT_SITE_ID", "SHAREPOINT_LIST_ID"]
-for var in required_env_vars:
-    if not os.getenv(var):
-        logger.error(f"Missing required environment variable: {var}")
-        raise ValueError(f"Missing {var}")
-for var in optional_env_vars:
-    if not os.getenv(var):
-        logger.warning(f"Optional environment variable {var} not set; SharePoint integration disabled until configured")
+try:
+    for var in required_env_vars:
+        if not os.getenv(var):
+            logger.error(f"Missing required environment variable: {var}")
+            raise ValueError(f"Missing {var}")
+    for var in optional_env_vars:
+        if not os.getenv(var):
+            logger.warning(f"Optional environment variable {var} not set; SharePoint integration disabled until configured")
+    logger.info({"event": "env_vars_validated"})
+except Exception as e:
+    logger.error(f"Environment variable validation failed: {e}")
+    raise
 
 # --- Initialize OpenAI client ---
 try:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    logger.info("OpenAI client initialized")
+    logger.info({"event": "openai_client_initialized"})
 except Exception as e:
-    logger.error(f"OpenAI init failed: {e}")
+    logger.error(f"OpenAI initialization failed: {e}")
     raise
-
-app = Flask(__name__)
 
 # --- GPT Prompt for complex input parsing ---
 gpt_prompt = """
@@ -128,7 +138,9 @@ def load_session_data():
                 for chat_id in data:
                     if "command_history" in data[chat_id]:
                         data[chat_id]["command_history"] = deque(data[chat_id]["command_history"], maxlen=MAX_HISTORY)
+                logger.info({"event": "session_data_loaded"})
                 return data
+        logger.info({"event": "session_data_not_found", "file": SESSION_FILE})
         return {}
     except Exception as e:
         logger.error(f"Failed to load session data: {e}")
@@ -149,7 +161,12 @@ def save_session_data(data):
     except Exception as e:
         logger.error(f"Failed to save session data: {e}")
 
-session_data = load_session_data()
+try:
+    session_data = load_session_data()
+    logger.info({"event": "session_data_initialized"})
+except Exception as e:
+    logger.error(f"Session data initialization failed: {e}")
+    raise
 
 def blank_report():
     today = datetime.now().strftime("%d-%m-%Y")
@@ -167,7 +184,7 @@ FIELD_PATTERNS = {
     "segment": r'^(?:add\s+segment\s+|segment\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|category|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$|\s*\.)',
     "category": r'^(?:add\s+category\s+|category\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$|\s*\.)',
     "impression": r'^(?:add\s+impression\s+|impression\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|time|weather|comments)\s*:)|$)',
-    "people": r'^(?:add\s+|people\s+|person\s+|add\s+people\s+|people\s+add\s+|person\s+add\s+)([^,\s]+)(?:\s+as\s+[^,]+?)?(?=(?:\s*,\s*(?:site|segment|category|company|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
+    "people": r'^(?:add\s+|people\s+|person\s+|add\s+people\s+|people\s+add\s+|person\s+add\s+)([^,\s]+)(?:\s+as\s+[^,\s]+)?(?=(?:\s*,\s*(?:site|segment|category|company|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
     "role": r'^(?:add\s+|people\s+|person\s+)?(\w+\s+\w+)\s*[:,]?\s*as\s+([^,\s]+)(?:\s+to\s+people)?(?=(?:\s*,\s*(?:site|segment|category|company|people|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)|^(?:person|people)\s*[:,]?\s*(\w+\s+\w+)\s*,\s*role\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|company|people|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
     "supervisor": r'^(?:supervisors\s*(?:were|are)\s+|i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|add\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*$)([^,]+?)?(?=(?:\s*,\s*(?:site|segment|category|company|people|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
     "company": r'^(?:add\s+company\s+|company\s*[:,]?\s*|companies\s*[:,]?\s*|add\s+([^,]+?)\s+as\s+company\s*)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
@@ -184,28 +201,45 @@ FIELD_PATTERNS = {
     "correct": r'^(?:correct\s+|update\s+)(site|segment|category|company|person|people|role|roles|tool|service|activity|activities|issue|issues|time|weather|impression|comments)\s+([^,\s]+(?:\s+[^,\s]+)*)\s+to\s+([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)'
 }
 
+# Validate regex patterns
+try:
+    for field, pattern in FIELD_PATTERNS.items():
+        re.compile(pattern, re.IGNORECASE)
+    logger.info({"event": "regex_patterns_validated"})
+except Exception as e:
+    logger.error(f"Regex pattern validation failed for field {field}: {e}")
+    raise
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def send_telegram_message(chat_id, text):
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    response = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
-    response.raise_for_status()
-    logger.info({"event": "send_telegram_message", "chat_id": chat_id, "text": text[:50]})
-    return response
+    try:
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        response = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+        response.raise_for_status()
+        logger.info({"event": "send_telegram_message", "chat_id": chat_id, "text": text[:50]})
+        return response
+    except Exception as e:
+        logger.error({"event": "send_telegram_message_error", "chat_id": chat_id, "error": str(e)})
+        raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def get_telegram_file_path(file_id):
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    response = requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}")
-    response.raise_for_status()
-    file_path = response.json()["result"]["file_path"]
-    return f"https://api.telegram.org/file/bot{token}/{file_path}"
+    try:
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        response = requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}")
+        response.raise_for_status()
+        file_path = response.json()["result"]["file_path"]
+        logger.info({"event": "get_telegram_file_path", "file_id": file_id})
+        return f"https://api.telegram.org/file/bot{token}/{file_path}"
+    except Exception as e:
+        logger.error({"event": "get_telegram_file_path_error", "file_id": file_id, "error": str(e)})
+        raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def transcribe_from_telegram_voice(file_id):
     try:
         audio_url = get_telegram_file_path(file_id)
-        logger.info({"event": "fetch_audio", "url": audio_url})
         audio_response = requests.get(audio_url)
         audio_response.raise_for_status()
         audio = audio_response.content
@@ -292,379 +326,409 @@ def send_pdf_to_user(chat_id, pdf_buffer):
         return False
 
 def enrich_with_date(d):
-    today = datetime.now().strftime("%d-%m-%Y")
-    if not d.get("date"):
-        d["date"] = today
-    else:
-        try:
-            input_date = datetime.strptime(d["date"], "%d-%m-%Y")
-            if input_date > datetime.now():
-                d["date"] = today
-        except ValueError:
+    try:
+        today = datetime.now().strftime("%d-%m-%Y")
+        if not d.get("date"):
             d["date"] = today
-    return d
+        else:
+            try:
+                input_date = datetime.strptime(d["date"], "%d-%m-%Y")
+                if input_date > datetime.now():
+                    d["date"] = today
+            except ValueError:
+                d["date"] = today
+        return d
+    except Exception as e:
+        logger.error({"event": "enrich_with_date_error", "error": str(e)})
+        raise
 
 def summarize_data(d):
-    logger.info({"event": "summarize_data", "data": json.dumps(d, indent=2)})
-    lines = []
-    lines.append(f"🏗️ **Site**: {d.get('site_name', '') or ''}")
-    lines.append(f"🛠️ **Segment**: {d.get('segment', '') or ''}")
-    lines.append(f"📋 **Category**: {d.get('category', '') or ''}")
-    lines.append(
-        "🏢 **Companies**: " +
-        ", ".join(c.get("name", "") if isinstance(c, dict) else str(c) for c in d.get("company", [])) or ""
-    )
-    lines.append(
-        "👷 **People**: " +
-        ", ".join(p for p in d.get("people", []) if p) or ""
-    )
-    lines.append(
-        "🎭 **Roles**: " +
-        ", ".join(
-            f"{r.get('name', '')} ({r.get('role', '')})" if isinstance(r, dict) and r.get('role') else r.get('name', '')
-            for r in d.get("roles", [])
-        ) or ""
-    )
-    lines.append(
-        "🔧 **Services**: " +
-        ", ".join(
-            f"{s.get('task', '')}" if isinstance(s, dict) and s.get('task') else str(s)
-            for s in d.get("service", []) if s.get('task')
-        ) or ""
-    )
-    lines.append(
-        "🛠️ **Tools**: " +
-        ", ".join(
-            f"{t.get('item', '')}" if isinstance(t, dict) and t.get('item') else str(t)
-            for t in d.get("tools", []) if t.get('item')
-        ) or ""
-    )
-    lines.append("📅 **Activities**: " + ", ".join(d.get("activities", [])) or "")
-    lines.append("⚠️ **Issues**:")
-    valid_issues = [
-        i for i in d.get("issues", []) if isinstance(i, dict) and i.get("description", "").strip()
-    ]
-    if valid_issues:
-        for i in valid_issues:
-            desc = i["description"]
-            by = i.get("caused_by", "")
-            photo = " 📸" if i.get("has_photo") else ""
-            extra = f" (by {by})" if by else ""
-            lines.append(f"  • {desc}{extra}{photo}")
-    else:
-        lines.append("")
-    lines.append(f"⏰ **Time**: {d.get('time', '') or ''}")
-    lines.append(f"🌦️ **Weather**: {d.get('weather', '') or ''}")
-    lines.append(f"😊 **Impression**: {d.get('impression', '') or ''}")
-    lines.append(f"💬 **Comments**: {d.get('comments', '') or ''}")
-    lines.append(f"📆 **Date**: {d.get('date', '') or ''}")
-    summary = "\n".join(line for line in lines if line.strip())
-    logger.info({"event": "summary_generated", "summary": summary})
-    return summary
+    try:
+        logger.info({"event": "summarize_data", "data": json.dumps(d, indent=2)})
+        lines = []
+        lines.append(f"🏗️ **Site**: {d.get('site_name', '') or ''}")
+        lines.append(f"🛠️ **Segment**: {d.get('segment', '') or ''}")
+        lines.append(f"📋 **Category**: {d.get('category', '') or ''}")
+        lines.append(
+            "🏢 **Companies**: " +
+            ", ".join(c.get("name", "") if isinstance(c, dict) else str(c)
+                      for c in d.get("company", [])) or ""
+        )
+        lines.append(
+            "👷 **People**: " +
+            ", ".join(p for p in d.get("people", []) if p) or ""
+        )
+        lines.append(
+            "🎭 **Roles**: " +
+            ", ".join(
+                f"{r.get('name', '')} ({r.get('role', '')})" if isinstance(r, dict) and r.get('role') else r.get('name', '')
+                for r in d.get("roles", [])
+            ) or ""
+        )
+        lines.append(
+            "🔧 **Services**: " +
+            ", ".join(
+                f"{s.get('task', '')}" if isinstance(s, dict) and s.get('task') else str(s)
+                for s in d.get("service", []) if s.get('task')
+            ) or ""
+        )
+        lines.append(
+            "🛠️ **Tools**: " +
+            ", ".join(
+                f"{t.get('item', '')}" if isinstance(t, dict) and t.get('item') else str(t)
+                for t in d.get("tools", []) if t.get('item')
+            ) or ""
+        )
+        lines.append("📅 **Activities**: " + ", ".join(d.get("activities", [])) or "")
+        lines.append("⚠️ **Issues**:")
+        valid_issues = [
+            i for i in d.get("issues", [])
+            if isinstance(i, dict) and i.get("description", "").strip()
+        ]
+        if valid_issues:
+            for i in valid_issues:
+                desc = i["description"]
+                by = i.get("caused_by", "")
+                photo = " 📸" if i.get("has_photo") else ""
+                extra = f" (by {by})" if by else ""
+                lines.append(f"  • {desc}{extra}{photo}")
+        else:
+            lines.append("")
+        lines.append(f"⏰ **Time**: {d.get('time', '') or ''}")
+        lines.append(f"🌦️ **Weather**: {d.get('weather', '') or ''}")
+        lines.append(f"😊 **Impression**: {d.get('impression', '') or ''}")
+        lines.append(f"💬 **Comments**: {d.get('comments', '') or ''}")
+        lines.append(f"📆 **Date**: {d.get('date', '') or ''}")
+        summary = "\n".join(line for line in lines if line.strip())
+        logger.info({"event": "summary_generated", "summary": summary})
+        return summary
+    except Exception as e:
+        logger.error({"event": "summarize_data_error", "error": str(e)})
+        raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def extract_site_report(text):
-    logger.info({"event": "extract_site_report", "input_text": text})
-    result = {}
+    try:
+        logger.info({"event": "extract_site_report", "input_text": text})
+        result = {}
 
-    normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
+        normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
 
-    reset_match = re.match(FIELD_PATTERNS["reset"], normalized_text, re.IGNORECASE)
-    if reset_match:
-        logger.info({"event": "reset_command_detected", "input": normalized_text})
-        return {"reset": True}
+        reset_match = re.match(FIELD_PATTERNS["reset"], normalized_text, re.IGNORECASE)
+        if reset_match:
+            logger.info({"event": "reset_command_detected", "input": normalized_text})
+            return {"reset": True}
 
-    commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)[^,]*$)|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
-    if len(commands) > 1:
-        seen_fields = set()
-        for cmd in commands:
-            cmd_result = extract_single_command(cmd)
-            if cmd_result.get("reset"):
-                return {"reset": True}
-            for key, value in cmd_result.items():
-                if key in seen_fields and key not in ["people", "company", "roles", "tools", "service", "activities", "issues"]:
-                    continue
-                seen_fields.add(key)
-                if key in ["people", "company", "roles", "tools", "service", "activities", "issues"]:
-                    result.setdefault(key, []).extend(value)
-                else:
-                    result[key] = value
-        logger.info({"event": "multi_field_extracted", "result": result})
-        return result
-
-    return extract_single_command(text)
-
-def extract_single_command(text):
-    result = {}
-
-    normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
-
-    reset_match = re.match(FIELD_PATTERNS["reset"], normalized_text, re.IGNORECASE)
-    if reset_match:
-        logger.info({"event": "reset_command", "input": normalized_text})
-        return {"reset": True}
-
-    if normalized_text.lower() in ("undo", "/undo"):
-        logger.info({"event": "undo_command"})
-        return {"undo": True}
-
-    if normalized_text.lower() in ("status", "/status"):
-        logger.info({"event": "status_command"})
-        return {"status": True}
-
-    if normalized_text.lower() in ("export pdf", "/export pdf"):
-        logger.info({"event": "export_pdf_command"})
-        return {"export_pdf": True}
-
-    correct_match = re.match(FIELD_PATTERNS["correct"], text, re.IGNORECASE)
-    if correct_match:
-        field = correct_match.group(1).lower()
-        old_value = correct_match.group(2).strip()
-        new_value = correct_match.group(3).strip()
-        if field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
-            result[field] = new_value
-        elif field in ["company", "tools", "service", "activities", "issues"]:
-            result[field] = [{"name" if field == "company" else "item" if field == "tools" else "task" if field == "service" else "description": new_value}]
-        elif field == "people":
-            result["people"] = [new_value]
-        elif field == "roles":
-            result["roles"] = [{"name": new_value, "role": old_value}]
-        logger.info({"event": "corrected_field", "field": field, "old": old_value, "new": new_value})
-        return result
-
-    for field, pattern in FIELD_PATTERNS.items():
-        if field in ["reset", "delete", "correct"]:
-            continue
-        match = re.match(pattern, text, re.IGNORECASE)
-        if match:
-            if field == "site_name" and re.search(r'\b(add|delete|remove|correct|update|none|as|role|new|reset)\b', text.lower()):
-                continue
-            if field == "people":
-                name = match.group(1).strip()
-                result["people"] = [name]
-                logger.info({"event": "extracted_field", "field": "people", "value": name})
-            elif field == "role":
-                name = match.group(1) or match.group(3)
-                role = match.group(2) or match.group(4)
-                role = role.title()
-                result["people"] = [name.strip()]
-                result["roles"] = [{"name": name.strip(), "role": role}]
-                logger.info({"event": "extracted_field", "field": "role", "name": name, "role": role})
-            elif field == "supervisor":
-                if match.group(1):
-                    names = [name.strip() for name in match.group(1).split("and") if name.strip()]
-                    result["people"] = names
-                    result["roles"] = [{"name": name, "role": "Supervisor"} for name in names]
-                else:
-                    result["people"] = ["User"]
-                    result["roles"] = [{"name": "User", "role": "Supervisor"}]
-                logger.info({"event": "extracted_field", "field": "supervisor", "value": match.group(1) or "User"})
-            elif field == "company":
-                name = match.group(2) if match.group(2) else match.group(1)
-                result["company"] = [{"name": name.strip()}]
-                logger.info({"event": "extracted_field", "field": "company", "value": name})
-            elif field == "clear":
-                field_name = match.group(1).lower()
-                result[field_name] = [] if field_name in ["issues", "activities", "tools", "service", "company", "people", "roles"] else ""
-                logger.info({"event": "extracted_field", "field": "clear", "value": field_name})
-            elif field in ["service", "tool"]:
-                value = match.group(1).strip()
-                if value.lower() == "none":
-                    result[field] = []
-                else:
-                    result[field] = [{"task" if field == "service" else "item": value}]
-                logger.info({"event": "extracted_field", "field": field, "value": value})
-            else:
-                value = match.group(1).strip()
-                result[field] = value
-                logger.info({"event": "extracted_field", "field": field, "value": value})
+        commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)[^,]*$)|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
+        if len(commands) > 1:
+            seen_fields = set()
+            for cmd in commands:
+                cmd_result = extract_single_command(cmd)
+                if cmd_result.get("reset"):
+                    return {"reset": True}
+                for key, value in cmd_result.items():
+                    if key in seen_fields and key not in ["people", "company", "roles", "tools", "service", "activities", "issues"]:
+                        continue
+                    seen_fields.add(key)
+                    if key in ["people", "company", "roles", "tools", "service", "activities", "issues"]:
+                        result.setdefault(key, []).extend(value)
+                    else:
+                        result[key] = value
+            logger.info({"event": "multi_field_extracted", "result": result})
             return result
 
-    messages = [
-        {"role": "system", "content": "Extract explicitly stated fields from construction site report input. Handle multi-field inputs by processing the entire input as a single unit. Return JSON with extracted fields."},
-        {"role": "user", "content": gpt_prompt + "\nInput text: " + text}
-    ]
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo", messages=messages, temperature=0.2
-        )
-        raw_response = response.choices[0].message.content
-        logger.info({"event": "gpt_response", "raw_response": raw_response})
-        data = json.loads(raw_response)
-        logger.info({"event": "gpt_extracted", "data": data})
-        for field in ["category", "segment"]:
-            if field in data and isinstance(data[field], str):
-                data[field] = re.sub(r'^(category|segment)\s*:?\s*', '', data[field], flags=re.IGNORECASE).strip()
-        for field in ["tools", "service"]:
-            if field in data:
-                for item in data[field]:
-                    if isinstance(item, dict) and "company" in item and not item["company"]:
-                        del item["company"]
-        if "roles" in data:
-            for role in data["roles"]:
-                if isinstance(role, dict) and "name" in role and role["name"] not in data.get("people", []):
-                    data.setdefault("people", []).append(role["name"])
-        if not data and text.strip():
-            issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
-            activity_keywords = r'\b(work\s+was\s+done|activity|task|progress|construction|building|laying|setting|wiring|installation|scaffolding)\b'
-            location_keywords = r'\b(at|in|on)\b'
-            if re.search(issue_keywords, text.lower()):
-                data = {"issues": [{"description": text.strip()}]}
-                logger.info({"event": "fallback_issue", "data": data})
-            elif re.search(activity_keywords, text.lower()) and re.search(location_keywords, text.lower()):
-                parts = re.split(r'\b(at|in|on)\b', text, flags=re.IGNORECASE)
-                location = ", ".join(part.strip().title() for part in parts[2::2] if part.strip())
-                activity = parts[0].strip()
-                data = {"site_name": location, "activities": [activity]}
-                logger.info({"event": "fallback_activity_site", "data": data})
-            else:
-                data = {"comments": text.strip()}
-                logger.info({"event": "fallback_comments", "data": data})
-        return data
+        return extract_single_command(text)
     except Exception as e:
-        logger.error({"event": "gpt_extract_error", "input": text, "error": str(e)})
-        if text.strip():
-            issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
-            if re.search(issue_keywords, text.lower()):
-                data = {"issues": [{"description": text.strip()}]}
-                logger.info({"event": "fallback_issue_error", "data": data})
-                return data
-            logger.info({"event": "fallback_comments_error", "input": text})
-            return {"comments": text.strip()}
-        return {}
+        logger.error({"event": "extract_site_report_error", "input": text, "error": str(e)})
+        raise
+
+def extract_single_command(text):
+    try:
+        result = {}
+
+        normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
+
+        reset_match = re.match(FIELD_PATTERNS["reset"], normalized_text, re.IGNORECASE)
+        if reset_match:
+            logger.info({"event": "reset_command", "input": normalized_text})
+            return {"reset": True}
+
+        if normalized_text.lower() in ("undo", "/undo"):
+            logger.info({"event": "undo_command"})
+            return {"undo": True}
+
+        if normalized_text.lower() in ("status", "/status"):
+            logger.info({"event": "status_command"})
+            return {"status": True}
+
+        if normalized_text.lower() in ("export pdf", "/export pdf"):
+            logger.info({"event": "export_pdf_command"})
+            return {"export_pdf": True}
+
+        correct_match = re.match(FIELD_PATTERNS["correct"], text, re.IGNORECASE)
+        if correct_match:
+            field = correct_match.group(1).lower()
+            old_value = correct_match.group(2).strip()
+            new_value = correct_match.group(3).strip()
+            if field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
+                result[field] = new_value
+            elif field in ["company", "tools", "service", "activities", "issues"]:
+                result[field] = [{"name" if field == "company" else "item" if field == "tools" else "task" if field == "service" else "description": new_value}]
+            elif field == "people":
+                result["people"] = [new_value]
+            elif field == "roles":
+                result["roles"] = [{"name": new_value, "role": old_value}]
+            logger.info({"event": "corrected_field", "field": field, "old": old_value, "new": new_value})
+            return result
+
+        for field, pattern in FIELD_PATTERNS.items():
+            if field in ["reset", "delete", "correct"]:
+                continue
+            match = re.match(pattern, text, re.IGNORECASE)
+            if match:
+                if field == "site_name" and re.search(r'\b(add|delete|remove|correct|update|none|as|role|new|reset)\b', text.lower()):
+                    continue
+                if field == "people":
+                    name = match.group(1).strip()
+                    result["people"] = [name]
+                    logger.info({"event": "extracted_field", "field": "people", "value": name})
+                elif field == "role":
+                    name = match.group(1) or match.group(3)
+                    role = match.group(2) or match.group(4)
+                    role = role.title()
+                    result["people"] = [name.strip()]
+                    result["roles"] = [{"name": name.strip(), "role": role}]
+                    logger.info({"event": "extracted_field", "field": "role", "name": name, "role": role})
+                elif field == "supervisor":
+                    if match.group(1):
+                        names = [name.strip() for name in match.group(1).split("and") if name.strip()]
+                        result["people"] = names
+                        result["roles"] = [{"name": name, "role": "Supervisor"} for name in names]
+                    else:
+                        result["people"] = ["User"]
+                        result["roles"] = [{"name": "User", "role": "Supervisor"}]
+                    logger.info({"event": "extracted_field", "field": "supervisor", "value": match.group(1) or "User"})
+                elif field == "company":
+                    name = match.group(2) if match.group(2) else match.group(1)
+                    result["company"] = [{"name": name.strip()}]
+                    logger.info({"event": "extracted_field", "field": "company", "value": name})
+                elif field == "clear":
+                    field_name = match.group(1).lower()
+                    result[field_name] = [] if field_name in ["issues", "activities", "tools", "service", "company", "people", "roles"] else ""
+                    logger.info({"event": "extracted_field", "field": "clear", "value": field_name})
+                elif field in ["service", "tool"]:
+                    value = match.group(1).strip()
+                    if value.lower() == "none":
+                        result[field] = []
+                    else:
+                        result[field] = [{"task" if field == "service" else "item": value}]
+                    logger.info({"event": "extracted_field", "field": field, "value": value})
+                else:
+                    value = match.group(1).strip()
+                    result[field] = value
+                    logger.info({"event": "extracted_field", "field": field, "value": value})
+                return result
+
+        messages = [
+            {"role": "system", "content": "Extract explicitly stated fields from construction site report input. Handle multi-field inputs by processing the entire input as a single unit. Return JSON with extracted fields."},
+            {"role": "user", "content": gpt_prompt + "\nInput text: " + text}
+        ]
+        try:
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo", messages=messages, temperature=0.2
+            )
+            raw_response = response.choices[0].message.content
+            logger.info({"event": "gpt_response", "raw_response": raw_response})
+            data = json.loads(raw_response)
+            logger.info({"event": "gpt_extracted", "data": data})
+            for field in ["category", "segment"]:
+                if field in data and isinstance(data[field], str):
+                    data[field] = re.sub(r'^(category|segment)\s*:?\s*', '', data[field], flags=re.IGNORECASE).strip()
+            for field in ["tools", "service"]:
+                if field in data:
+                    for item in data[field]:
+                        if isinstance(item, dict) and "company" in item and not item["company"]:
+                            del item["company"]
+            if "roles" in data:
+                for role in data["roles"]:
+                    if isinstance(role, dict) and "name" in role and role["name"] not in data.get("people", []):
+                        data.setdefault("people", []).append(role["name"])
+            if not data and text.strip():
+                issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
+                activity_keywords = r'\b(work\s+was\s+done|activity|task|progress|construction|building|laying|setting|wiring|installation|scaffolding)\b'
+                location_keywords = r'\b(at|in|on)\b'
+                if re.search(issue_keywords, text.lower()):
+                    data = {"issues": [{"description": text.strip()}]}
+                    logger.info({"event": "fallback_issue", "data": data})
+                elif re.search(activity_keywords, text.lower()) and re.search(location_keywords, text.lower()):
+                    parts = re.split(r'\b(at|in|on)\b', text, flags=re.IGNORECASE)
+                    location = ", ".join(part.strip().title() for part in parts[2::2] if part.strip())
+                    activity = parts[0].strip()
+                    data = {"site_name": location, "activities": [activity]}
+                    logger.info({"event": "fallback_activity_site", "data": data})
+                else:
+                    data = {"comments": text.strip()}
+                    logger.info({"event": "fallback_comments", "data": data})
+            return data
+        except Exception as e:
+            logger.error({"event": "gpt_extract_error", "input": text, "error": str(e)})
+            if text.strip():
+                issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
+                if re.search(issue_keywords, text.lower()):
+                    data = {"issues": [{"description": text.strip()}]}
+                    logger.info({"event": "fallback_issue_error", "data": data})
+                    return data
+                logger.info({"event": "fallback_comments_error", "input": text})
+                return {"comments": text.strip()}
+            return {}
+    except Exception as e:
+        logger.error({"event": "extract_single_command_error", "input": text, "error": str(e)})
+        raise
 
 def string_similarity(a, b):
-    similarity = SequenceMatcher(None, a.lower(), b.lower()).ratio()
-    logger.info({"event": "string_similarity", "a": a, "b": b, "similarity": similarity})
-    return similarity
+    try:
+        similarity = SequenceMatcher(None, a.lower(), b.lower()).ratio()
+        logger.info({"event": "string_similarity", "a": a, "b": b, "similarity": similarity})
+        return similarity
+    except Exception as e:
+        logger.error({"event": "string_similarity_error", "error": str(e)})
+        raise
 
 def merge_structured_data(existing, new):
-    merged = existing.copy()
-    for key, value in new.items():
-        if key in ["reset", "undo", "status", "export_pdf"]:
-            continue
-        if key in ["company", "roles", "tools", "service", "activities", "issues"]:
-            if value == []:
-                merged[key] = []
-                logger.info({"event": "cleared_list", "field": key})
+    try:
+        merged = existing.copy()
+        for key, value in new.items():
+            if key in ["reset", "undo", "status", "export_pdf"]:
                 continue
-            existing_list = merged.get(key, [])
-            new_items = value if isinstance(value, list) else []
-            if key == "company":
-                for new_item in new_items:
-                    if not isinstance(new_item, dict) or "name" not in new_item:
-                        continue
-                    new_name = new_item.get("name", "")
-                    replaced = False
-                    for i, existing_item in enumerate(existing_list):
-                        if (isinstance(existing_item, dict) and
-                            string_similarity(existing_item.get("name", ""), new_name) > 0.6):
-                            existing_list[i] = new_item
-                            replaced = True
-                            logger.info({"event": "replaced_company", "old": existing_item.get("name"), "new": new_name})
-                            break
-                    if not replaced and new_item not in existing_list:
-                        existing_list.append(new_item)
-                        logger.info({"event": "added_company", "name": new_name})
-                merged[key] = existing_list
-            elif key == "roles":
-                for new_item in new_items:
-                    if not isinstance(new_item, dict) or "name" not in new_item:
-                        continue
-                    new_name = new_item.get("name", "")
-                    replaced = False
-                    for i, existing_item in enumerate(existing_list):
-                        if (isinstance(existing_item, dict) and
-                            string_similarity(existing_item.get("name", ""), new_name) > 0.6):
-                            existing_list[i] = new_item
-                            replaced = True
-                            logger.info({"event": "replaced_role", "name": new_name})
-                            break
-                    if not replaced:
-                        existing_list.append(new_item)
-                        logger.info({"event": "added_role", "name": new_name})
-                merged[key] = existing_list
-            elif key == "issues":
-                for new_item in new_items:
-                    if not isinstance(new_item, dict) or "description" not in new_item:
-                        continue
-                    new_desc = new_item.get("description", "")
-                    replaced = False
-                    for i, existing_item in enumerate(existing_list):
-                        if (isinstance(existing_item, dict) and
-                            string_similarity(existing_item.get("description", ""), new_desc) > 0.6):
-                            existing_list[i] = new_item
-                            replaced = True
-                            logger.info({"event": "replaced_issue", "old": existing_item.get("description"), "new": new_desc})
-                            break
-                    if not replaced:
-                        existing_list.append(new_item)
-                        logger.info({"event": "added_issue", "description": new_desc})
+            if key in ["company", "roles", "tools", "service", "activities", "issues"]:
+                if value == []:
+                    merged[key] = []
+                    logger.info({"event": "cleared_list", "field": key})
+                    continue
+                existing_list = merged.get(key, [])
+                new_items = value if isinstance(value, list) else []
+                if key == "company":
+                    for new_item in new_items:
+                        if not isinstance(new_item, dict) or "name" not in new_item:
+                            continue
+                        new_name = new_item.get("name", "")
+                        replaced = False
+                        for i, existing_item in enumerate(existing_list):
+                            if (isinstance(existing_item, dict) and
+                                string_similarity(existing_item.get("name", ""), new_name) > 0.6):
+                                existing_list[i] = new_item
+                                replaced = True
+                                logger.info({"event": "replaced_company", "old": existing_item.get("name"), "new": new_name})
+                                break
+                        if not replaced and new_item not in existing_list:
+                            existing_list.append(new_item)
+                            logger.info({"event": "added_company", "name": new_name})
+                    merged[key] = existing_list
+                elif key == "roles":
+                    for new_item in new_items:
+                        if not isinstance(new_item, dict) or "name" not in new_item:
+                            continue
+                        new_name = new_item.get("name", "")
+                        replaced = False
+                        for i, existing_item in enumerate(existing_list):
+                            if (isinstance(existing_item, dict) and
+                                string_similarity(existing_item.get("name", ""), new_name) > 0.6):
+                                existing_list[i] = new_item
+                                replaced = True
+                                logger.info({"event": "replaced_role", "name": new_name})
+                                break
+                        if not replaced:
+                            existing_list.append(new_item)
+                            logger.info({"event": "added_role", "name": new_name})
+                    merged[key] = existing_list
+                elif key == "issues":
+                    for new_item in new_items:
+                        if not isinstance(new_item, dict) or "description" not in new_item:
+                            continue
+                        new_desc = new_item.get("description", "")
+                        replaced = False
+                        for i, existing_item in enumerate(existing_list):
+                            if (isinstance(existing_item, dict) and
+                                string_similarity(existing_item.get("description", ""), new_desc) > 0.6):
+                                existing_list[i] = new_item
+                                replaced = True
+                                logger.info({"event": "replaced_issue", "old": existing_item.get("description"), "new": new_desc})
+                                break
+                        if not replaced:
+                            existing_list.append(new_item)
+                            logger.info({"event": "added_issue", "description": new_desc})
+                    merged[key] = existing_list
+                else:
+                    for item in new_items:
+                        if key in ["tools", "service"]:
+                            if not isinstance(item, dict) or ("item" not in item and "task" not in item):
+                                continue
+                            existing_items = [
+                                (existing_item.get("item") or existing_item.get("task"),
+                                 existing_item.get("company"))
+                                for existing_item in existing_list if isinstance(existing_item, dict)
+                            ]
+                            new_key = item.get("item") or item.get("task")
+                            if not any(string_similarity(existing_key, new_key) > 0.6 and
+                                       string_similarity(existing_company or "", item.get("company") or "") > 0.6
+                                       for existing_key, existing_company in existing_items):
+                                existing_list.append(item)
+                        elif item not in existing_list:
+                            existing_list.append(item)
+                    merged[key] = existing_list
+            elif key == "people":
+                existing_list = merged.get(key, [])
+                new_items = value if isinstance(value, list) else []
+                for item in new_items:
+                    if item and item not in existing_list:
+                        existing_list.append(item)
+                        logger.info({"event": "added_person", "name": item})
                 merged[key] = existing_list
             else:
-                for item in new_items:
-                    if key in ["tools", "service"]:
-                        if not isinstance(item, dict) or ("item" not in item and "task" not in item):
-                            continue
-                        existing_items = [
-                            (existing_item.get("item") or existing_item.get("task"),
-                             existing_item.get("company"))
-                            for existing_item in existing_list if isinstance(existing_item, dict)
-                        ]
-                        new_key = item.get("item") or item.get("task")
-                        if not any(string_similarity(existing_key, new_key) > 0.6 and
-                                   string_similarity(existing_company or "", item.get("company") or "") > 0.6
-                                   for existing_key, existing_company in existing_items):
-                            existing_list.append(item)
-                    elif item not in existing_list:
-                        existing_list.append(item)
-                merged[key] = existing_list
-        elif key == "people":
-            existing_list = merged.get(key, [])
-            new_items = value if isinstance(value, list) else []
-            for item in new_items:
-                if item and item not in existing_list:
-                    existing_list.append(item)
-                    logger.info({"event": "added_person", "name": item})
-            merged[key] = existing_list
-        else:
-            if value == "" and key in ["comments"]:
-                merged[key] = ""
-                logger.info({"event": "cleared_field", "field": key})
-            elif value:
-                merged[key] = value
-                logger.info({"event": "updated_field", "field": key, "value": value})
-    logger.info({"event": "merged_data", "data": json.dumps(merged, indent=2)})
-    return merged
+                if value == "" and key in ["comments"]:
+                    merged[key] = ""
+                    logger.info({"event": "cleared_field", "field": key})
+                elif value:
+                    merged[key] = value
+                    logger.info({"event": "updated_field", "field": key, "value": value})
+        logger.info({"event": "merged_data", "data": json.dumps(merged, indent=2)})
+        return merged
+    except Exception as e:
+        logger.error({"event": "merge_structured_data_error", "error": str(e)})
+        raise
 
 def delete_entry(data, field, value=None):
-    logger.info({"event": "delete_entry", "field": field, "value": value})
-    if field in ["company", "roles", "tools", "service", "issues"]:
-        if value:
-            data[field] = [item for item in data[field]
-                          if not (isinstance(item, dict) and
-                                  (item.get("name", "").lower() == value.lower() or
-                                   item.get("description", "").lower() == value.lower() or
-                                   item.get("item", "").lower() == value.lower() or
-                                   item.get("task", "").lower() == value.lower()))]
-        else:
-            data[field] = []
-    elif field in ["people"]:
-        if value:
-            data[field] = [item for item in data[field] if item.lower() != value.lower()]
-            data["roles"] = [role for role in data.get("roles", []) if role.get("name", "").lower() != value.lower()]
-        else:
-            data[field] = []
-            data["roles"] = []
-    elif field in ["activities"]:
-        if value:
-            data[field] = [item for item in data[field] if item.lower() != value.lower()]
-        else:
-            data[field] = []
-    elif field in ["site_name", "segment", "category", "time", "weather", "impression", "comments", "date"]:
-        data[field] = ""
-    logger.info({"event": "data_after_deletion", "data": json.dumps(data, indent=2)})
-    return data
+    try:
+        logger.info({"event": "delete_entry", "field": field, "value": value})
+        if field in ["company", "roles", "tools", "service", "issues"]:
+            if value:
+                data[field] = [item for item in data[field]
+                              if not (isinstance(item, dict) and
+                                      (item.get("name", "").lower() == value.lower() or
+                                       item.get("description", "").lower() == value.lower() or
+                                       item.get("item", "").lower() == value.lower() or
+                                       item.get("task", "").lower() == value.lower()))]
+            else:
+                data[field] = []
+        elif field in ["people"]:
+            if value:
+                data[field] = [item for item in data[field] if item.lower() != value.lower()]
+                data["roles"] = [role for role in data.get("roles", []) if role.get("name", "").lower() != value.lower()]
+            else:
+                data[field] = []
+                data["roles"] = []
+        elif field in ["activities"]:
+            if value:
+                data[field] = [item for item in data[field] if item.lower() != value.lower()]
+            else:
+                data[field] = []
+        elif field in ["site_name", "segment", "category", "time", "weather", "impression", "comments", "date"]:
+            data[field] = ""
+        logger.info({"event": "data_after_deletion", "data": json.dumps(data, indent=2)})
+        return data
+    except Exception as e:
+        logger.error({"event": "delete_entry_error", "field": field, "error": str(e)})
+        raise
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -727,6 +791,7 @@ def webhook():
                 return "ok", 200
 
         # Check for reset based on pause
+        normalized_text = re.sub(r'[.!?]\s*$', '', text.strip()).lower()
         if (current_time - sess.get("last_interaction", 0) > PAUSE_THRESHOLD and
                 normalized_text not in ("yes", "no", "new", "new report", "reset", "reset report", "/new", "existing", "continue")):
             sess["pending_input"] = text
@@ -843,12 +908,10 @@ def webhook():
         sess["awaiting_correction"] = True
         save_session_data(session_data)
         logger.info({"event": "updated_session", "awaiting_correction": sess["awaiting_correction"]})
-        tpl = summarize_data(sess["structured_data"])
         clarification = "\n\nPlease clarify vague inputs (e.g., 'many') with specific details." if any(v == "many" for v in extracted.get("activities", [])) else ""
         send_telegram_message(chat_id,
-            f"Here’s what I understood:\n\n{tpl}{clarification}\n\nIs this correct? Reply with corrections or more details.")
+            f"Here’s what I understood:\n\n{summarize_data(sess['structured_data'])}{clarification}\n\nIs this correct? Reply with corrections or more details.")
         return "ok", 200
-
     except Exception as e:
         logger.error({"event": "webhook_error", "error": str(e)})
         return "error", 500
@@ -862,5 +925,9 @@ def health():
 logger.info({"event": "app_init", "message": "Initializing Flask app for deployment"})
 
 if __name__ == "__main__":
-    logger.info({"event": "app_start", "mode": "local"})
-    app.run(port=int(os.getenv("PORT", 5000)), debug=True)
+    try:
+        logger.info({"event": "app_start", "mode": "local"})
+        app.run(port=int(os.getenv("PORT", 5000)), debug=True)
+    except Exception as e:
+        logger.error({"event": "app_start_error", "error": str(e)})
+        raise
