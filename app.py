@@ -172,7 +172,6 @@ def summarize_data(d):
     lines.append(f"😊 **Impression**: {d.get('impression', '') or ''}")
     lines.append(f"💬 **Comments**: {d.get('comments', '') or ''}")
     lines.append(f"📆 **Date**: {d.get('date', '') or ''}")
-    # Filter out empty lines to avoid extra newlines
     summary = "\n".join(line for line in lines if line.strip())
     logger.info(f"Generated summary: {summary}")
     return summary
@@ -198,27 +197,30 @@ Fields to extract (omit if not present):
 - date: string (format dd-mm-yyyy)
 
 Rules:
-- Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Issue:", etc., or clear intent in natural language.
+- Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Issue:", "Issues:", etc., or clear intent in natural language.
 - For segment and category:
   - Extract the value only (e.g., "Category: 3" -> "category": "3", not "Category 3").
   - Do not include the keyword "Segment" or "Category" in the value.
 - For issues:
   - Recognize keywords: "Issue", "Issues", "Problem", "Problems", "Delay", "Fault", "Error", or natural language (e.g., "The issue is...", "There’s a delay").
-  - "description" is mandatory.
+  - "Issues: none" or "Issues none" clears the issues list (return "issues": []).
+  - "description" is mandatory for non-empty issues.
   - "caused_by" is optional (e.g., "caused_by Supplier").
   - "has_photo" is true only if "with photo" or "has photo" is stated.
   - Handle multiple issues as separate objects.
 - For activities:
-  - Recognize keywords: "Work", "Activity", "Task", "Progress", "Construction", or action-oriented phrases (e.g., "Work was done").
+  - Recognize keywords: "Work", "Activity", "Activities", "Task", "Progress", "Construction", or action-oriented phrases (e.g., "Work was done").
+  - "Activities: none" or "Activities none" clears the activities list (return "activities": []).
 - For site_name:
   - Recognize keywords: "Site", "Location", "Project", or location-like phrases following "at", "in", "on" (e.g., "at ABC").
 - For people:
-  - Recognize "add [name] as [role]" or "Person: [name], role: [role]".
-  - If "add [name] as people", treat "people" as a generic role (e.g., {"name": "XYZ", "role": "Worker"}).
+  - Recognize "add [name] as [role]", "People [name] as [role]", or "Person: [name], role: [role]".
+  - If "add [name] as people" or "People [name] as people", treat "people" as a generic role (e.g., {"name": "XYZ", "role": "Worker"}).
 - For tools and service:
   - Only include "company" if explicitly stated in the context of the tool or service (e.g., "Crane by Acme Corp").
   - Do not infer company names from other fields (e.g., "company" list).
 - For comments:
+  - Recognize "Comments: none" or "Comments none" to clear comments (return "comments": "").
   - Use as a fallback for general statements that don’t clearly match other fields.
 - If input contains multiple fields (e.g., "Work was done at ABC, Issue: Delay"), extract all relevant fields.
 - Return {} only for irrelevant inputs (e.g., "Hello world").
@@ -229,8 +231,8 @@ Examples:
    Output: {"site_name": "Downtown Project", "issues": [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}]}
 2. Input: "Work was done at ABC"
    Output: {"site_name": "ABC", "activities": ["Work was done"]}
-3. Input: "Issue: Faulty wiring detected"
-   Output: {"issues": [{"description": "Faulty wiring detected"}]}
+3. Input: "Issues: none"
+   Output: {"issues": []}
 4. Input: "Company: Acme Corp, There’s a delay"
    Output: {"company": [{"name": "Acme Corp"}], "issues": [{"description": "Delay"}]}
 5. Input: "Hello world"
@@ -241,20 +243,31 @@ Examples:
    Output: {"site_name": "East Tower", "activities": ["Work"], "issues": [{"description": "Broken equipment"}]}
 8. Input: "Category: 3, Segment: 5"
    Output: {"category": "3", "segment": "5"}
-9. Input: "add Anna as people"
-   Output: {"people": [{"name": "Anna", "role": "Worker"}]}
-10. Input: "Service: Erecting steel frames"
+9. Input: "People Anna as Supervisor"
+   Output: {"people": [{"name": "Anna", "role": "Supervisor"}]}
+10. Input: "add XYZ as people"
+    Output: {"people": [{"name": "XYZ", "role": "Worker"}]}
+11. Input: "Service: Erecting steel frames"
     Output: {"service": [{"task": "Erecting steel frames"}]}
+12. Input: "Activities: none"
+    Output: {"activities": []}
 """
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def extract_site_report(text):
-    # Handle people addition with "as people"
-    person_match = re.match(r'^(?:add\s+)?(\w+\s*\w*)\s+as\s+(people|worker|\w+\s*\w*)$', text, re.IGNORECASE)
+    # Handle people addition with "as people" or "People [name] as [role]"
+    person_match = re.match(r'^(?:add\s+|people\s+)?(\w+\s*\w*)\s+as\s+(people|worker|\w+\s*\w*)$', text, re.IGNORECASE)
     if person_match:
         name, role = person_match.groups()
         role = "Worker" if role.lower() == "people" else role.title()
         return {"people": [{"name": name.strip(), "role": role}]}
+
+    # Handle "Issues none", "Activities none", "Comments none"
+    clear_match = re.match(r'^(issues|activities|comments)\s+none$', text, re.IGNORECASE)
+    if clear_match:
+        field = clear_match.group(1).lower()
+        field = "issues" if field == "issues" else "activities" if field == "activities" else "comments"
+        return {field: [] if field in ["issues", "activities"] else ""}
 
     messages = [
         {"role": "system", "content": "Extract explicitly stated fields; map ambiguous inputs to likely fields or comments based on keywords."},
@@ -330,6 +343,10 @@ def merge_structured_data(existing, new):
     merged = existing.copy()
     for key, value in new.items():
         if key in ["company", "people", "tools", "service", "activities", "issues"]:
+            if value == []:  # Handle "none" cases
+                merged[key] = []
+                logger.info(f"Cleared {key} list")
+                continue
             existing_list = merged.get(key, [])
             new_items = value if isinstance(value, list) else []
             if key == "company":
@@ -403,7 +420,10 @@ def merge_structured_data(existing, new):
                         existing_list.append(item)
                 merged[key] = existing_list
         else:
-            if value:
+            if value == "" and key in ["comments"]:  # Handle "Comments none"
+                merged[key] = ""
+                logger.info(f"Cleared {key}")
+            elif value:
                 merged[key] = value
     logger.info(f"Merged data: {json.dumps(merged, indent=2)}")
     return merged
@@ -417,8 +437,8 @@ def delete_entry(data, field, value=None):
                                item.get("description", "").lower() == value.lower() or
                                item.get("item", "").lower() == value.lower() or
                                item.get("task", "").lower() == value.lower()))]
-    elif field == "activities" and value:
-        data[field] = [item for item in data[field] if item.lower() != value.lower()]
+    elif field in ["activities", "issues"] and not value:
+        data[field] = []
     elif field in ["site_name", "segment", "category", "time", "weather", "impression", "comments", "date"]:
         data[field] = ""
     logger.info(f"Data after deletion: {json.dumps(data, indent=2)}")
@@ -539,13 +559,30 @@ def webhook():
                 "\n\nSpeak or type your first field (site name required).")
             return "ok", 200
 
+        # Handle clear commands (e.g., "Issues none", "Activities none")
+        clear_match = re.match(r'^(issues|activities|comments)\s+none$', text, re.IGNORECASE)
+        if clear_match:
+            field = clear_match.group(1).lower()
+            field = "issues" if field == "issues" else "activities" if field == "activities" else "comments"
+            sess["structured_data"][field] = [] if field in ["issues", "activities"] else ""
+            save_session_data(session_data)
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                f"Cleared {field}\n\nHere’s the updated report:\n\n" + tpl +
+                "\n\nAnything else to add or correct?")
+            return "ok", 200
+
         # Handle deletion commands
-        delete_match = re.match(r'^(delete|remove)\s+(site|segment|category|company|person|tool|service|activity|issue|time|weather|impression|comments)(?:\s*:\s*(.+))?$', text, re.IGNORECASE)
+        delete_match = re.match(r'^(delete|remove)\s+(site|segment|category|company|person|people|tool|service|activity|activities|issue|issues|time|weather|impression|comments)(?::\s*(.+))?$', text, re.IGNORECASE)
         if delete_match:
             action, field, value = delete_match.groups()
             field = field.lower()
-            if field == "person":
+            if field in ["person", "people"]:
                 field = "people"
+            elif field in ["activity", "activities"]:
+                field = "activities"
+            elif field in ["issue", "issues"]:
+                field = "issues"
             sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
             save_session_data(session_data)
             tpl = summarize_data(sess["structured_data"])
@@ -572,12 +609,16 @@ def webhook():
             return "ok", 200
 
         # Handle corrections explicitly
-        correction_match = re.match(r'^(correct|update)\s+(company|person|issue)\s+(.+?)\s+to\s+(.+)$', text, re.IGNORECASE)
+        correction_match = re.match(r'^(correct|update)\s+(company|person|people|issue|issues|service|tool|activity|site|segment|category|time|weather|impression|comments)\s+(.+?)\s+to\s+(.+)$', text, re.IGNORECASE)
         if correction_match:
             _, field, old_value, new_value = correction_match.groups()
             field = field.lower()
-            if field == "person":
+            if field in ["person", "people"]:
                 field = "people"
+            elif field in ["issue", "issues"]:
+                field = "issues"
+            elif field == "activity":
+                field = "activities"
             updated_data = sess["structured_data"].copy()
             if field in ["company", "people"]:
                 target_list = updated_data.get(field, [])
@@ -595,6 +636,26 @@ def webhook():
                         logger.info(f"Corrected issue: {old_value} to {new_value}")
                         break
                 updated_data[field] = target_list
+            elif field == "activities":
+                target_list = updated_data.get(field, [])
+                for i, item in enumerate(target_list):
+                    if item.lower() == old_value.lower():
+                        target_list[i] = new_value
+                        logger.info(f"Corrected activity: {old_value} to {new_value}")
+                        break
+                updated_data[field] = target_list
+            elif field in ["service", "tool"]:
+                key_field = "task" if field == "service" else "item"
+                target_list = updated_data.get(field, [])
+                for i, item in enumerate(target_list):
+                    if isinstance(item, dict) and item.get(key_field, "").lower() == old_value.lower():
+                        target_list[i] = {key_field: new_value, "company": item.get("company", "")}
+                        logger.info(f"Corrected {field}: {old_value} to {new_value}")
+                        break
+                updated_data[field] = target_list
+            elif field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
+                updated_data[field] = new_value
+                logger.info(f"Corrected {field}: {old_value} to {new_value}")
             sess["structured_data"] = updated_data
             save_session_data(session_data)
             tpl = summarize_data(sess["structured_data"])
