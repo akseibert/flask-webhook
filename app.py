@@ -45,6 +45,72 @@ except Exception as e:
 
 app = Flask(__name__)
 
+# --- GPT Prompt for complex input parsing ---
+gpt_prompt = """
+You are an AI assistant extracting a construction site report from user input. Extract only explicitly mentioned fields and return them in JSON format. If no fields are clearly identified, check for specific keywords to map to fields or treat as comments for general statements.
+
+Fields to extract (omit if not present):
+- site_name: string (e.g., "Downtown Project")
+- segment: string (e.g., "5", do not prefix with "Segment")
+- category: string (e.g., "A", do not prefix with "Category")
+- company: list of objects with "name" (e.g., [{"name": "Acme Corp"}])
+- people: list of strings (e.g., ["Anna", "Tobias"])
+- roles: list of objects with "name" and "role" (e.g., [{"name": "Anna", "role": "Supervisor"}])
+- tools: list of objects with "item" (e.g., [{"item": "Crane"}])
+- service: list of objects with "task" (e.g., [{"task": "Excavation"}])
+- activities: list of strings (e.g., ["Concrete pouring"])
+- issues: list of objects with "description" (required), "caused_by" (optional), "has_photo" (optional, default false)
+  (e.g., [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}])
+- time: string (e.g., "morning")
+- weather: string (e.g., "good")
+- impression: string
+- comments: string
+- date: string (format dd-mm-yyyy)
+
+Rules:
+- Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Person:", "Issue:", "Service:", "Tool:", "Activity:", "Time:", "Weather:", "Segment:", "Category:", "Impression:", etc., or clear intent in natural language.
+- For segment and category:
+  - Extract the value only (e.g., "Category: A" -> "category": "A").
+  - Recognize "Segment 5" or "Category Bestand" as valid inputs.
+- For issues:
+  - Recognize keywords: "Issue", "Issues", "Problem", "Delay", "Injury".
+  - "Issues: none" clears the issues list.
+  - "description" is mandatory.
+  - "has_photo" is true only if "with photo" is stated.
+- For activities:
+  - Recognize keywords: "Activity", "Activities", "Task", "Progress", "Construction", or action-oriented phrases (e.g., "Laying foundations").
+  - "Activities: none" clears the activities list.
+- For site_name:
+  - Recognize keywords: "Site", "Location", "Project", or location-like phrases following "at", "in", "on" (e.g., "at Central Plaza").
+- For people:
+  - Recognize "add [name]", "People [name]", or names following "supervisors were".
+- For roles:
+  - Recognize "add [name] as [role]", "supervisors were [name]", or "[name] was handling [role]".
+- For company:
+  - Recognize "Company: [name]", "Companies: [name]", or "by [company]".
+- For tools and service:
+  - Recognize "Tool: [item]", "Service: [task]", or phrases like "Tools used included [item]".
+- Do not treat reset commands ("new", "new report", "reset", "/new") as site_name or comments.
+- Return {} for irrelevant inputs (e.g., "Hello world").
+- Case-insensitive matching.
+
+Examples:
+1. Input: "Site: Central Plaza, Segment: 5, Issue: Power outage"
+   Output: {"site_name": "Central Plaza", "segment": "5", "issues": [{"description": "Power outage"}]}
+2. Input: "New report"
+   Output: {}
+3. Input: "Segment: B, Category: A"
+   Output: {"segment": "B", "category": "A"}
+4. Input: "Good morning at the Central Plaza site, segment 5. Companies Bildreiter G and Electric Flow GmbH supervisors were Anna Keller and Marco Schmidt."
+   Output: {
+       "site_name": "Central Plaza",
+       "segment": "5",
+       "company": [{"name": "Bildreiter G"}, {"name": "Electric Flow GmbH"}],
+       "people": ["Anna Keller", "Marco Schmidt"],
+       "roles": [{"name": "Anna Keller", "role": "Supervisor"}, {"name": "Marco Schmidt", "role": "Supervisor"}]
+   }
+"""
+
 # --- Session data persistence ---
 SESSION_FILE = "/opt/render/project/src/session_data.json"
 PAUSE_THRESHOLD = 300  # 5 minutes in seconds
