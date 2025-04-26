@@ -618,6 +618,95 @@ def delete_entry(data, field, value=None):
     logger.info(f"Data after deletion: {json.dumps(data, indent=2)}")
     return data
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def apply_correction(orig, corr):
+    prompt = (
+        "Original JSON:\n" + json.dumps(orig) +
+        "\n\nUser correction:\n\"" + corr + "\"\n\n"
+        "Return JSON with only corrected fields. For list fields like 'company', 'roles', or 'issues', replace entries when correcting (e.g., 'Correct issue Delayed delivery to Late shipment' should replace the issue description). For 'people', update the name in the list. Do not add new entries for corrections; update existing ones. Do not modify fields not explicitly mentioned."
+    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        partial = json.loads(response.choices[0].message.content)
+        logger.info(f"Correction response: {partial}")
+        merged = orig.copy()
+        for key, value in partial.items():
+            if key in ["company", "roles", "tools", "service", "issues"]:
+                existing_list = merged.get(key, [])
+                new_items = value if isinstance(value, list) else []
+                for new_item in new_items:
+                    if not isinstance(new_item, dict):
+                        continue
+                    if key == "company" and "name" in new_item:
+                        for i, existing_item in enumerate(existing_list):
+                            if (isinstance(existing_item, dict) and
+                                string_similarity(existing_item.get("name", ""), new_item.get("name", "")) > 0.6):
+                                existing_list[i] = new_item
+                                logger.info(f"Applied correction: Replaced {existing_item.get('name')} with {new_item.get('name')}")
+                                break
+                        else:
+                            logger.warning(f"Correction: No matching {key} found for {new_item.get('name')}")
+                    elif key == "roles" and "name" in new_item:
+                        for i, existing_item in enumerate(existing_list):
+                            if (isinstance(existing_item, dict) and
+                                string_similarity(existing_item.get("name", ""), new_item.get("name", "")) > 0.6):
+                                existing_list[i] = new_item
+                                logger.info(f"Applied correction: Replaced role for {existing_item.get('name')} with {new_item.get('name')}")
+                                break
+                        else:
+                            logger.warning(f"Correction: No matching {key} found for {new_item.get('name')}")
+                    elif key in ["tools", "service"]:
+                        key_field = "item" if key == "tools" else "task"
+                        if key_field in new_item:
+                            for i, existing_item in enumerate(existing_list):
+                                if (isinstance(existing_item, dict) and
+                                    string_similarity(existing_item.get(key_field, ""), new_item.get(key_field, "")) > 0.6 and
+                                    string_similarity(existing_item.get("company", "") or "", new_item.get("company", "") or "") > 0.6):
+                                    existing_list[i] = new_item
+                                    logger.info(f"Applied correction: Replaced {existing_item.get(key_field)} with {new_item.get(key_field)}")
+                                    break
+                            else:
+                                logger.warning(f"Correction: No matching {key} found for {new_item.get(key_field)}")
+                    elif key == "issues" and "description" in new_item:
+                        for i, existing_item in enumerate(existing_list):
+                            if (isinstance(existing_item, dict) and
+                                string_similarity(existing_item.get("description", ""), new_item.get("description", "")) > 0.6):
+                                existing_list[i] = new_item
+                                logger.info(f"Applied correction: Replaced issue {existing_item.get('description')} with {new_item.get('description')}")
+                                break
+                            elif (isinstance(existing_item, dict) and
+                                  existing_item.get("description", "").lower() == new_item.get("description", "").lower()):
+                                existing_list[i] = new_item
+                                logger.info(f"Applied correction: Replaced issue {existing_item.get('description')} with {new_item.get('description')}")
+                                break
+                        else:
+                            existing_list.append(new_item)
+                            logger.info(f"Applied correction: Added new issue {new_item.get('description')}")
+                merged[key] = existing_list
+            elif key == "people":
+                existing_list = merged.get(key, [])
+                new_items = value if isinstance(value, list) else []
+                for i, item in enumerate(existing_list):
+                    if item.lower() == old_value.lower():
+                        existing_list[i] = new_value
+                        logger.info(f"Corrected person: {old_value} to {new_value}")
+                        # Update roles if necessary
+                        for j, role in enumerate(merged.get("roles", [])):
+                            if role.get("name", "").lower() == old_value.lower():
+                                merged["roles"][j]["name"] = new_value
+                        break
+                merged[key] = existing_list
+            else:
+                merged[key] = value
+        logger.info(f"Applied correction: {corr}, Result: {json.dumps(merged, indent=2)}")
+        return merged
+    except Exception as e:
+        logger.error(f"GPT correction error: {e}")
+        return orig
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
@@ -713,4 +802,69 @@ def webhook():
             logger.info(f"Cleared field: {field}")
             tpl = summarize_data(sess["structured_data"])
             send_telegram_message(chat_id,
-                f"Cleared {field}\n\nHere’s the updated report
+                f"Cleared {field}\n\nHere’s the updated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+
+        # Handle deletion commands
+        delete_match = re.match(r'^(delete|remove)\s+(site|segment|category|company|person|people|role|roles|tool|service|activity|activities|issue|issues|time|weather|impression|comments)(?::\s*(.+))?$', text, re.IGNORECASE)
+        if delete_match:
+            action, field, value = delete_match.groups()
+            field = field.lower()
+            if field in ["person", "people"]:
+                field = "people"
+            elif field in ["role", "roles"]:
+                field = "roles"
+            elif field in ["activity", "activities"]:
+                field = "activities"
+            elif field in ["issue", "issues"]:
+                field = "issues"
+            sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
+            save_session_data(session_data)
+            logger.info(f"Deleted {field}" + (f": {value}" if value else ""))
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                f"Removed {field}" + (f": {value}" if value else "") + f"\n\nHere’s the updated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+
+        # Process new data or corrections
+        extracted = extract_site_report(text)
+        if extracted.get("reset"):
+            sess["structured_data"] = blank_report()
+            sess["awaiting_correction"] = False
+            sess["awaiting_reset_confirmation"] = False
+            sess["pending_input"] = None
+            save_session_data(session_data)
+            logger.info("Reset report due to extracted reset command")
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                "**Starting a fresh report**\n\n" + tpl +
+                "\n\nSpeak or type your first field (site name required).")
+            return "ok", 200
+        # Allow updates even without site_name if there are valid fields
+        if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category"]):
+            send_telegram_message(chat_id,
+                "🏗️ Please provide a valid field (e.g., 'Site: Downtown Project', 'People add Tobias', 'Impression: abc').")
+            return "ok", 200
+        sess["structured_data"] = merge_structured_data(
+            sess["structured_data"], enrich_with_date(extracted)
+        )
+        sess["awaiting_correction"] = True
+        save_session_data(session_data)
+        logger.info(f"Updated session data: awaiting_correction={sess['awaiting_correction']}")
+        tpl = summarize_data(sess["structured_data"])
+        send_telegram_message(chat_id,
+            f"Here’s what I understood:\n\n{tpl}\n\nIs this correct? Reply with corrections or more details.")
+        return "ok", 200
+
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return "error", 500
+
+@app.get("/")
+def health():
+    """Health check endpoint."""
+    return "OK", 200
+
+if __name__ == "__main__":
+    logger.info("Starting Flask app")
+    app.run(port=int(os.getenv("PORT", 5000)), debug=True)
