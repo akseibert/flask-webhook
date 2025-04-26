@@ -8,6 +8,7 @@ from datetime import datetime
 from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 from difflib import SequenceMatcher
+from time import time
 
 # --- Initialize logging ---
 logging.basicConfig(
@@ -30,6 +31,7 @@ app = Flask(__name__)
 
 # --- Session data persistence ---
 SESSION_FILE = "/opt/render/project/src/session_data.json"
+PAUSE_THRESHOLD = 300  # 5 minutes in seconds
 
 def load_session_data():
     try:
@@ -134,7 +136,8 @@ def summarize_data(d):
     lines.append(
         "👷 **People**: " +
         ", ".join(
-            f"{p.get('name', '')} ({p.get('role', '')})" if isinstance(p, dict) else str(p)
+            f"{p.get('name', '')}" + (f" ({p.get('role', '')})" if p.get('role') else "")
+            if isinstance(p, dict) else str(p)
             for p in d.get("people", [])
         ) or ""
     )
@@ -184,7 +187,7 @@ Fields to extract (omit if not present):
 - segment: string (e.g., "5", do not prefix with "Segment")
 - category: string (e.g., "3", do not prefix with "Category")
 - company: list of objects with "name" (e.g., [{"name": "Acme Corp"}])
-- people: list of objects with "name" and "role" (e.g., [{"name": "John Doe", "role": "Foreman"}])
+- people: list of objects with "name" and optional "role" (e.g., [{"name": "John Doe", "role": "Foreman"}, {"name": "Tobias"}])
 - tools: list of objects with "item" and optional "company" (e.g., [{"item": "Crane", "company": "Acme Corp"}])
 - service: list of objects with "task" and optional "company" (e.g., [{"task": "Excavation", "company": "Acme Corp"}])
 - activities: list of strings (e.g., ["Concrete pouring"])
@@ -197,10 +200,11 @@ Fields to extract (omit if not present):
 - date: string (format dd-mm-yyyy)
 
 Rules:
-- Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Person:", "People:", "Issue:", "Issues:", "Service:", "Tool:", "Activity:", "Activities:", "Time:", "Weather:", etc., or clear intent in natural language.
+- Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Person:", "People:", "Issue:", "Issues:", "Service:", "Tool:", "Activity:", "Activities:", "Time:", "Weather:", "Segment:", "Category:", etc., or clear intent in natural language.
 - For segment and category:
   - Extract the value only (e.g., "Category: 3" -> "category": "3", not "Category 3").
   - Do not include the keyword "Segment" or "Category" in the value.
+  - Recognize "Segment a" or "Category Bestand" as valid inputs.
 - For issues:
   - Recognize keywords: "Issue", "Issues", "Problem", "Problems", "Delay", "Fault", "Error", or natural language (e.g., "The issue is...", "There’s a delay").
   - "Issues: none" or "Issues none" clears the issues list (return "issues": []).
@@ -209,18 +213,20 @@ Rules:
   - "has_photo" is true only if "with photo" or "has photo" is stated.
   - Handle multiple issues as separate objects.
 - For activities:
-  - Recognize keywords: "Activity", "Activities", "Task", "Progress", "Construction", or action-oriented phrases (e.g., "Concrete pouring").
+  - Recognize keywords: "Activity", "Activities", "Task", "Progress", "Construction", or action-oriented phrases (e.g., "Work was done", "Concrete pouring").
   - "Activities: none" or "Activities none" clears the activities list (return "activities": []).
-  - Extract exact activity phrases without defaulting to generic terms like "work was done".
+  - Extract exact activity phrases from phrases like "Work was done" or "Laying foundation".
 - For site_name:
-  - Recognize keywords: "Site", "Location", "Project", or location-like phrases following "at", "in", "on" (e.g., "at ABC").
+  - Recognize keywords: "Site", "Location", "Project", or location-like phrases following "at", "in", "on" (e.g., "on the East Wing on Zurich downtown project" should combine locations as "East Wing, Zurich downtown project").
 - For people:
-  - Recognize "add [name] as [role]", "People [name] as [role]", "Person: [name], role: [role]", or "People: [name], role: [role]".
+  - Recognize "add [name] as [role]", "People [name] as [role]", "Person: [name], role: [role]", "People: [name], role: [role]", or "People add [name]".
   - If "add [name] as people" or "People [name] as people", treat "people" as a generic role (e.g., {"name": "XYZ", "role": "Worker"}).
+  - If role is not specified (e.g., "People add Tobias"), leave "role" empty (e.g., {"name": "Tobias", "role": ""}).
+  - If the input includes "I was supervising" or "I am supervising", add a person entry (e.g., {"name": "User", "role": "Supervisor"}).
 - For company:
-  - Recognize "Company: [name]", "Companies: [name]", or "add company [name]".
+  - Recognize "Company: [name]", "Companies: [name]", "add company [name]", or phrases like "by [company]" (e.g., "by Bill Corp and Orion Corp").
 - For tools and service:
-  - Recognize "Tool: [item]", "Service: [task]", or "add [task/item]".
+  - Recognize "Tool: [item]", "Service: [task]", "add [task/item]", or phrases like "Tools were [item]" (e.g., "Tools were crane and hammer").
   - Only include "company" if explicitly stated in the context (e.g., "Crane by Acme Corp").
   - Do not infer company names from other fields (e.g., "company" list).
 - For time:
@@ -229,8 +235,8 @@ Rules:
   - Recognize "Weather: [value]", "Weather [value]", or natural language (e.g., "good weather", "sunny").
 - For comments:
   - Recognize "Comments: none" or "Comments none" to clear comments (return "comments": "").
-  - Use as a fallback only for general statements that don’t match other fields.
-- If input contains multiple fields (e.g., "Work at ABC, Issue: Delay"), extract all relevant fields.
+  - Use as a fallback only for general statements that don’t match other fields or reset commands.
+- Do not treat reset commands like "new", "new report", "reset", "/new" as comments; these should not be processed here.
 - Return {} only for irrelevant inputs (e.g., "Hello world").
 - Case-insensitive matching for keywords.
 
@@ -249,8 +255,8 @@ Examples:
    Output: {"comments": "All good today"}
 7. Input: "Service: Erecting steel frames"
    Output: {"service": [{"task": "Erecting steel frames"}]}
-8. Input: "Category: 3, Segment: 5"
-   Output: {"category": "3", "segment": "5"}
+8. Input: "Segment: a"
+   Output: {"segment": "a"}
 9. Input: "People Frank as Supervisor"
    Output: {"people": [{"name": "Frank", "role": "Supervisor"}]}
 10. Input: "add XYZ as people"
@@ -269,20 +275,69 @@ Examples:
     Output: {"time": "morning"}
 17. Input: "Time morning"
     Output: {"time": "morning"}
+18. Input: "People add Tobias"
+    Output: {"people": [{"name": "Tobias", "role": ""}]}
+19. Input: "Work was done on the East Wing on Zurich downtown project by Bill Corp and Orion Corp. I was supervising and Tobias was handling the crane. Tools were crane and hammer."
+    Output: {
+        "site_name": "East Wing, Zurich downtown project",
+        "company": [
+            {"name": "Bill Corp"},
+            {"name": "Orion Corp"}
+        ],
+        "people": [
+            {"name": "User", "role": "Supervisor"},
+            {"name": "Tobias", "role": "Crane Operator"}
+        ],
+        "tools": [
+            {"item": "Crane"},
+            {"item": "Hammer"}
+        ],
+        "activities": ["Work was done"]
+    }
 """
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def extract_site_report(text):
+    # Handle reset commands explicitly
+    if text.lower() in ("new", "new report", "reset", "/new"):
+        logger.info(f"Recognized reset command: {text}")
+        return {"reset": True}
+
+    # Handle segment addition
+    segment_match = re.match(r'^(?:segment\s*[:,]?\s*)(.+)$', text, re.IGNORECASE)
+    if segment_match:
+        segment = segment_match.group(1).strip()
+        logger.info(f"Extracted segment: {segment}")
+        return {"segment": segment}
+
+    # Handle category addition
+    category_match = re.match(r'^(?:category\s*[:,]?\s*)(.+)$', text, re.IGNORECASE)
+    if category_match:
+        category = category_match.group(1).strip()
+        logger.info(f"Extracted category: {category}")
+        return {"category": category}
+
     # Handle people addition
-    person_match = re.match(r'^(?:add\s+|people\s+|person\s+)?(\w+\s*\w*)\s*[:,]?\s*as\s+(people|worker|\w+\s*\w*)$|^(?:person|people)\s*[:,]?\s*(\w+\s*\w*)\s*,\s*role\s*[:,]?\s*(\w+\s*\w*)$', text, re.IGNORECASE)
+    person_match = re.match(
+        r'^(?:add\s+|people\s+|person\s+)?(\w+\s*\w*)\s*[:,]?\s*as\s+(people|worker|\w+\s*\w*)$|^(?:person|people)\s*[:,]?\s*(\w+\s*\w*)\s*,\s*role\s*[:,]?\s*(\w+\s*\w*)$|^(?:people\s+add\s+|add\s+people\s+|person\s+add\s+)(\w+\s*\w*)$',
+        text, re.IGNORECASE
+    )
     if person_match:
         if person_match.group(1):  # add/people/person [name] as [role]
             name, role = person_match.group(1), person_match.group(2)
-        else:  # person: [name], role: [role]
+            role = "Worker" if role.lower() == "people" else role.title()
+        elif person_match.group(3):  # person: [name], role: [role]
             name, role = person_match.group(3), person_match.group(4)
-        role = "Worker" if role.lower() == "people" else role.title()
+        else:  # people add [name]
+            name, role = person_match.group(5), ""
         logger.info(f"Extracted person: {name}, role: {role}")
         return {"people": [{"name": name.strip(), "role": role}]}
+
+    # Handle supervisor self-reference
+    supervisor_match = re.match(r'^(?:i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised)(?:\s+.*)?$', text, re.IGNORECASE)
+    if supervisor_match:
+        logger.info(f"Extracted supervisor: User")
+        return {"people": [{"name": "User", "role": "Supervisor"}]}
 
     # Handle company addition
     company_match = re.match(r'^(?:add\s+company\s+|company\s+|companies\s+)[:,]?\s*(.+)$', text, re.IGNORECASE)
@@ -373,8 +428,9 @@ def extract_site_report(text):
                 activity_keywords = r'\b(work|activity|task|progress|construction)\b'
                 location_keywords = r'\b(at|in|on)\b'
                 if re.search(activity_keywords, text.lower()) and re.search(location_keywords, text.lower()):
+                    # Handle multiple location keywords
                     parts = re.split(r'\b(at|in|on)\b', text, flags=re.IGNORECASE)
-                    location = parts[-1].strip().title()
+                    location = ", ".join(part.strip().title() for part in parts[2::2] if part.strip())
                     activity = parts[0].strip()
                     data = {"site_name": location, "activities": [activity]}
                     logger.info(f"Fallback applied: Treated as activity and site: {data}")
@@ -393,7 +449,7 @@ def extract_site_report(text):
         location_keywords = r'\b(at|in|on)\b'
         if text.strip() and re.search(activity_keywords, text.lower()) and re.search(location_keywords, text.lower()):
             parts = re.split(r'\b(at|in|on)\b', text, flags=re.IGNORECASE)
-            location = parts[-1].strip().title()
+            location = ", ".join(part.strip().title() for part in parts[2::2] if part.strip())
             activity = parts[0].strip()
             data = {"site_name": location, "activities": [activity]}
             logger.info(f"Extraction failed; fallback to activity and site: {data}")
@@ -408,6 +464,8 @@ def string_similarity(a, b):
 def merge_structured_data(existing, new):
     merged = existing.copy()
     for key, value in new.items():
+        if key == "reset":
+            continue  # Skip reset flag
         if key in ["company", "people", "tools", "service", "activities", "issues"]:
             if value == []:  # Handle "none" cases
                 merged[key] = []
@@ -603,7 +661,10 @@ def webhook():
         if chat_id not in session_data:
             session_data[chat_id] = {
                 "structured_data": blank_report(),
-                "awaiting_correction": False
+                "awaiting_correction": False,
+                "last_interaction": time(),
+                "pending_input": None,
+                "awaiting_reset_confirmation": False
             }
         sess = session_data[chat_id]
 
@@ -615,9 +676,50 @@ def webhook():
                 return "ok", 200
             logger.info(f"Transcribed voice to text: '{text}'")
 
+        current_time = time()
+        # Handle reset confirmation
+        if sess.get("awaiting_reset_confirmation", False):
+            if text.lower() in ("new", "new report"):
+                sess["structured_data"] = blank_report()
+                sess["awaiting_correction"] = False
+                sess["awaiting_reset_confirmation"] = False
+                sess["pending_input"] = None
+                sess["last_interaction"] = current_time
+                save_session_data(session_data)
+                tpl = summarize_data(sess["structured_data"])
+                send_telegram_message(chat_id,
+                    "**Starting a fresh report**\n\n" + tpl +
+                    "\n\nSpeak or type your first field (site name required).")
+                return "ok", 200
+            elif text.lower() in ("existing", "continue"):
+                text = sess["pending_input"]
+                sess["awaiting_reset_confirmation"] = False
+                sess["pending_input"] = None
+                sess["last_interaction"] = current_time
+            else:
+                send_telegram_message(chat_id,
+                    "Please clarify: Is this for a **new report** or an **existing one**? Reply with 'new' or 'existing'.")
+                return "ok", 200
+
+        # Check for reset based on pause
+        if (current_time - sess.get("last_interaction", 0) > PAUSE_THRESHOLD and
+                text.lower() not in ("new", "new report", "reset", "/new", "existing", "continue")):
+            sess["pending_input"] = text
+            sess["awaiting_reset_confirmation"] = True
+            sess["last_interaction"] = current_time
+            save_session_data(session_data)
+            send_telegram_message(chat_id,
+                "It’s been a while! Is this for a **new report** or an **existing one**? Reply with 'new' or 'existing'.")
+            return "ok", 200
+
+        sess["last_interaction"] = current_time
+
+        # Handle explicit reset commands
         if text.lower() in ("new", "new report", "reset", "/new"):
             sess["structured_data"] = blank_report()
             sess["awaiting_correction"] = False
+            sess["awaiting_reset_confirmation"] = False
+            sess["pending_input"] = None
             save_session_data(session_data)
             tpl = summarize_data(sess["structured_data"])
             send_telegram_message(chat_id,
@@ -659,7 +761,18 @@ def webhook():
 
         # Process new data or corrections
         extracted = extract_site_report(text)
-        if not sess["awaiting_correction"] and not extracted.get("site_name") and not any(k in extracted for k in ["company", "people", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments"]):
+        if extracted.get("reset"):
+            sess["structured_data"] = blank_report()
+            sess["awaiting_correction"] = False
+            sess["awaiting_reset_confirmation"] = False
+            sess["pending_input"] = None
+            save_session_data(session_data)
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                "**Starting a fresh report**\n\n" + tpl +
+                "\n\nSpeak or type your first field (site name required).")
+            return "ok", 200
+        if not sess["awaiting_correction"] and not extracted.get("site_name") and not any(k in extracted for k in ["company", "people", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category"]):
             send_telegram_message(chat_id,
                 "🏗️ Please provide a site name to start the report (e.g., 'Site: Downtown Project' or 'Work at ABC').")
             return "ok", 200
