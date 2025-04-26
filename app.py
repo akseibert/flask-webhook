@@ -54,7 +54,12 @@ def load_session_data():
     try:
         if os.path.exists(SESSION_FILE):
             with open(SESSION_FILE) as f:
-                return json.load(f)
+                data = json.load(f)
+                # Convert command_history back to deque
+                for chat_id in data:
+                    if "command_history" in data[chat_id]:
+                        data[chat_id]["command_history"] = deque(data[chat_id]["command_history"], maxlen=MAX_HISTORY)
+                return data
         return {}
     except Exception as e:
         logger.error(f"Failed to load session data: {e}")
@@ -62,9 +67,17 @@ def load_session_data():
 
 def save_session_data(data):
     try:
+        # Convert deque to list for JSON serialization
+        serializable_data = {}
+        for chat_id, session in data.items():
+            serializable_session = session.copy()
+            if "command_history" in serializable_session:
+                serializable_session["command_history"] = list(serializable_session["command_history"])
+            serializable_data[chat_id] = serializable_session
         os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
         with open(SESSION_FILE, "w") as f:
-            json.dump(data, f)
+            json.dump(serializable_data, f)
+        logger.info({"event": "session_data_saved", "file": SESSION_FILE})
     except Exception as e:
         logger.error(f"Failed to save session data: {e}")
 
@@ -82,7 +95,7 @@ def blank_report():
 
 # --- Centralized regex patterns ---
 FIELD_PATTERNS = {
-    "site_name": r'^(?:site\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)?([^,]+?)(?=(?:\s*,\s*(?:segment|category|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
+    "site_name": r'^(?:site\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
     "segment": r'^(?:segment\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|category|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
     "category": r'^(?:category\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
     "impression": r'^(?:impression\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|time|weather|comments)\s*:)|$)',
@@ -95,8 +108,9 @@ FIELD_PATTERNS = {
     "activity": r'^(?:add\s+activity\s+|activity\s+|activities\s+)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|issue|time|weather|impression|comments)\s*:)|$)',
     "issue": r'^(?:add\s+issue\s+|issue\s+|issues\s+)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|time|weather|impression|comments)\s*:)|$)',
     "weather": r'^(?:weather\s*[:,]?\s*|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|time|impression|comments)\s*:)|$)',
-    "time": r'^(?:time\s*[:,]?\s*|morning\s*time\s*|afternoon\s*time\s*|evening\s*time\s*)(morning|afternoon|evening)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|weather|impression|comments)\s*:)|$)',
-    "clear": r'^(issues|activities|comments)\s*[:,]?\s*none$'
+    "time": r'^(?:time\s*[:,]?\s*|morning\s*time\s*|afternoon\s*time\s*|evening\s*time\s*)(morning|afternoon|evening|full day)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|weather|impression|comments)\s*:)|$)',
+    "clear": r'^(issues|activities|comments)\s*[:,]?\s*none$',
+    "reset": r'^(new|new report|reset|\/new)$'
 }
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -341,7 +355,8 @@ def extract_single_command(text):
     result = {}
 
     # Handle reset commands
-    if text.lower() in ("new", "new report", "reset", "/new"):
+    reset_match = re.match(FIELD_PATTERNS["reset"], text, re.IGNORECASE)
+    if reset_match:
         logger.info({"event": "reset_command"})
         return {"reset": True}
 
@@ -362,9 +377,11 @@ def extract_single_command(text):
 
     # Regex-based parsing
     for field, pattern in FIELD_PATTERNS.items():
+        if field == "reset":
+            continue
         match = re.match(pattern, text, re.IGNORECASE)
         if match:
-            if field == "site_name" and re.search(r'\b(add|delete|remove|correct|update|none|as|role)\b', text.lower()):
+            if field == "site_name" and re.search(r'\b(add|delete|remove|correct|update|none|as|role|new|reset)\b', text.lower()):
                 continue
             if field == "people":
                 name = match.group(1).strip()
@@ -396,9 +413,9 @@ def extract_single_command(text):
                 logger.info({"event": "extracted_field", "field": field, "value": value})
             return result
 
-    # GPT-based parsing
+    # GPT-based parsing for complex inputs
     messages = [
-        {"role": "system", "content": "Extract explicitly stated fields; map ambiguous inputs to likely fields or site_name. Handle multi-field inputs by splitting on commas and parsing each field."},
+        {"role": "system", "content": "Extract explicitly stated fields from construction site report input. Handle multi-field inputs by splitting on commas or periods and parsing each field. Map ambiguous inputs to likely fields, prioritizing specific fields over site_name. Return JSON with extracted fields."},
         {"role": "user", "content": gpt_prompt + "\nInput text: " + text}
     ]
     try:
@@ -425,28 +442,32 @@ def extract_single_command(text):
                 if isinstance(role, dict) and "name" in role and role["name"] not in data.get("people", []):
                     data.setdefault("people", []).append(role["name"])
         if not data and text.strip():
-            issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error)\b'
+            issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
+            activity_keywords = r'\b(activity|task|progress|construction|building|laying|setting|wiring|installation|scaffolding)\b'
+            location_keywords = r'\b(at|in|on)\b'
             if re.search(issue_keywords, text.lower()):
                 data = {"issues": [{"description": text.strip()}]}
                 logger.info({"event": "fallback_issue", "data": data})
+            elif re.search(activity_keywords, text.lower()) and re.search(location_keywords, text.lower()):
+                parts = re.split(r'\b(at|in|on)\b', text, flags=re.IGNORECASE)
+                location = ", ".join(part.strip().title() for part in parts[2::2] if part.strip())
+                activity = parts[0].strip()
+                data = {"site_name": location, "activities": [activity]}
+                logger.info({"event": "fallback_activity_site", "data": data})
             else:
-                activity_keywords = r'\b(activity|task|progress|construction|building)\b'
-                location_keywords = r'\b(at|in|on)\b'
-                if re.search(activity_keywords, text.lower()) and re.search(location_keywords, text.lower()):
-                    parts = re.split(r'\b(at|in|on)\b', text, flags=re.IGNORECASE)
-                    location = ", ".join(part.strip().title() for part in parts[2::2] if part.strip())
-                    activity = parts[0].strip()
-                    data = {"site_name": location, "activities": [activity]}
-                    logger.info({"event": "fallback_activity_site", "data": data})
-                else:
-                    data = {"site_name": text.strip()}
-                    logger.info({"event": "fallback_site_name", "data": data})
+                data = {"comments": text.strip()}
+                logger.info({"event": "fallback_comments", "data": data})
         return data
     except Exception as e:
         logger.error({"event": "gpt_extract_error", "input": text, "error": str(e)})
         if text.strip():
-            logger.info({"event": "fallback_site_name_error", "input": text})
-            return {"site_name": text.strip()}
+            issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
+            if re.search(issue_keywords, text.lower()):
+                data = {"issues": [{"description": text.strip()}]}
+                logger.info({"event": "fallback_issue_error", "data": data})
+                return data
+            logger.info({"event": "fallback_comments_error", "input": text})
+            return {"comments": text.strip()}
         return {}
 
 def string_similarity(a, b):
@@ -565,9 +586,13 @@ def delete_entry(data, field, value=None):
                                    item.get("task", "").lower() == value.lower()))]
         else:
             data[field] = []
-    elif field == "people" and value:
-        data[field] = [item for item in data[field] if item.lower() != value.lower()]
-        data["roles"] = [role for role in data.get("roles", []) if role.get("name", "").lower() != value.lower()]
+    elif field in ["people"]:
+        if value:
+            data[field] = [item for item in data[field] if item.lower() != value.lower()]
+            data["roles"] = [role for role in data.get("roles", []) if role.get("name", "").lower() != value.lower()]
+        else:
+            data[field] = []
+            data["roles"] = []
     elif field in ["activities"]:
         if value:
             data[field] = [item for item in data[field] if item.lower() != value.lower()]
@@ -745,7 +770,7 @@ def webhook():
             return "ok", 200
         if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
             send_telegram_message(chat_id,
-                f"⚠️ Unrecognized input: '{text}'. Try formats like 'Site: Downtown Project', 'People add Tobias', or 'Issue: Power outage'. Examples: 'Time: morning', 'delete time'.")
+                f"⚠️ Unrecognized input: '{text}'. Try formats like 'Site: Downtown Project', 'People add Tobias', or 'Issue: Power outage'. Examples: 'Segment: B', 'Time: morning', 'delete time'.")
             return "ok", 200
         sess["command_history"].append(sess["structured_data"].copy())
         sess["structured_data"] = merge_structured_data(
