@@ -190,14 +190,14 @@ Fields to extract (omit if not present):
 - activities: list of strings (e.g., ["Concrete pouring"])
 - issues: list of objects with "description" (required), "caused_by" (optional), and "has_photo" (optional, default false)
   (e.g., [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}])
-- time: string
-- weather: string
+- time: string (e.g., "morning")
+- weather: string (e.g., "good")
 - impression: string
 - comments: string
 - date: string (format dd-mm-yyyy)
 
 Rules:
-- Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Person:", "People:", "Issue:", "Issues:", "Service:", "Tool:", "Activity:", "Activities:", etc., or clear intent in natural language.
+- Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Person:", "People:", "Issue:", "Issues:", "Service:", "Tool:", "Activity:", "Activities:", "Time:", "Weather:", etc., or clear intent in natural language.
 - For segment and category:
   - Extract the value only (e.g., "Category: 3" -> "category": "3", not "Category 3").
   - Do not include the keyword "Segment" or "Category" in the value.
@@ -223,9 +223,13 @@ Rules:
   - Recognize "Tool: [item]", "Service: [task]", or "add [task/item]".
   - Only include "company" if explicitly stated in the context (e.g., "Crane by Acme Corp").
   - Do not infer company names from other fields (e.g., "company" list).
+- For time:
+  - Recognize "Time: [value]", "Time [value]", or natural language (e.g., "morning time", "afternoon").
+- For weather:
+  - Recognize "Weather: [value]", "Weather [value]", or natural language (e.g., "good weather", "sunny").
 - For comments:
   - Recognize "Comments: none" or "Comments none" to clear comments (return "comments": "").
-  - Use as a fallback for general statements that don’t clearly match other fields.
+  - Use as a fallback only for general statements that don’t match other fields.
 - If input contains multiple fields (e.g., "Work at ABC, Issue: Delay"), extract all relevant fields.
 - Return {} only for irrelevant inputs (e.g., "Hello world").
 - Case-insensitive matching for keywords.
@@ -257,6 +261,14 @@ Examples:
     Output: {"people": [{"name": "John", "role": "Foreman"}]}
 13. Input: "Company: Delta Build"
     Output: {"company": [{"name": "Delta Build"}]}
+14. Input: "Weather: good"
+    Output: {"weather": "good"}
+15. Input: "Weather good"
+    Output: {"weather": "good"}
+16. Input: "Time: morning"
+    Output: {"time": "morning"}
+17. Input: "Time morning"
+    Output: {"time": "morning"}
 """
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -269,43 +281,64 @@ def extract_site_report(text):
         else:  # person: [name], role: [role]
             name, role = person_match.group(3), person_match.group(4)
         role = "Worker" if role.lower() == "people" else role.title()
+        logger.info(f"Extracted person: {name}, role: {role}")
         return {"people": [{"name": name.strip(), "role": role}]}
 
     # Handle company addition
     company_match = re.match(r'^(?:add\s+company\s+|company\s+|companies\s+)[:,]?\s*(.+)$', text, re.IGNORECASE)
     if company_match:
         name = company_match.group(1).strip()
+        logger.info(f"Extracted company: {name}")
         return {"company": [{"name": name}]}
 
     # Handle service addition
     service_match = re.match(r'^(?:add\s+service\s+|service\s+|services\s+)[:,]?\s*(.+)$', text, re.IGNORECASE)
     if service_match:
         task = service_match.group(1).strip()
+        logger.info(f"Extracted service: {task}")
         return {"service": [{"task": task}]}
 
     # Handle tool addition
     tool_match = re.match(r'^(?:add\s+tool\s+|tool\s+|tools\s+)[:,]?\s*(.+)$', text, re.IGNORECASE)
     if tool_match:
         item = tool_match.group(1).strip()
+        logger.info(f"Extracted tool: {item}")
         return {"tools": [{"item": item}]}
 
     # Handle activity addition
     activity_match = re.match(r'^(?:add\s+activity\s+|activity\s+|activities\s+)[:,]?\s*(.+)$', text, re.IGNORECASE)
     if activity_match:
         activity = activity_match.group(1).strip()
+        logger.info(f"Extracted activity: {activity}")
         return {"activities": [activity]}
 
     # Handle issue addition
     issue_match = re.match(r'^(?:add\s+issue\s+|issue\s+|issues\s+)[:,]?\s*(.+)$', text, re.IGNORECASE)
     if issue_match:
         description = issue_match.group(1).strip()
+        logger.info(f"Extracted issue: {description}")
         return {"issues": [{"description": description}]}
+
+    # Handle weather addition
+    weather_match = re.match(r'^(?:weather\s*[:,]?\s*|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)(.+)$', text, re.IGNORECASE)
+    if weather_match:
+        weather = weather_match.group(1).strip()
+        logger.info(f"Extracted weather: {weather}")
+        return {"weather": weather}
+
+    # Handle time addition
+    time_match = re.match(r'^(?:time\s*[:,]?\s*|morning\s*time\s*|afternoon\s*time\s*|evening\s*time\s*)(.+)$', text, re.IGNORECASE)
+    if time_match:
+        time_value = time_match.group(1).strip()
+        logger.info(f"Extracted time: {time_value}")
+        return {"time": time_value}
 
     # Handle "Issues none", "Activities none", "Comments none"
     clear_match = re.match(r'^(issues|activities|comments)\s*[:,]?\s*none$', text, re.IGNORECASE)
     if clear_match:
         field = clear_match.group(1).lower()
         field = "issues" if field == "issues" else "activities" if field == "activities" else "comments"
+        logger.info(f"Clearing field: {field}")
         return {field: [] if field in ["issues", "activities"] else ""}
 
     messages = [
@@ -626,7 +659,7 @@ def webhook():
 
         # Process new data or corrections
         extracted = extract_site_report(text)
-        if not sess["awaiting_correction"] and not extracted.get("site_name") and not any(k in extracted for k in ["company", "people", "tools", "service", "activities", "issues"]):
+        if not sess["awaiting_correction"] and not extracted.get("site_name") and not any(k in extracted for k in ["company", "people", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments"]):
             send_telegram_message(chat_id,
                 "🏗️ Please provide a site name to start the report (e.g., 'Site: Downtown Project' or 'Work at ABC').")
             return "ok", 200
@@ -701,6 +734,7 @@ def webhook():
         sess["structured_data"] = merge_structured_data(
             sess["structured_data"], enrich_with_date(updated)
         )
+        sess["awaiting_correction"] = True
         save_session_data(session_data)
         tpl = summarize_data(sess["structured_data"])
         send_telegram_message(chat_id,
