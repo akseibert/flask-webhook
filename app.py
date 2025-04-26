@@ -12,6 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from difflib import SequenceMatcher
 from contextlib import contextmanager
 from typing import Dict, List, Any, Callable, Sequence
+from time import time
 
 # --- Configuration ---
 @dataclass(frozen=True)
@@ -24,6 +25,8 @@ class Settings:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=2, min=2, max=10)
     )
+    app_version: str = "8d7f9c3a-1b2c-4d5e-9f8a-3c6b0e1a2f4d"  # Version for logging
+    rate_limit_seconds: float = 1.0  # Minimum time between processing same input
 
 settings = Settings()
 if not settings.openai_key or not settings.telegram_token:
@@ -39,6 +42,7 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("site-bot")
+logger.info(f"Starting application version: {settings.app_version}")
 
 # --- Initialize OpenAI client ---
 client = OpenAI(api_key=settings.openai_key)
@@ -123,20 +127,25 @@ def transcribe_voice(file_id: str) -> str:
     try:
         response = requests.get(f"https://api.telegram.org/bot{settings.telegram_token}/getFile?file_id={file_id}")
         response.raise_for_status()
-        file_path = response.json().get("result", {}).get("file_path", "")
+        response_data = response.json()
+        file_path = response_data.get("result", {}).get("file_path", "")
         if not file_path:
-            raise ValueError("No file_path in response")
+            raise ValueError(f"No file_path in response: {response_data}")
         audio_response = requests.get(f"https://api.telegram.org/file/bot{settings.telegram_token}/{file_path}")
         audio_response.raise_for_status()
+        if not audio_response.content:
+            raise ValueError("Empty audio content")
         response = client.audio.transcriptions.create(
             model="whisper-1",
             file=("voice.ogg", audio_response.content, "audio/ogg")
         )
         text = getattr(response, "text", "") or (response.get("text", "") if isinstance(response, dict) else "")
         logger.info(f"Transcription response: {text}")
-        return text.strip() if text and len(text.split()) >= 2 else ""
+        if not text.strip():
+            logger.warning(f"Empty transcription result: {text}")
+        return text.strip()
     except Exception as e:
-        logger.error(f"Transcription failed: {e}")
+        logger.error(f"Transcription failed: {e}\n{traceback.format_exc()}")
         return ""
 
 # --- Data processing ---
@@ -197,22 +206,25 @@ def summarize_data(data: Dict[str, Any]) -> str:
         logger.info(f"Summarizing data: {json.dumps(data, indent=2)}")
         lines = []
         for field, config in FIELD_CONFIG.items():
+            if not isinstance(config, dict):
+                logger.error(f"Invalid config for field {field}: {config}")
+                continue
             if field == "issues":
-                lines.append(f"{config['icon']} **Issues**:")
+                lines.append(f"{config.get('icon', '⚠️')} **Issues**:")
                 issues = [i for i in data.get(field, []) if isinstance(i, dict) and i.get("description", "").strip()]
                 lines.extend(config["format"](i) for i in issues if isinstance(i, dict)) if issues else lines.append("  None")
             elif config.get("scalar"):
-                lines.append(f"{config['icon']} **{field.title().replace('_', ' ')}**: {data.get(field, '') or 'None'}")
+                lines.append(f"{config.get('icon', '📅')} **{field.title().replace('_', ' ')}**: {data.get(field, '') or 'None'}")
             else:
                 items = data.get(field, [])
                 if not isinstance(items, list):
                     logger.warning(f"Invalid items for field {field}: {items}")
                     items = []
                 value = _comma(config["format"](item) for item in items if isinstance(item, dict))
-                lines.append(f"{config['icon', '📅']} **{field.title()}**: {value}")
+                lines.append(f"{config.get('icon', '📅')} **{field.title()}**: {value}")
         return "\n".join(lines)
     except Exception as e:
-        logger.error(f"Summarize error: {e}")
+        logger.error(f"Summarize error: {e}\n{traceback.format_exc()}")
         return "Error generating summary"
 
 @settings.retry
@@ -275,7 +287,7 @@ Input: {text}
         logger.info(f"Extracted report: {data}")
         return data
     except Exception as e:
-        logger.error(f"GPT extract error: {e}")
+        logger.error(f"GPT extract error: {e}\n{traceback.format_exc()}")
         return {}
 
 @settings.retry
@@ -295,7 +307,7 @@ def apply_correction(orig: Dict[str, Any], corr: str) -> Dict[str, Any]:
         logger.info(f"Correction response: {partial}")
         return merge_structured_data(orig, partial)
     except Exception as e:
-        logger.error(f"GPT correction error: {e}")
+        logger.error(f"GPT correction error: {e}\n{traceback.format_exc()}")
         return orig
 
 # --- Webhook ---
@@ -306,6 +318,9 @@ COMMAND_PATTERN = re.compile(
     re.IGNORECASE
 )
 RESET_COMMANDS = {"new", "new report", "reset", "/new"}
+
+# Rate limiting: track last processed message per chat_id
+last_processed = {}  # chat_id -> (text, timestamp)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -320,9 +335,17 @@ def webhook():
         chat_id = str(msg.get("chat", {}).get("id", ""))
         if not chat_id:
             logger.error("Missing chat_id in message")
-            return "error", 500
+            return "ok", 200  # Avoid retries
         text = (msg.get("text", "") or "").strip()
         logger.info(f"Received message: chat_id={chat_id}, text='{text}'")
+
+        # Rate limiting: skip if same text processed recently
+        current_time = time()
+        last_text, last_time = last_processed.get(chat_id, ("", 0))
+        if text and text == last_text and current_time - last_time < settings.rate_limit_seconds:
+            logger.info(f"Skipping repeated message: chat_id={chat_id}, text='{text}'")
+            return "ok", 200
+        last_processed[chat_id] = (text, current_time)
 
         with session_manager() as session_data:
             sess = session_data.setdefault(chat_id, {"structured_data": blank_report(), "awaiting_correction": False})
@@ -345,7 +368,8 @@ def webhook():
                 sess["awaiting_correction"] = False
                 summary = summarize_data(new_data)
                 if not isinstance(summary, str):
-                    raise ValueError(f"Invalid summary: {summary}")
+                    logger.error(f"Invalid summary: {summary}")
+                    summary = "Error generating summary"
                 message = f"**Fresh report**\n\n{summary}\n\nEnter first field (site name required)."
                 send_telegram_message(chat_id, message)
                 logger.info(f"Reset completed for chat_id={chat_id}")
@@ -399,7 +423,7 @@ def webhook():
 
     except Exception as e:
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
-        return "error", 500
+        return "ok", 200  # Prevent Telegram retries
 
 @app.get("/")
 def health():
