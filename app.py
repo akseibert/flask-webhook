@@ -47,12 +47,12 @@ app = Flask(__name__)
 
 # --- GPT Prompt for complex input parsing ---
 gpt_prompt = """
-You are an AI assistant extracting a construction site report from user input. Extract only explicitly mentioned fields and return them in JSON format. If no fields are clearly identified, check for specific keywords to map to fields or treat as comments for general statements.
+You are an AI assistant extracting a construction site report from user input. Extract all explicitly mentioned fields and return them in JSON format. Process the entire input as a single unit, splitting on commas or periods only when fields are clearly separated by keywords. Map natural language phrases to fields accurately, prioritizing specific fields over comments or site_name. Do not treat reset commands ("new", "new report", "reset", "reset report", "/new") as comments or fields; return {} for these.
 
 Fields to extract (omit if not present):
 - site_name: string (e.g., "Downtown Project")
-- segment: string (e.g., "5", do not prefix with "Segment")
-- category: string (e.g., "A", do not prefix with "Category")
+- segment: string (e.g., "5", extract only the value, no prefix or trailing text)
+- category: string (e.g., "Bestand", extract only the value)
 - company: list of objects with "name" (e.g., [{"name": "Acme Corp"}])
 - people: list of strings (e.g., ["Anna", "Tobias"])
 - roles: list of objects with "name" and "role" (e.g., [{"name": "Anna", "role": "Supervisor"}])
@@ -61,17 +61,17 @@ Fields to extract (omit if not present):
 - activities: list of strings (e.g., ["Concrete pouring"])
 - issues: list of objects with "description" (required), "caused_by" (optional), "has_photo" (optional, default false)
   (e.g., [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}])
-- time: string (e.g., "morning")
-- weather: string (e.g., "good")
-- impression: string
-- comments: string
+- time: string (e.g., "morning", "full day")
+- weather: string (e.g., "cloudy")
+- impression: string (e.g., "productive")
+- comments: string (e.g., "Ensure safety protocols")
 - date: string (format dd-mm-yyyy)
 
 Rules:
-- Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Person:", "Issue:", "Service:", "Tool:", "Activity:", "Time:", "Weather:", "Segment:", "Category:", "Impression:", etc., or clear intent in natural language.
+- Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Person:", "Issue:", "Service:", "Tool:", "Activity:", "Time:", "Weather:", "Segment:", "Category:", "Impression:", etc., or clear intent in natural language (e.g., "weather was cloudy" -> "weather": "cloudy", "time spent full day" -> "time": "full day").
 - For segment and category:
-  - Extract the value only (e.g., "Category: A" -> "category": "A").
-  - Recognize "Segment 5" or "Category Bestand" as valid inputs.
+  - Extract only the value (e.g., "Segment: 5" -> "segment": "5", "Category: Bestand" -> "category": "Bestand").
+  - Ignore trailing text (e.g., "Segment 5. Companies involved" -> "segment": "5").
 - For issues:
   - Recognize keywords: "Issue", "Issues", "Problem", "Delay", "Injury".
   - "Issues: none" clears the issues list.
@@ -86,28 +86,36 @@ Rules:
   - Recognize "add [name]", "People [name]", or names following "supervisors were".
 - For roles:
   - Recognize "add [name] as [role]", "supervisors were [name]", or "[name] was handling [role]".
+  - Do not map weather-related phrases to roles (e.g., "weather was cloudy" is not a role).
 - For company:
   - Recognize "Company: [name]", "Companies: [name]", or "by [company]".
 - For tools and service:
   - Recognize "Tool: [item]", "Service: [task]", or phrases like "Tools used included [item]".
-- Do not treat reset commands ("new", "new report", "reset", "/new") as site_name or comments.
-- Return {} for irrelevant inputs (e.g., "Hello world").
+- For time:
+  - Recognize "Time: [value]", "time spent [value]", or phrases like "full day", "morning".
+- For weather:
+  - Recognize "Weather: [condition]", "weather was [condition]", or conditions like "cloudy", "rainy".
+- For impression:
+  - Recognize "Impression: [value]", "impression [value]", or phrases like "productive despite setbacks".
+- Comments should only include non-field-specific notes (e.g., "ensure safety protocols").
+- Return {} for reset commands or irrelevant inputs (e.g., "Hello world").
 - Case-insensitive matching.
 
 Examples:
 1. Input: "Site: Central Plaza, Segment: 5, Issue: Power outage"
    Output: {"site_name": "Central Plaza", "segment": "5", "issues": [{"description": "Power outage"}]}
-2. Input: "New report"
+2. Input: "new report"
    Output: {}
-3. Input: "Segment: B, Category: A"
-   Output: {"segment": "B", "category": "A"}
-4. Input: "Good morning at the Central Plaza site, segment 5. Companies Bildreiter G and Electric Flow GmbH supervisors were Anna Keller and Marco Schmidt."
+3. Input: "Segment: B, Category: Bestand"
+   Output: {"segment": "B", "category": "Bestand"}
+4. Input: "Good morning at the Central Plaza site, segment 5. Companies BuildRight AG and Electric Flow GmbH, supervisors Anna Keller and Marcus Schmidt. Weather was cloudy."
    Output: {
        "site_name": "Central Plaza",
        "segment": "5",
-       "company": [{"name": "Bildreiter G"}, {"name": "Electric Flow GmbH"}],
-       "people": ["Anna Keller", "Marco Schmidt"],
-       "roles": [{"name": "Anna Keller", "role": "Supervisor"}, {"name": "Marco Schmidt", "role": "Supervisor"}]
+       "company": [{"name": "BuildRight AG"}, {"name": "Electric Flow GmbH"}],
+       "people": ["Anna Keller", "Marcus Schmidt"],
+       "roles": [{"name": "Anna Keller", "role": "Supervisor"}, {"name": "Marcus Schmidt", "role": "Supervisor"}],
+       "weather": "cloudy"
    }
 """
 
@@ -162,21 +170,21 @@ def blank_report():
 # --- Centralized regex patterns ---
 FIELD_PATTERNS = {
     "site_name": r'^(?:site\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
-    "segment": r'^(?:segment\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|category|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
-    "category": r'^(?:category\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
+    "segment": r'^(?:segment\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|category|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$|\s*\.)',
+    "category": r'^(?:category\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$|\s*\.)',
     "impression": r'^(?:impression\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|time|weather|comments)\s*:)|$)',
     "people": r'^(?:add\s+|people\s+|person\s+|add\s+people\s+|people\s+add\s+|person\s+add\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
-    "role": r'^(?:add\s+|people\s+|person\s+)?(\w+\s*\w*)\s*[:,]?\s*as\s+([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)|^(?:person|people)\s*[:,]?\s*(\w+\s*\w*)\s*,\s*role\s*[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
-    "supervisor": r'^(?:i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised)(?:\s+.*)?$',
+    "role": r'^(?:add\s+|people\s+|person\s+)?(\w+\s+\w+)\s*[:,]?\s*as\s+([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)|^(?:person|people)\s*[:,]?\s*(\w+\s+\w+)\s*,\s*role\s*[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
+    "supervisor": r'^(?:supervisors\s*(?:were|are)\s+|i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
     "company": r'^(?:add\s+company\s+|company\s+|companies\s+|add\s+([^,]+?)\s+as\s+company\s*)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
-    "service": r'^(?:add\s+service\s+|service\s+|services\s+)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
-    "tool": r'^(?:add\s+tool\s+|tool\s+|tools\s+)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|activity|issue|time|weather|impression|comments)\s*:)|$)',
-    "activity": r'^(?:add\s+activity\s+|activity\s+|activities\s+)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|issue|time|weather|impression|comments)\s*:)|$)',
-    "issue": r'^(?:add\s+issue\s+|issue\s+|issues\s+)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|time|weather|impression|comments)\s*:)|$)',
-    "weather": r'^(?:weather\s*[:,]?\s*|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|time|impression|comments)\s*:)|$)',
-    "time": r'^(?:time\s*[:,]?\s*|morning\s*time\s*|afternoon\s*time\s*|evening\s*time\s*)(morning|afternoon|evening|full day)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|weather|impression|comments)\s*:)|$)',
+    "service": r'^(?:add\s+service\s+|service\s+|services\s+|services\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
+    "tool": r'^(?:add\s+tool\s+|tool\s+|tools\s+|tools\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|activity|issue|time|weather|impression|comments)\s*:)|$)',
+    "activity": r'^(?:add\s+activity\s+|activity\s+|activities\s+|activities\s*(?:covered|included)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|issue|time|weather|impression|comments)\s*:)|$)',
+    "issue": r'^(?:add\s+issue\s+|issue\s+|issues\s+|issues\s*(?:encountered|included)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|time|weather|impression|comments)\s*:)|$)',
+    "weather": r'^(?:weather\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|time|impression|comments)\s*:)|$)',
+    "time": r'^(?:time\s*[:,]?\s*|time\s+spent\s+|morning\s*time\s*|afternoon\s*time\s*|evening\s*time\s*)(morning|afternoon|evening|full day)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|weather|impression|comments)\s*:)|$)',
     "clear": r'^(issues|activities|comments)\s*[:,]?\s*none$',
-    "reset": r'^(new|new report|reset|\/new)$'
+    "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$'
 }
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -398,12 +406,20 @@ def extract_site_report(text):
     logger.info({"event": "extract_site_report", "input_text": text})
     result = {}
 
+    # Check for reset commands first
+    reset_match = re.match(FIELD_PATTERNS["reset"], text, re.IGNORECASE)
+    if reset_match:
+        logger.info({"event": "reset_command_detected", "input": text})
+        return {"reset": True}
+
     # Handle multi-field inputs
-    commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)?[^:]*$)', text) if cmd.strip()]
+    commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)[^,]*$)|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
     if len(commands) > 1:
         seen_fields = set()
         for cmd in commands:
             cmd_result = extract_single_command(cmd)
+            if cmd_result.get("reset"):
+                return {"reset": True}
             for key, value in cmd_result.items():
                 if key in seen_fields and key not in ["people", "company", "roles", "tools", "service", "activities", "issues"]:
                     continue  # Skip duplicates for scalar fields
@@ -461,9 +477,10 @@ def extract_single_command(text):
                 result["roles"] = [{"name": name.strip(), "role": role}]
                 logger.info({"event": "extracted_field", "field": "role", "name": name, "role": role})
             elif field == "supervisor":
-                result["people"] = ["User"]
-                result["roles"] = [{"name": "User", "role": "Supervisor"}]
-                logger.info({"event": "extracted_field", "field": "supervisor"})
+                names = [name.strip() for name in match.group(1).split("and") if name.strip()]
+                result["people"] = names
+                result["roles"] = [{"name": name, "role": "Supervisor"} for name in names]
+                logger.info({"event": "extracted_field", "field": "supervisor", "names": names})
             elif field == "company":
                 name = match.group(2) if match.group(2) else match.group(1)
                 result["company"] = [{"name": name.strip()}]
@@ -481,7 +498,7 @@ def extract_single_command(text):
 
     # GPT-based parsing for complex inputs
     messages = [
-        {"role": "system", "content": "Extract explicitly stated fields from construction site report input. Handle multi-field inputs by splitting on commas or periods and parsing each field. Map ambiguous inputs to likely fields, prioritizing specific fields over site_name. Return JSON with extracted fields."},
+        {"role": "system", "content": "Extract explicitly stated fields from construction site report input. Handle multi-field inputs by processing the entire input as a single unit. Return JSON with extracted fields."},
         {"role": "user", "content": gpt_prompt + "\nInput text: " + text}
     ]
     try:
@@ -507,22 +524,6 @@ def extract_single_command(text):
             for role in data["roles"]:
                 if isinstance(role, dict) and "name" in role and role["name"] not in data.get("people", []):
                     data.setdefault("people", []).append(role["name"])
-        if not data and text.strip():
-            issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
-            activity_keywords = r'\b(activity|task|progress|construction|building|laying|setting|wiring|installation|scaffolding)\b'
-            location_keywords = r'\b(at|in|on)\b'
-            if re.search(issue_keywords, text.lower()):
-                data = {"issues": [{"description": text.strip()}]}
-                logger.info({"event": "fallback_issue", "data": data})
-            elif re.search(activity_keywords, text.lower()) and re.search(location_keywords, text.lower()):
-                parts = re.split(r'\b(at|in|on)\b', text, flags=re.IGNORECASE)
-                location = ", ".join(part.strip().title() for part in parts[2::2] if part.strip())
-                activity = parts[0].strip()
-                data = {"site_name": location, "activities": [activity]}
-                logger.info({"event": "fallback_activity_site", "data": data})
-            else:
-                data = {"comments": text.strip()}
-                logger.info({"event": "fallback_comments", "data": data})
         return data
     except Exception as e:
         logger.error({"event": "gpt_extract_error", "input": text, "error": str(e)})
@@ -730,7 +731,7 @@ def webhook():
 
         # Check for reset based on pause
         if (current_time - sess.get("last_interaction", 0) > PAUSE_THRESHOLD and
-                text.lower() not in ("yes", "no", "new", "new report", "reset", "/new", "existing", "continue")):
+                text.lower() not in ("yes", "no", "new", "new report", "reset", "reset report", "/new", "existing", "continue")):
             sess["pending_input"] = text
             sess["awaiting_reset_confirmation"] = True
             sess["last_interaction"] = current_time
@@ -743,7 +744,7 @@ def webhook():
         sess["last_interaction"] = current_time
 
         # Handle explicit reset commands
-        if text.lower() in ("new", "new report", "reset", "/new"):
+        if text.lower() in ("new", "new report", "reset", "reset report", "/new"):
             sess["awaiting_reset_confirmation"] = True
             sess["pending_input"] = text
             save_session_data(session_data)
@@ -836,7 +837,7 @@ def webhook():
             return "ok", 200
         if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
             send_telegram_message(chat_id,
-                f"⚠️ Unrecognized input: '{text}'. Try formats like 'Site: Downtown Project', 'People add Tobias', or 'Issue: Power outage'. Examples: 'Segment: B', 'Time: morning', 'delete time'.")
+                f"⚠️ Unrecognized input: '{text}'. Try formats like 'Site: Downtown Project', 'People add Tobias', or 'Issue: Power outage'. Examples: 'Segment: B', 'Time: morning', 'new report' to reset.")
             return "ok", 200
         sess["command_history"].append(sess["structured_data"].copy())
         sess["structured_data"] = merge_structured_data(
