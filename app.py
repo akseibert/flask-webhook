@@ -34,7 +34,7 @@ SESSION_FILE = "/opt/render/project/src/session_data.json"
 def load_session_data():
     try:
         if os.path.exists(SESSION_FILE):
-            with open(SESSION_FILE, "r") as f:
+            with open(SESSION_FILE) as f:
                 return json.load(f)
         return {}
     except Exception as e:
@@ -98,8 +98,8 @@ def transcribe_from_telegram_voice(file_id):
             file=("voice.ogg", audio, "audio/ogg")
         )
         text = response.text.strip()
-        if not text or len(text.split()) < 2:
-            logger.warning(f"Transcription invalid or too short: '{text}'")
+        if not text:
+            logger.warning(f"Empty transcription result: '{text}'")
             return ""
         logger.info(f"Transcribed audio: '{text}'")
         return text
@@ -123,36 +123,36 @@ def enrich_with_date(d):
 def summarize_data(d):
     logger.info(f"Summarizing data: {json.dumps(d, indent=2)}")
     lines = []
-    lines.append(f"🏗️ **Site**: {d.get('site_name', '') or 'None'}")
-    lines.append(f"🛠️ **Segment**: {d.get('segment', '') or 'None'}")
-    lines.append(f"📋 **Category**: {d.get('category', '') or 'None'}")
+    lines.append(f"🏗️ **Site**: {d.get('site_name', '') or ''}")
+    lines.append(f"🛠️ **Segment**: {d.get('segment', '') or ''}")
+    lines.append(f"📋 **Category**: {d.get('category', '') or ''}")
     lines.append(
         "🏢 **Companies**: " +
         ", ".join(c.get("name", "") if isinstance(c, dict) else str(c)
-                  for c in d.get("company", [])) or "None"
+                  for c in d.get("company", [])) or ""
     )
     lines.append(
         "👷 **People**: " +
         ", ".join(
             f"{p.get('name', '')} ({p.get('role', '')})" if isinstance(p, dict) else str(p)
             for p in d.get("people", [])
-        ) or "None"
+        ) or ""
     )
     lines.append(
         "🔧 **Services**: " +
         ", ".join(
-            f"{s.get('task', '')} ({s.get('company', '') or 'None'})" if isinstance(s, dict) else str(s)
+            f"{s.get('task', '')}" if isinstance(s, dict) and s.get('task') else str(s)
             for s in d.get("service", [])
-        ) or "None"
+        ) or ""
     )
     lines.append(
         "🛠️ **Tools**: " +
         ", ".join(
-            f"{t.get('item', '')} ({t.get('company', '') or 'None'})" if isinstance(t, dict) else str(t)
+            f"{t.get('item', '')}" if isinstance(t, dict) and t.get('item') else str(t)
             for t in d.get("tools", [])
-        ) or "None"
+        ) or ""
     )
-    lines.append("📅 **Activities**: " + ", ".join(d.get("activities", [])) or "None")
+    lines.append("📅 **Activities**: " + ", ".join(d.get("activities", [])) or "")
     lines.append("⚠️ **Issues**:")
     valid_issues = [
         i for i in d.get("issues", [])
@@ -166,13 +166,14 @@ def summarize_data(d):
             extra = f" (by {by})" if by else ""
             lines.append(f"  • {desc}{extra}{photo}")
     else:
-        lines.append("  None")
-    lines.append(f"⏰ **Time**: {d.get('time', '') or 'Not specified'}")
-    lines.append(f"🌦️ **Weather**: {d.get('weather', '') or 'Not specified'}")
-    lines.append(f"😊 **Impression**: {d.get('impression', '') or 'Not specified'}")
-    lines.append(f"💬 **Comments**: {d.get('comments', '') or 'None'}")
-    lines.append(f"📆 **Date**: {d.get('date', '') or 'Not specified'}")
-    summary = "\n".join(lines)
+        lines.append("")
+    lines.append(f"⏰ **Time**: {d.get('time', '') or ''}")
+    lines.append(f"🌦️ **Weather**: {d.get('weather', '') or ''}")
+    lines.append(f"😊 **Impression**: {d.get('impression', '') or ''}")
+    lines.append(f"💬 **Comments**: {d.get('comments', '') or ''}")
+    lines.append(f"📆 **Date**: {d.get('date', '') or ''}")
+    # Filter out empty lines to avoid extra newlines
+    summary = "\n".join(line for line in lines if line.strip())
     logger.info(f"Generated summary: {summary}")
     return summary
 
@@ -185,8 +186,8 @@ Fields to extract (omit if not present):
 - category: string (e.g., "3", do not prefix with "Category")
 - company: list of objects with "name" (e.g., [{"name": "Acme Corp"}])
 - people: list of objects with "name" and "role" (e.g., [{"name": "John Doe", "role": "Foreman"}])
-- tools: list of objects with "item" and "company" (e.g., [{"item": "Crane", "company": "Acme Corp"}])
-- service: list of objects with "task" and "company" (e.g., [{"task": "Excavation", "company": "Acme Corp"}])
+- tools: list of objects with "item" and optional "company" (e.g., [{"item": "Crane", "company": "Acme Corp"}])
+- service: list of objects with "task" and optional "company" (e.g., [{"task": "Excavation", "company": "Acme Corp"}])
 - activities: list of strings (e.g., ["Concrete pouring"])
 - issues: list of objects with "description" (required), "caused_by" (optional), and "has_photo" (optional, default false)
   (e.g., [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}])
@@ -211,6 +212,12 @@ Rules:
   - Recognize keywords: "Work", "Activity", "Task", "Progress", "Construction", or action-oriented phrases (e.g., "Work was done").
 - For site_name:
   - Recognize keywords: "Site", "Location", "Project", or location-like phrases following "at", "in", "on" (e.g., "at ABC").
+- For people:
+  - Recognize "add [name] as [role]" or "Person: [name], role: [role]".
+  - If "add [name] as people", treat "people" as a generic role (e.g., {"name": "XYZ", "role": "Worker"}).
+- For tools and service:
+  - Only include "company" if explicitly stated in the context of the tool or service (e.g., "Crane by Acme Corp").
+  - Do not infer company names from other fields (e.g., "company" list).
 - For comments:
   - Use as a fallback for general statements that don’t clearly match other fields.
 - If input contains multiple fields (e.g., "Work was done at ABC, Issue: Delay"), extract all relevant fields.
@@ -234,10 +241,21 @@ Examples:
    Output: {"site_name": "East Tower", "activities": ["Work"], "issues": [{"description": "Broken equipment"}]}
 8. Input: "Category: 3, Segment: 5"
    Output: {"category": "3", "segment": "5"}
+9. Input: "add Anna as people"
+   Output: {"people": [{"name": "Anna", "role": "Worker"}]}
+10. Input: "Service: Erecting steel frames"
+    Output: {"service": [{"task": "Erecting steel frames"}]}
 """
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def extract_site_report(text):
+    # Handle people addition with "as people"
+    person_match = re.match(r'^(?:add\s+)?(\w+\s*\w*)\s+as\s+(people|worker|\w+\s*\w*)$', text, re.IGNORECASE)
+    if person_match:
+        name, role = person_match.groups()
+        role = "Worker" if role.lower() == "people" else role.title()
+        return {"people": [{"name": name.strip(), "role": role}]}
+
     messages = [
         {"role": "system", "content": "Extract explicitly stated fields; map ambiguous inputs to likely fields or comments based on keywords."},
         {"role": "user", "content": gpt_prompt + "\nInput text: " + text}
@@ -255,6 +273,12 @@ def extract_site_report(text):
         for field in ["category", "segment"]:
             if field in data and isinstance(data[field], str):
                 data[field] = re.sub(r'^(category|segment)\s*:?\s*', '', data[field], flags=re.IGNORECASE).strip()
+        # Ensure tools and service only include company if explicitly stated
+        for field in ["tools", "service"]:
+            if field in data:
+                for item in data[field]:
+                    if isinstance(item, dict) and "company" in item and not item["company"]:
+                        del item["company"]
         if not data and text.strip():
             issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error)\b'
             if re.search(issue_keywords, text.lower()):
@@ -343,16 +367,26 @@ def merge_structured_data(existing, new):
                         existing_list.append(new_item)
                         logger.info(f"Added new person {new_name}")
                 merged[key] = existing_list
+            elif key == "issues":
+                for new_item in new_items:
+                    if not isinstance(new_item, dict) or "description" not in new_item:
+                        continue
+                    new_desc = new_item.get("description", "")
+                    replaced = False
+                    for i, existing_item in enumerate(existing_list):
+                        if (isinstance(existing_item, dict) and
+                            string_similarity(existing_item.get("description", ""), new_desc) > 0.6):
+                            existing_list[i] = new_item
+                            replaced = True
+                            logger.info(f"Replaced issue {existing_item.get('description')} with {new_desc}")
+                            break
+                    if not replaced:
+                        existing_list.append(new_item)
+                        logger.info(f"Added new issue {new_desc}")
+                merged[key] = existing_list
             else:
                 for item in new_items:
-                    if key == "issues":
-                        if not isinstance(item, dict) or "description" not in item:
-                            continue
-                        if not any(existing_item.get("description") == item["description"]
-                                  for existing_item in existing_list
-                                  if isinstance(existing_item, dict)):
-                            existing_list.append(item)
-                    elif key in ["tools", "service"]:
+                    if key in ["tools", "service"]:
                         if not isinstance(item, dict) or ("item" not in item and "task" not in item):
                             continue
                         existing_items = [
@@ -395,7 +429,7 @@ def apply_correction(orig, corr):
     prompt = (
         "Original JSON:\n" + json.dumps(orig) +
         "\n\nUser correction:\n\"" + corr + "\"\n\n"
-        "Return JSON with only corrected fields. For list fields like 'company' or 'people', replace entries when correcting names (e.g., 'Correct company Elektra Meyer to Elektro-Meier' should replace the existing company with the new name). Do not add new entries for corrections; update existing ones. For example, if correcting a company name, return the updated company object in the list. Do not modify fields not explicitly mentioned."
+        "Return JSON with only corrected fields. For list fields like 'company', 'people', or 'issues', replace entries when correcting (e.g., 'Correct issue Delayed delivery to Late shipment' should replace the issue description). Do not add new entries for corrections; update existing ones. For example, if correcting an issue description, return the updated issue object in the list. Do not modify fields not explicitly mentioned."
     )
     try:
         response = client.chat.completions.create(
@@ -450,8 +484,14 @@ def apply_correction(orig, corr):
                                 existing_list[i] = new_item
                                 logger.info(f"Applied correction: Replaced issue {existing_item.get('description')} with {new_item.get('description')}")
                                 break
+                            elif (isinstance(existing_item, dict) and
+                                  existing_item.get("description", "").lower() == new_item.get("description", "").lower()):
+                                existing_list[i] = new_item
+                                logger.info(f"Applied correction: Replaced issue {existing_item.get('description')} with {new_item.get('description')}")
+                                break
                         else:
-                            logger.warning(f"Correction: No matching issue found for {new_item.get('description')}")
+                            existing_list.append(new_item)
+                            logger.info(f"Applied correction: Added new issue {new_item.get('description')}")
                 merged[key] = existing_list
             else:
                 merged[key] = value
@@ -532,7 +572,7 @@ def webhook():
             return "ok", 200
 
         # Handle corrections explicitly
-        correction_match = re.match(r'^(correct|update)\s+(company|person)\s+(.+?)\s+to\s+(.+)$', text, re.IGNORECASE)
+        correction_match = re.match(r'^(correct|update)\s+(company|person|issue)\s+(.+?)\s+to\s+(.+)$', text, re.IGNORECASE)
         if correction_match:
             _, field, old_value, new_value = correction_match.groups()
             field = field.lower()
@@ -545,6 +585,14 @@ def webhook():
                     if isinstance(item, dict) and item.get("name", "").lower() == old_value.lower():
                         target_list[i] = {"name": new_value, "role": item.get("role", "")} if field == "people" else {"name": new_value}
                         logger.info(f"Corrected {field}: {old_value} to {new_value}")
+                        break
+                updated_data[field] = target_list
+            elif field == "issues":
+                target_list = updated_data.get(field, [])
+                for i, item in enumerate(target_list):
+                    if isinstance(item, dict) and item.get("description", "").lower() == old_value.lower():
+                        target_list[i] = {"description": new_value, "caused_by": item.get("caused_by", ""), "has_photo": item.get("has_photo", False)}
+                        logger.info(f"Corrected issue: {old_value} to {new_value}")
                         break
                 updated_data[field] = target_list
             sess["structured_data"] = updated_data
@@ -569,6 +617,11 @@ def webhook():
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         return "error", 500
+
+@app.get("/")
+def health():
+    """Health check endpoint."""
+    return "OK", 200
 
 if __name__ == "__main__":
     logger.info("Starting Flask app")
