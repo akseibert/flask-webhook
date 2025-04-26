@@ -10,6 +10,10 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from difflib import SequenceMatcher
 from time import time
 from collections import deque
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+import io
 
 # --- Initialize logging ---
 logging.basicConfig(
@@ -22,10 +26,14 @@ logger.addHandler(logging.StreamHandler())
 
 # --- Validate environment variables ---
 required_env_vars = ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"]
+optional_env_vars = ["SHAREPOINT_CLIENT_ID", "SHAREPOINT_CLIENT_SECRET", "SHAREPOINT_TENANT_ID", "SHAREPOINT_SITE_ID", "SHAREPOINT_LIST_ID"]
 for var in required_env_vars:
     if not os.getenv(var):
         logger.error(f"Missing required environment variable: {var}")
         raise ValueError(f"Missing {var}")
+for var in optional_env_vars:
+    if not os.getenv(var):
+        logger.warning(f"Optional environment variable {var} not set; SharePoint integration disabled until configured")
 
 # --- Initialize OpenAI client ---
 try:
@@ -74,20 +82,20 @@ def blank_report():
 
 # --- Centralized regex patterns ---
 FIELD_PATTERNS = {
-    "site_name": r'^(?:site\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)?([^,]+)$',
-    "segment": r'^(?:segment\s*[:,]?\s*)([^,]+)$',
-    "category": r'^(?:category\s*[:,]?\s*)([^,]+)$',
-    "impression": r'^(?:impression\s*[:,]?\s*)([^,]+)$',
-    "people": r'^(?:add\s+|people\s+|person\s+|add\s+people\s+|people\s+add\s+|person\s+add\s+)([^,]+)$',
-    "role": r'^(?:add\s+|people\s+|person\s+)?(\w+\s*\w*)\s*[:,]?\s*as\s+([^,]+)$|^(?:person|people)\s*[:,]?\s*(\w+\s*\w*)\s*,\s*role\s*[:,]?\s*([^,]+)$',
+    "site_name": r'^(?:site\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)?([^,]+?)(?=(?:\s*,\s*(?:segment|category|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
+    "segment": r'^(?:segment\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|category|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
+    "category": r'^(?:category\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
+    "impression": r'^(?:impression\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|time|weather|comments)\s*:)|$)',
+    "people": r'^(?:add\s+|people\s+|person\s+|add\s+people\s+|people\s+add\s+|person\s+add\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
+    "role": r'^(?:add\s+|people\s+|person\s+)?(\w+\s*\w*)\s*[:,]?\s*as\s+([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)|^(?:person|people)\s*[:,]?\s*(\w+\s*\w*)\s*,\s*role\s*[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
     "supervisor": r'^(?:i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised)(?:\s+.*)?$',
-    "company": r'^(?:add\s+company\s+|company\s+|companies\s+|add\s+([^,]+)\s+as\s+company\s*)[:,]?\s*([^,]+)$',
-    "service": r'^(?:add\s+service\s+|service\s+|services\s+)[:,]?\s*([^,]+)$',
-    "tool": r'^(?:add\s+tool\s+|tool\s+|tools\s+)[:,]?\s*([^,]+)$',
-    "activity": r'^(?:add\s+activity\s+|activity\s+|activities\s+)[:,]?\s*([^,]+)$',
-    "issue": r'^(?:add\s+issue\s+|issue\s+|issues\s+)[:,]?\s*([^,]+)$',
-    "weather": r'^(?:weather\s*[:,]?\s*|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+)$',
-    "time": r'^(?:time\s*[:,]?\s*|morning\s*time\s*|afternoon\s*time\s*|evening\s*time\s*)(morning|afternoon|evening)$',
+    "company": r'^(?:add\s+company\s+|company\s+|companies\s+|add\s+([^,]+?)\s+as\s+company\s*)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
+    "service": r'^(?:add\s+service\s+|service\s+|services\s+)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|tool|activity|issue|time|weather|impression|comments)\s*:)|$)',
+    "tool": r'^(?:add\s+tool\s+|tool\s+|tools\s+)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|activity|issue|time|weather|impression|comments)\s*:)|$)',
+    "activity": r'^(?:add\s+activity\s+|activity\s+|activities\s+)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|issue|time|weather|impression|comments)\s*:)|$)',
+    "issue": r'^(?:add\s+issue\s+|issue\s+|issues\s+)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|time|weather|impression|comments)\s*:)|$)',
+    "weather": r'^(?:weather\s*[:,]?\s*|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|time|impression|comments)\s*:)|$)',
+    "time": r'^(?:time\s*[:,]?\s*|morning\s*time\s*|afternoon\s*time\s*|evening\s*time\s*)(morning|afternoon|evening)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|weather|impression|comments)\s*:)|$)',
     "clear": r'^(issues|activities|comments)\s*[:,]?\s*none$'
 }
 
@@ -130,6 +138,108 @@ def transcribe_from_telegram_voice(file_id):
     except Exception as e:
         logger.error({"event": "transcription_failed", "error": str(e)})
         return ""
+
+def save_to_sharepoint(chat_id, report_data):
+    """
+    Save report data to a SharePoint list. To be implemented after testing.
+    Requires SHAREPOINT_CLIENT_ID, SHAREPOINT_CLIENT_SECRET, SHAREPOINT_TENANT_ID,
+    SHAREPOINT_SITE_ID, and SHAREPOINT_LIST_ID environment variables.
+    """
+    logger.info({"event": "save_to_sharepoint", "chat_id": chat_id, "status": "placeholder"})
+    # Placeholder for SharePoint integration
+    # Example mapping to SharePoint columns:
+    # - site_name -> Title (string)
+    # - segment -> Segment (string)
+    # - category -> Category (string)
+    # - company -> Companies (multi-line text, JSON or comma-separated)
+    # - people -> People (multi-line text, JSON or comma-separated)
+    # - roles -> Roles (multi-line text, JSON)
+    # - service -> Services (multi-line text, JSON)
+    # - tools -> Tools (multi-line text, JSON)
+    # - activities -> Activities (multi-line text, comma-separated)
+    # - issues -> Issues (multi-line text, JSON)
+    # - time -> Time (string)
+    # - weather -> Weather (string)
+    # - impression -> Impression (string)
+    # - comments -> Comments (string)
+    # - date -> ReportDate (date)
+    try:
+        # TODO: Implement Microsoft Graph API or SharePoint REST API call
+        # 1. Authenticate using client credentials
+        # 2. Create/update list item with mapped fields
+        # 3. Handle errors and retries
+        logger.warning({"event": "save_to_sharepoint", "status": "not_implemented"})
+        return False
+    except Exception as e:
+        logger.error({"event": "sharepoint_error", "error": str(e)})
+        return False
+
+def generate_pdf_report(report_data):
+    """
+    Generate a PDF report from the provided report data.
+    Returns a BytesIO buffer containing the PDF.
+    """
+    logger.info({"event": "generate_pdf_report", "status": "placeholder"})
+    try:
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        styles = getSampleStyleSheet()
+        story = []
+
+        # Add report title
+        story.append(Paragraph("Construction Site Report", styles['Title']))
+        story.append(Spacer(1, 12))
+
+        # Add report fields
+        fields = [
+            ("Site", report_data.get("site_name", "")),
+            ("Segment", report_data.get("segment", "")),
+            ("Category", report_data.get("category", "")),
+            ("Companies", ", ".join(c.get("name", "") for c in report_data.get("company", []))),
+            ("People", ", ".join(report_data.get("people", []))),
+            ("Roles", ", ".join(f"{r.get('name', '')} ({r.get('role', '')})" for r in report_data.get("roles", []))),
+            ("Services", ", ".join(s.get("task", "") for s in report_data.get("service", []))),
+            ("Tools", ", ".join(t.get("item", "") for t in report_data.get("tools", []))),
+            ("Activities", ", ".join(report_data.get("activities", []))),
+            ("Issues", "; ".join(i.get("description", "") + (f" (by {i.get('caused_by', '')})" if i.get("caused_by") else "") for i in report_data.get("issues", []))),
+            ("Time", report_data.get("time", "")),
+            ("Weather", report_data.get("weather", "")),
+            ("Impression", report_data.get("impression", "")),
+            ("Comments", report_data.get("comments", "")),
+            ("Date", report_data.get("date", ""))
+        ]
+
+        for label, value in fields:
+            if value:
+                story.append(Paragraph(f"<b>{label}:</b> {value}", styles['Normal']))
+                story.append(Spacer(1, 6))
+
+        doc.build(story)
+        buffer.seek(0)
+        logger.info({"event": "pdf_generated", "size_bytes": buffer.getbuffer().nbytes})
+        return buffer
+    except Exception as e:
+        logger.error({"event": "pdf_generation_error", "error": str(e)})
+        return None
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def send_pdf_to_user(chat_id, pdf_buffer):
+    """
+    Send the generated PDF to the user via Telegram.
+    """
+    logger.info({"event": "send_pdf_to_user", "chat_id": chat_id, "status": "placeholder"})
+    try:
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        url = f"https://api.telegram.org/bot{token}/sendDocument"
+        files = {'document': ('report.pdf', pdf_buffer, 'application/pdf')}
+        data = {'chat_id': chat_id, 'caption': 'Here is your construction site report.'}
+        response = requests.post(url, files=files, data=data)
+        response.raise_for_status()
+        logger.info({"event": "pdf_sent", "chat_id": chat_id})
+        return True
+    except Exception as e:
+        logger.error({"event": "pdf_send_error", "error": str(e)})
+        return False
 
 def enrich_with_date(d):
     today = datetime.now().strftime("%d-%m-%Y")
@@ -212,12 +322,16 @@ def extract_site_report(text):
     # Handle multi-field inputs
     commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)?[^:]*$)', text) if cmd.strip()]
     if len(commands) > 1:
+        seen_fields = set()
         for cmd in commands:
             cmd_result = extract_single_command(cmd)
             for key, value in cmd_result.items():
+                if key in seen_fields and key not in ["people", "company", "roles", "tools", "service", "activities", "issues"]:
+                    continue  # Skip duplicates for scalar fields
+                seen_fields.add(key)
                 if key in ["people", "company", "roles", "tools", "service", "activities", "issues"]:
                     result.setdefault(key, []).extend(value)
-                elif key not in result:
+                else:
                     result[key] = value
         logger.info({"event": "multi_field_extracted", "result": result})
         return result
@@ -236,6 +350,16 @@ def extract_single_command(text):
     if text.lower() in ("undo", "/undo"):
         logger.info({"event": "undo_command"})
         return {"undo": True}
+
+    # Handle status command
+    if text.lower() in ("status", "/status"):
+        logger.info({"event": "status_command"})
+        return {"status": True}
+
+    # Handle export command
+    if text.lower() in ("export pdf", "/export pdf"):
+        logger.info({"event": "export_pdf_command"})
+        return {"export_pdf": True}
 
     # Regex-based parsing
     for field, pattern in FIELD_PATTERNS.items():
@@ -334,7 +458,7 @@ def string_similarity(a, b):
 def merge_structured_data(existing, new):
     merged = existing.copy()
     for key, value in new.items():
-        if key in ["reset", "undo"]:
+        if key in ["reset", "undo", "status", "export_pdf"]:
             continue
         if key in ["company", "roles", "tools", "service", "activities", "issues"]:
             if value == []:
@@ -358,7 +482,6 @@ def merge_structured_data(existing, new):
                             break
                     if not replaced and new_item not in existing_list:
                         existing_list.append(new_item)
-                       .operator
                         logger.info({"event": "added_company", "name": new_name})
                 merged[key] = existing_list
             elif key == "roles":
@@ -484,151 +607,4 @@ def webhook():
         if "voice" in msg:
             text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
             if not text:
-                send_telegram_message(chat_id,
-                    "⚠️ Couldn't understand the audio. Please speak clearly (e.g., 'Site: Downtown Project' or 'People add Tobias').")
-                return "ok", 200
-            logger.info({"event": "transcribed_voice", "text": text})
-
-        current_time = time()
-        # Handle reset confirmation
-        if sess.get("awaiting_reset_confirmation", False):
-            logger.info({"event": "reset_confirmation", "text": text, "pending_input": sess["pending_input"]})
-            if text.lower() in ("yes", "new", "new report"):
-                sess["structured_data"] = blank_report()
-                sess["awaiting_correction"] = False
-                sess["awaiting_reset_confirmation"] = False
-                sess["pending_input"] = None
-                sess["command_history"].clear()
-                save_session_data(session_data)
-                tpl = summarize_data(sess["structured_data"])
-                send_telegram_message(chat_id,
-                    "**Starting a fresh report**\n\n" + tpl +
-                    "\n\nSpeak or type your first field (e.g., 'Site: Downtown Project').")
-                return "ok", 200
-            elif text.lower() in ("no", "existing", "continue"):
-                text = sess["pending_input"]
-                sess["awaiting_reset_confirmation"] = False
-                sess["pending_input"] = None
-                sess["last_interaction"] = current_time
-            else:
-                send_telegram_message(chat_id,
-                    "Please clarify: Reset the report? Reply 'yes' or 'no'.")
-                return "ok", 200
-
-        # Check for reset based on pause
-        if (current_time - sess.get("last_interaction", 0) > PAUSE_THRESHOLD and
-                text.lower() not in ("yes", "no", "new", "new report", "reset", "/new", "existing", "continue")):
-            sess["pending_input"] = text
-            sess["awaiting_reset_confirmation"] = True
-            sess["last_interaction"] = current_time
-            save_session_data(session_data)
-            logger.info({"event": "reset_prompt", "pending_input": text})
-            send_telegram_message(chat_id,
-                "It’s been a while! Reset the report? Reply 'yes' or 'no'.")
-            return "ok", 200
-
-        sess["last_interaction"] = current_time
-
-        # Handle explicit reset commands
-        if text.lower() in ("new", "new report", "reset", "/new"):
-            sess["awaiting_reset_confirmation"] = True
-            sess["pending_input"] = text
-            save_session_data(session_data)
-            logger.info({"event": "reset_initiated"})
-            send_telegram_message(chat_id,
-                "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
-            return "ok", 200
-
-        # Handle undo command
-        if text.lower() in ("undo", "/undo"):
-            if sess["command_history"]:
-                prev_state = sess["command_history"].pop()
-                sess["structured_data"] = prev_state
-                save_session_data(session_data)
-                tpl = summarize_data(sess["structured_data"])
-                send_telegram_message(chat_id,
-                    "Undone last action. Here’s the updated report:\n\n" + tpl +
-                    "\n\nAnything else to add or correct?")
-            else:
-                send_telegram_message(chat_id,
-                    "No actions to undo. Add fields like 'Site: X' or 'People add Y'.")
-            return "ok", 200
-
-        # Handle clear commands
-        clear_match = re.match(FIELD_PATTERNS["clear"], text, re.IGNORECASE)
-        if clear_match:
-            field = clear_match.group(1).lower()
-            field = "issues" if field == "issues" else "activities" if field == "activities" else "comments"
-            sess["command_history"].append(sess["structured_data"].copy())
-            sess["structured_data"][field] = [] if field in ["issues", "activities"] else ""
-            save_session_data(session_data)
-            logger.info({"event": "cleared_field", "field": field})
-            tpl = summarize_data(sess["structured_data"])
-            send_telegram_message(chat_id,
-                f"Cleared {field}\n\nHere’s the updated report:\n\n{tpl}\n\nAnything else to add or correct?")
-            return "ok", 200
-
-        # Handle deletion commands
-        delete_match = re.match(r'^(delete|remove)\s+(site|segment|category|company|person|people|role|roles|tool|service|activity|activities|issue|issues|time|weather|impression|comments)(?::\s*(.+))?$|^(delete|remove)\s+(site|segment|category|time|weather|impression|comments)$', text, re.IGNORECASE)
-        if delete_match:
-            action = delete_match.group(1) or delete_match.group(4)
-            field = (delete_match.group(2) or delete_match.group(5)).lower()
-            value = delete_match.group(3)
-            if field in ["person", "people"]:
-                field = "people"
-            elif field in ["role", "roles"]:
-                field = "roles"
-            elif field in ["activity", "activities"]:
-                field = "activities"
-            elif field in ["issue", "issues"]:
-                field = "issues"
-            sess["command_history"].append(sess["structured_data"].copy())
-            sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
-            save_session_data(session_data)
-            logger.info({"event": "deleted", "field": field, "value": value})
-            tpl = summarize_data(sess["structured_data"])
-            send_telegram_message(chat_id,
-                f"Removed {field}" + (f": {value}" if value else "") + f"\n\nHere’s the updated report:\n\n{tpl}\n\nAnything else to add or correct?")
-            return "ok", 200
-
-        # Process new data or corrections
-        extracted = extract_site_report(text)
-        if extracted.get("reset"):
-            sess["awaiting_reset_confirmation"] = True
-            sess["pending_input"] = text
-            save_session_data(session_data)
-            logger.info({"event": "reset_initiated_extracted"})
-            send_telegram_message(chat_id,
-                "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
-            return "ok", 200
-        if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
-            send_telegram_message(chat_id,
-                f"⚠️ Unrecognized input: '{text}'. Try formats like 'Site: Downtown Project', 'People add Tobias', or 'Issue: Power outage'.")
-            return "ok", 200
-        sess["command_history"].append(sess["structured_data"].copy())
-        sess["structured_data"] = merge_structured_data(
-            sess["structured_data"], enrich_with_date(extracted)
-        )
-        sess["awaiting_correction"] = True
-        save_session_data(session_data)
-        logger.info({"event": "updated_session", "awaiting_correction": sess["awaiting_correction"]})
-        tpl = summarize_data(sess["structured_data"])
-        send_telegram_message(chat_id,
-            f"Here’s what I understood:\n\n{tpl}\n\nIs this correct? Reply with corrections or more details.")
-        return "ok", 200
-
-    except Exception as e:
-        logger.error({"event": "webhook_error", "error": str(e)})
-        return "error", 500
-
-@app.get("/")
-def health():
-    logger.info({"event": "health_check"})
-    return "OK", 200
-
-# Log startup
-logger.info({"event": "app_init", "message": "Initializing Flask app for deployment"})
-
-if __name__ == "__main__":
-    logger.info({"event": "app_start", "mode": "local"})
-    app.run(port=int(os.getenv("PORT", 5000)), debug=True)
+                send_telegram_message(chat
