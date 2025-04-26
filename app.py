@@ -197,7 +197,7 @@ Fields to extract (omit if not present):
 - date: string (format dd-mm-yyyy)
 
 Rules:
-- Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Issue:", "Issues:", etc., or clear intent in natural language.
+- Extract fields when explicitly mentioned with keywords like "Site:", "Company:", "Person:", "People:", "Issue:", "Issues:", "Service:", "Tool:", "Activity:", "Activities:", etc., or clear intent in natural language.
 - For segment and category:
   - Extract the value only (e.g., "Category: 3" -> "category": "3", not "Category 3").
   - Do not include the keyword "Segment" or "Category" in the value.
@@ -209,28 +209,32 @@ Rules:
   - "has_photo" is true only if "with photo" or "has photo" is stated.
   - Handle multiple issues as separate objects.
 - For activities:
-  - Recognize keywords: "Work", "Activity", "Activities", "Task", "Progress", "Construction", or action-oriented phrases (e.g., "Work was done").
+  - Recognize keywords: "Activity", "Activities", "Task", "Progress", "Construction", or action-oriented phrases (e.g., "Concrete pouring").
   - "Activities: none" or "Activities none" clears the activities list (return "activities": []).
+  - Extract exact activity phrases without defaulting to generic terms like "work was done".
 - For site_name:
   - Recognize keywords: "Site", "Location", "Project", or location-like phrases following "at", "in", "on" (e.g., "at ABC").
 - For people:
-  - Recognize "add [name] as [role]", "People [name] as [role]", or "Person: [name], role: [role]".
+  - Recognize "add [name] as [role]", "People [name] as [role]", "Person: [name], role: [role]", or "People: [name], role: [role]".
   - If "add [name] as people" or "People [name] as people", treat "people" as a generic role (e.g., {"name": "XYZ", "role": "Worker"}).
+- For company:
+  - Recognize "Company: [name]", "Companies: [name]", or "add company [name]".
 - For tools and service:
-  - Only include "company" if explicitly stated in the context of the tool or service (e.g., "Crane by Acme Corp").
+  - Recognize "Tool: [item]", "Service: [task]", or "add [task/item]".
+  - Only include "company" if explicitly stated in the context (e.g., "Crane by Acme Corp").
   - Do not infer company names from other fields (e.g., "company" list).
 - For comments:
   - Recognize "Comments: none" or "Comments none" to clear comments (return "comments": "").
   - Use as a fallback for general statements that don’t clearly match other fields.
-- If input contains multiple fields (e.g., "Work was done at ABC, Issue: Delay"), extract all relevant fields.
+- If input contains multiple fields (e.g., "Work at ABC, Issue: Delay"), extract all relevant fields.
 - Return {} only for irrelevant inputs (e.g., "Hello world").
 - Case-insensitive matching for keywords.
 
 Examples:
 1. Input: "Site: Downtown Project, Issue: Delayed delivery caused by Supplier with photo"
    Output: {"site_name": "Downtown Project", "issues": [{"description": "Delayed delivery", "caused_by": "Supplier", "has_photo": true}]}
-2. Input: "Work was done at ABC"
-   Output: {"site_name": "ABC", "activities": ["Work was done"]}
+2. Input: "Activities: Concrete pouring"
+   Output: {"activities": ["Concrete pouring"]}
 3. Input: "Issues: none"
    Output: {"issues": []}
 4. Input: "Company: Acme Corp, There’s a delay"
@@ -239,31 +243,66 @@ Examples:
    Output: {}
 6. Input: "All good today"
    Output: {"comments": "All good today"}
-7. Input: "Work at the East Tower, Problem: Broken equipment"
-   Output: {"site_name": "East Tower", "activities": ["Work"], "issues": [{"description": "Broken equipment"}]}
+7. Input: "Service: Erecting steel frames"
+   Output: {"service": [{"task": "Erecting steel frames"}]}
 8. Input: "Category: 3, Segment: 5"
    Output: {"category": "3", "segment": "5"}
-9. Input: "People Anna as Supervisor"
-   Output: {"people": [{"name": "Anna", "role": "Supervisor"}]}
+9. Input: "People Frank as Supervisor"
+   Output: {"people": [{"name": "Frank", "role": "Supervisor"}]}
 10. Input: "add XYZ as people"
     Output: {"people": [{"name": "XYZ", "role": "Worker"}]}
-11. Input: "Service: Erecting steel frames"
-    Output: {"service": [{"task": "Erecting steel frames"}]}
-12. Input: "Activities: none"
+11. Input: "Activities: none"
     Output: {"activities": []}
+12. Input: "Person: John, role: Foreman"
+    Output: {"people": [{"name": "John", "role": "Foreman"}]}
+13. Input: "Company: Delta Build"
+    Output: {"company": [{"name": "Delta Build"}]}
 """
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def extract_site_report(text):
-    # Handle people addition with "as people" or "People [name] as [role]"
-    person_match = re.match(r'^(?:add\s+|people\s+)?(\w+\s*\w*)\s+as\s+(people|worker|\w+\s*\w*)$', text, re.IGNORECASE)
+    # Handle people addition
+    person_match = re.match(r'^(?:add\s+|people\s+|person\s+)?(\w+\s*\w*)\s*[:,]?\s*as\s+(people|worker|\w+\s*\w*)$|^(?:person|people)\s*[:,]?\s*(\w+\s*\w*)\s*,\s*role\s*[:,]?\s*(\w+\s*\w*)$', text, re.IGNORECASE)
     if person_match:
-        name, role = person_match.groups()
+        if person_match.group(1):  # add/people/person [name] as [role]
+            name, role = person_match.group(1), person_match.group(2)
+        else:  # person: [name], role: [role]
+            name, role = person_match.group(3), person_match.group(4)
         role = "Worker" if role.lower() == "people" else role.title()
         return {"people": [{"name": name.strip(), "role": role}]}
 
+    # Handle company addition
+    company_match = re.match(r'^(?:add\s+company\s+|company\s+|companies\s+)[:,]?\s*(.+)$', text, re.IGNORECASE)
+    if company_match:
+        name = company_match.group(1).strip()
+        return {"company": [{"name": name}]}
+
+    # Handle service addition
+    service_match = re.match(r'^(?:add\s+service\s+|service\s+|services\s+)[:,]?\s*(.+)$', text, re.IGNORECASE)
+    if service_match:
+        task = service_match.group(1).strip()
+        return {"service": [{"task": task}]}
+
+    # Handle tool addition
+    tool_match = re.match(r'^(?:add\s+tool\s+|tool\s+|tools\s+)[:,]?\s*(.+)$', text, re.IGNORECASE)
+    if tool_match:
+        item = tool_match.group(1).strip()
+        return {"tools": [{"item": item}]}
+
+    # Handle activity addition
+    activity_match = re.match(r'^(?:add\s+activity\s+|activity\s+|activities\s+)[:,]?\s*(.+)$', text, re.IGNORECASE)
+    if activity_match:
+        activity = activity_match.group(1).strip()
+        return {"activities": [activity]}
+
+    # Handle issue addition
+    issue_match = re.match(r'^(?:add\s+issue\s+|issue\s+|issues\s+)[:,]?\s*(.+)$', text, re.IGNORECASE)
+    if issue_match:
+        description = issue_match.group(1).strip()
+        return {"issues": [{"description": description}]}
+
     # Handle "Issues none", "Activities none", "Comments none"
-    clear_match = re.match(r'^(issues|activities|comments)\s+none$', text, re.IGNORECASE)
+    clear_match = re.match(r'^(issues|activities|comments)\s*[:,]?\s*none$', text, re.IGNORECASE)
     if clear_match:
         field = clear_match.group(1).lower()
         field = "issues" if field == "issues" else "activities" if field == "activities" else "comments"
@@ -301,13 +340,10 @@ def extract_site_report(text):
                 activity_keywords = r'\b(work|activity|task|progress|construction)\b'
                 location_keywords = r'\b(at|in|on)\b'
                 if re.search(activity_keywords, text.lower()) and re.search(location_keywords, text.lower()):
-                    location = text.lower().split("at")[-1].strip() if "at" in text.lower() else \
-                              text.lower().split("in")[-1].strip() if "in" in text.lower() else \
-                              text.lower().split("on")[-1].strip()
-                    activity = text[:text.lower().index("at")].strip() if "at" in text.lower() else \
-                              text[:text.lower().index("in")].strip() if "in" in text.lower() else \
-                              text[:text.lower().index("on")].strip()
-                    data = {"site_name": location.title(), "activities": [activity]}
+                    parts = re.split(r'\b(at|in|on)\b', text, flags=re.IGNORECASE)
+                    location = parts[-1].strip().title()
+                    activity = parts[0].strip()
+                    data = {"site_name": location, "activities": [activity]}
                     logger.info(f"Fallback applied: Treated as activity and site: {data}")
                 else:
                     data = {"comments": text.strip()}
@@ -323,13 +359,10 @@ def extract_site_report(text):
         activity_keywords = r'\b(work|activity|task|progress|construction)\b'
         location_keywords = r'\b(at|in|on)\b'
         if text.strip() and re.search(activity_keywords, text.lower()) and re.search(location_keywords, text.lower()):
-            location = text.lower().split("at")[-1].strip() if "at" in text.lower() else \
-                      text.lower().split("in")[-1].strip() if "in" in text.lower() else \
-                      text.lower().split("on")[-1].strip()
-            activity = text[:text.lower().index("at")].strip() if "at" in text.lower() else \
-                      text[:text.lower().index("in")].strip() if "in" in text.lower() else \
-                      text[:text.lower().index("on")].strip()
-            data = {"site_name": location.title(), "activities": [activity]}
+            parts = re.split(r'\b(at|in|on)\b', text, flags=re.IGNORECASE)
+            location = parts[-1].strip().title()
+            activity = parts[0].strip()
+            data = {"site_name": location, "activities": [activity]}
             logger.info(f"Extraction failed; fallback to activity and site: {data}")
             return data
         return {"comments": text.strip()} if text.strip() else {}
@@ -560,7 +593,7 @@ def webhook():
             return "ok", 200
 
         # Handle clear commands (e.g., "Issues none", "Activities none")
-        clear_match = re.match(r'^(issues|activities|comments)\s+none$', text, re.IGNORECASE)
+        clear_match = re.match(r'^(issues|activities|comments)\s*[:,]?\s*none$', text, re.IGNORECASE)
         if clear_match:
             field = clear_match.group(1).lower()
             field = "issues" if field == "issues" else "activities" if field == "activities" else "comments"
@@ -591,22 +624,22 @@ def webhook():
                 "\n\nAnything else to add or correct?")
             return "ok", 200
 
-        if not sess["awaiting_correction"]:
-            extracted = extract_site_report(text)
-            if not extracted.get("site_name"):
-                send_telegram_message(chat_id,
-                    "🏗️ Please provide a site name to start the report (e.g., 'Site: Downtown Project' or 'Work at ABC').")
-                return "ok", 200
-            sess["structured_data"] = merge_structured_data(
-                sess["structured_data"], enrich_with_date(extracted)
-            )
-            sess["awaiting_correction"] = True
-            save_session_data(session_data)
-            tpl = summarize_data(sess["structured_data"])
+        # Process new data or corrections
+        extracted = extract_site_report(text)
+        if not sess["awaiting_correction"] and not extracted.get("site_name") and not any(k in extracted for k in ["company", "people", "tools", "service", "activities", "issues"]):
             send_telegram_message(chat_id,
-                "Here’s what I understood:\n\n" + tpl +
-                "\n\nIs this correct? Reply with corrections or more details.")
+                "🏗️ Please provide a site name to start the report (e.g., 'Site: Downtown Project' or 'Work at ABC').")
             return "ok", 200
+        sess["structured_data"] = merge_structured_data(
+            sess["structured_data"], enrich_with_date(extracted)
+        )
+        sess["awaiting_correction"] = True
+        save_session_data(session_data)
+        tpl = summarize_data(sess["structured_data"])
+        send_telegram_message(chat_id,
+            "Here’s what I understood:\n\n" + tpl +
+            "\n\nIs this correct? Reply with corrections or more details.")
+        return "ok", 200
 
         # Handle corrections explicitly
         correction_match = re.match(r'^(correct|update)\s+(company|person|people|issue|issues|service|tool|activity|site|segment|category|time|weather|impression|comments)\s+(.+?)\s+to\s+(.+)$', text, re.IGNORECASE)
