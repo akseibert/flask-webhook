@@ -54,7 +54,6 @@ app = Flask(__name__)
 # --- Handle shutdown signals ---
 def handle_shutdown(signum, frame):
     logger.info({"event": "shutdown_signal", "signal": signum})
-    # Perform cleanup if needed
     sys.exit(0)
 
 signal.signal(signal.SIGTERM, handle_shutdown)
@@ -139,6 +138,7 @@ Rules:
 - Comments should only include non-field-specific notes.
 - Return {} for reset commands or irrelevant inputs.
 - Case-insensitive matching.
+- Handle natural language inputs flexibly, allowing variations like "Activities: laying foundation" or "Add issue power outage".
 
 Examples:
 1. Input: "add site Central Plaza, insert segment 5, add issues Power outage"
@@ -163,6 +163,10 @@ Examples:
     Output: {"company": [{"name": "Techmond AG"}]}
 11. Input: "adjust issues water leakage to pipe burst"
     Output: {"issues": [{"description": "pipe burst"}]}
+12. Input: "Activities: laying foundation"
+    Output: {"activities": ["laying foundation"]}
+13. Input: "Add issue power outage"
+    Output: {"issues": [{"description": "power outage"}]}
 """
 
 # --- Session data persistence ---
@@ -220,25 +224,25 @@ def blank_report():
 
 # --- Centralized regex patterns ---
 FIELD_PATTERNS = {
-    "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$)',
+    "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
     "category": r'^(?:(?:add|insert)\s+categories?\s+|categories?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
-    "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|comments)\s*:)|$)',
-    "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*|(?:add|insert)\s+[^,]+?\s+as\s+(?:peoples?|persons?)\s*)([^,\s]+)(?:\s+as\s+[^,\s]+)?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$)',
-    "role": r'^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+)\s*[:,]?\s*as\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$)|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$)',
-    "supervisor": r'^(?:supervisors?\s*(?:were|are)\s+|i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*$)([^,]+?)?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$)',
-    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$)',
-    "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$)',
-    "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$)',
-    "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:)|$)',
-    "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*[:,]?\s*|issues?\s*(?:encountered|included)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|time|weather|impression|comments)\s*:)|$)',
-    "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|impression|comments)\s*:)|$)',
-    "time": r'^(?:(?:add|insert)\s+times?\s+|times?\s*[:,]?\s*|time\s+spent\s+|morning\s+time\s*|afternoon\s+time\s*|evening\s+time\s*)(morning|afternoon|evening|full day)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|weather|impression|comments)\s*:)|$)',
-    "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$)',
+    "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|comments)\s*:)|$|\s*$)',
+    "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*|(?:add|insert)\s+[^,]+?\s+as\s+(?:peoples?|persons?)\s*)([^,\s]+)(?:\s+as\s+[^,\s]+)?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "role": r'^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+)\s*[:,]?\s*as\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "supervisor": r'^(?:supervisors?\s*(?:were|are)\s+|i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*$)([^,]+?)?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*[:,]?\s*|issues?\s*(?:encountered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|impression|comments)\s*:)|$|\s*$)',
+    "time": r'^(?:(?:add|insert)\s+times?\s+|times?\s*[:,]?\s*|time\s+spent\s+|morning\s+time\s*|afternoon\s+time\s*|evening\s+time\s*)(morning|afternoon|evening|full day)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|weather|impression|comments)\s*:)|$|\s*$)',
+    "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$|\s*$)',
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?)\s*[:,]?\s*none$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": r'^(?:delete|remove)\s+(sites?|segments?|categories?|companies?|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?)(?:\s+(.+))?$',
-    "correct": r'^(?:correct|adjust|update)\s+(sites?|segments?|categories?|companies?|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?)\s+([^,\s]+(?:\s+[^,\s]+)*)\s+to\s+([^,]+?)(?=(?:\s*,\s*(?:sites?|segments?|categories?|companies?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?)\s*:)|$)'
+    "delete": r'^(?:delete|remove)\s+(sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?)(?:\s+(.+))?$',
+    "correct": r'^(?:correct|adjust|update)\s+(sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?)\s+([^,\s]+(?:\s+[^,\s]+)*)\s+to\s+([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
 }
 
 # Validate regex patterns
@@ -491,10 +495,6 @@ def extract_site_report(text):
                     processed_result[field].append({"correct": {"old": old_value, "new": new_value}})
                 continue
 
-            if re.match(r'^(?:add|insert|correct|adjust|update)\s+', cmd, re.IGNORECASE):
-                logger.info({"event": "skipped_command", "command": cmd})
-                continue
-
             cmd_result = extract_single_command(cmd)
             if cmd_result.get("reset"):
                 return {"reset": True}
@@ -539,6 +539,8 @@ def extract_site_report(text):
                     result[field] = [{"item": i} for i in existing_items] + final_items
                 elif field == "roles":
                     result[field] = [i for i in existing_items if isinstance(i, dict)] + final_items
+                elif field == "activities":
+                    result[field] = existing_items + [item for item in final_items if isinstance(item, str)]
 
         logger.info({"event": "multi_field_extracted", "result": result})
         return result
@@ -549,8 +551,8 @@ def extract_site_report(text):
 def extract_single_command(text):
     try:
         result = {}
-
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
+        logger.info({"event": "extract_single_command_start", "input": normalized_text})
 
         reset_match = re.match(FIELD_PATTERNS["reset"], normalized_text, re.IGNORECASE)
         if reset_match:
@@ -578,8 +580,16 @@ def extract_single_command(text):
             logger.info({"event": "corrected_field", "field": field, "old": old_value, "new": new_value})
             if field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
                 result[field] = new_value
-            elif field in ["company", "tools", "service", "activities", "issues"]:
-                result[field] = [{"name" if field == "company" else "item" if field == "tools" else "task" if field == "service" else "description": new_value}]
+            elif field in ["company"]:
+                result[field] = [{"name": new_value}]
+            elif field in ["tools"]:
+                result[field] = [{"item": new_value}]
+            elif field in ["service"]:
+                result[field] = [{"task": new_value}]
+            elif field in ["issues"]:
+                result[field] = [{"description": new_value}]
+            elif field in ["activities"]:
+                result[field] = [new_value]
             elif field == "people":
                 result["people"] = [new_value]
             elif field == "roles":
@@ -592,7 +602,9 @@ def extract_single_command(text):
             match = re.match(pattern, text, re.IGNORECASE)
             if match:
                 field = field_mapping.get(raw_field, raw_field)
+                logger.info({"event": "field_matched", "raw_field": raw_field, "mapped_field": field, "input": text})
                 if field == "site_name" and re.search(r'\b(add|insert|delete|remove|correct|adjust|update|none|as|role|new|reset)\b', text.lower()):
+                    logger.info({"event": "skipped_site_name", "reason": "command-like input"})
                     continue
                 if field == "people":
                     name = clean_value(match.group(1), field)
@@ -625,12 +637,33 @@ def extract_single_command(text):
                     field_name = field_mapping.get(match.group(1).lower(), match.group(1).lower())
                     result[field_name] = [] if field_name in ["issues", "activities", "tools", "service", "company", "people", "roles"] else ""
                     logger.info({"event": "extracted_field", "field": field_name, "value": "none"})
-                elif field in ["service", "tool", "issue"]:
+                elif field in ["service"]:
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result[field] = []
                     else:
-                        result[field] = [{"task" if field == "service" else "item" if field == "tool" else "description": value}]
+                        result[field] = [{"task": value}]
+                    logger.info({"event": "extracted_field", "field": field, "value": value})
+                elif field in ["tool"]:
+                    value = clean_value(match.group(1), field)
+                    if value.lower() == "none":
+                        result[field] = []
+                    else:
+                        result[field] = [{"item": value}]
+                    logger.info({"event": "extracted_field", "field": field, "value": value})
+                elif field == "issue":
+                    value = clean_value(match.group(1), field)
+                    if value.lower() == "none":
+                        result[field] = []
+                    else:
+                        result[field] = [{"description": value}]
+                    logger.info({"event": "extracted_field", "field": field, "value": value})
+                elif field == "activity":
+                    value = clean_value(match.group(1), field)
+                    if value.lower() == "none":
+                        result[field] = []
+                    else:
+                        result[field] = [value]
                     logger.info({"event": "extracted_field", "field": field, "value": value})
                 else:
                     value = clean_value(match.group(1), field)
@@ -653,23 +686,26 @@ def extract_single_command(text):
             for field in ["category", "segment"]:
                 if field in data and isinstance(data[field], str):
                     data[field] = clean_value(data[field], field)
-            for field in ["tools", "service", "issues"]:
+            for field in ["tools", "service", "issues", "activities"]:
                 if field in data:
-                    for item in data[field]:
-                        if isinstance(item, dict):
-                            if field == "tools" and "item" in item:
-                                item["item"] = clean_value(item["item"], field)
-                            elif field == "service" and "task" in item:
-                                item["task"] = clean_value(item["task"], field)
-                            elif field == "issues" and "description" in item:
-                                item["description"] = clean_value(item["description"], field)
+                    if field == "activities":
+                        data[field] = [clean_value(item, field) for item in data[field] if isinstance(item, str)]
+                    else:
+                        for item in data[field]:
+                            if isinstance(item, dict):
+                                if field == "tools" and "item" in item:
+                                    item["item"] = clean_value(item["item"], field)
+                                elif field == "service" and "task" in item:
+                                    item["task"] = clean_value(item["task"], field)
+                                elif field == "issues" and "description" in item:
+                                    item["description"] = clean_value(item["description"], field)
             if "roles" in data:
                 for role in data["roles"]:
                     if isinstance(role, dict) and "name" in role and role["name"] not in data.get("people", []):
                         data.setdefault("people", []).append(clean_value(role["name"], "people"))
             if not data and text.strip():
                 issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
-                activity_keywords = r'\b(work\s+was\s+done|activity|task|progress|construction|building|laying|setting|wiring|installation|scaffolding)\b'
+                activity_keywords = r'\b(work\s+was\s+done|activity|activities|task|progress|construction|building|laying|setting|wiring|installation|scaffolding)\b'
                 location_keywords = r'\b(at|in|on)\b'
                 if re.search(issue_keywords, text.lower()):
                     cleaned_text = clean_value(text.strip(), "issues")
@@ -774,6 +810,12 @@ def merge_structured_data(existing, new):
                             existing_list.append(new_item)
                             logger.info({"event": "added_issue", "description": new_desc})
                     merged[key] = existing_list
+                elif key == "activities":
+                    for item in new_items:
+                        if isinstance(item, str) and item not in existing_list:
+                            existing_list.append(item)
+                            logger.info({"event": "added_activity", "value": item})
+                    merged[key] = existing_list
                 else:
                     for item in new_items:
                         if key in ["tools", "service"]:
@@ -852,7 +894,7 @@ def webhook():
         logger.info({"event": "webhook_hit", "request_data": request.get_data(as_text=True)})
         data = request.get_json(force=True)
         logger.info({"event": "webhook_json", "data": data})
-        if "message" not in data:
+        if not data or "message" not in data:
             logger.info({"event": "no_message"})
             return "ok", 200
 
@@ -1025,8 +1067,9 @@ def webhook():
                 "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
             return "ok", 200
         if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
+            logger.warning({"event": "unrecognized_input", "input": text})
             send_telegram_message(chat_id,
-                f"⚠️ Unrecognized input: '{text}'. Try formats like 'add site Downtown Project', 'add company Acme Corp', 'delete company Taekwondo Agi', or 'Companies: A, B, C'. Examples: 'add segment B', 'add time morning', 'new report' to reset, 'correct company OrientCorp to Orion Corp'.")
+                f"⚠️ Unrecognized input: '{text}'. Try formats like 'add site Downtown Project', 'add issue power outage', 'Activities: laying foundation', 'delete company Taekwondo Agi', or 'correct company OrientCorp to Orion Corp'.")
             return "ok", 200
         sess["command_history"].append(sess["structured_data"].copy())
         sess["structured_data"] = merge_structured_data(
