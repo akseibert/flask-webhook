@@ -745,7 +745,7 @@ def extract_single_command(text):
                             elif field == "issues" and "description" in item:
                                 item["description"] = clean_value(item["description"], field)
             if "activities" in data:
-                data["activities"] = [clean_value(item, "activities") for item in data[field] if isinstance(item, str)]
+                data["activities"] = [clean_value(item, "activities") for item in data["activities"] if isinstance(item, str)]
             if "roles" in data:
                 for role in data["roles"]:
                     if isinstance(role, dict) and "name" in role and role["name"] not in data.get("people", []):
@@ -1128,4 +1128,40 @@ def webhook():
             value = delete_match.group(2).strip() if delete_match.group(2) else None
             field = field_mapping.get(raw_field, raw_field)
             if not field:
-                logger.error({"event": "delete_command_error", "text":
+                logger.error({"event": "delete_command_error", "text": text, "error": "No field captured"})
+                send_telegram_message(chat_id,
+                    f"⚠️ Invalid delete command: '{text}'. Try formats like 'delete company Taekwondo Agi', 'delete Jonas from people', or 'activities delete tone'.")
+                return "ok", 200
+            sess["command_history"].append(sess["structured_data"].copy())
+            sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
+            save_session_data(session_data)
+            logger.info({"event": "deleted", "field": field, "value": value})
+            tpl = summarize_data(sess["structured_data"])
+            send_telegram_message(chat_id,
+                f"Removed {field}" + (f": {value}" if value else "") + f"\n\nHere’s the updated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+
+        # Process new data or corrections
+        extracted = extract_site_report(text)
+        logger.info({"event": "extracted_data", "extracted": extracted})
+        if extracted.get("reset"):
+            sess["awaiting_reset_confirmation"] = True
+            sess["pending_input"] = text
+            save_session_data(session_data)
+            logger.info({"event": "reset_initiated_extracted"})
+            send_telegram_message(chat_id,
+                "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
+            return "ok", 200
+        if extracted.get("correct_prompt"):
+            field = extracted["correct_prompt"]["field"]
+            value = extracted["correct_prompt"]["value"]
+            sess["awaiting_spelling_correction"] = (field, value)
+            save_session_data(session_data)
+            logger.info({"event": "awaiting_spelling_correction", "field": field, "value": value})
+            send_telegram_message(chat_id,
+                f"Please provide the correct spelling for '{value}' in {field}.")
+            return "ok", 200
+        if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
+            logger.warning({"event": "unrecognized_input", "input": text})
+            send_telegram_message(chat_id,
+                f"⚠️ Unrecognized input: '{text}'. Try formats like 'add site Downtown Project', 'add issue power outage',
