@@ -7,6 +7,7 @@ import logging
 import signal
 import sys
 from datetime import datetime
+from typing import Dict, Any, List, Optional
 from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 from difflib import SequenceMatcher
@@ -17,8 +18,17 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 import io
 
+# --- Configuration ---
+CONFIG = {
+    "SESSION_FILE": "/opt/render/project/src/session_data.json",
+    "PAUSE_THRESHOLD": 300,  # 5 minutes in seconds
+    "MAX_HISTORY": 10,  # Max commands to store for undo
+    "OPENAI_MODEL": "gpt-3.5-turbo",
+    "OPENAI_TEMPERATURE": 0.2,
+}
+
 # --- Field Mapping ---
-field_mapping = {
+FIELD_MAPPING = {
     'site': 'site_name', 'sites': 'site_name',
     'segment': 'segment', 'segments': 'segment',
     'category': 'category', 'categories': 'category',
@@ -35,7 +45,7 @@ field_mapping = {
     'comment': 'comments', 'comments': 'comments'
 }
 
-# --- Initialize logging ---
+# --- Initialize Logging ---
 try:
     logging.basicConfig(
         filename="/opt/render/project/src/app.log",
@@ -51,40 +61,46 @@ except Exception as e:
 
 app = Flask(__name__)
 
-# --- Handle shutdown signals ---
-def handle_shutdown(signum, frame):
+# --- Signal Handlers ---
+def handle_shutdown(signum: int, frame: Any) -> None:
     logger.info({"event": "shutdown_signal", "signal": signum})
     sys.exit(0)
 
 signal.signal(signal.SIGTERM, handle_shutdown)
 signal.signal(signal.SIGINT, handle_shutdown)
 
-# --- Validate environment variables ---
-required_env_vars = ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"]
-optional_env_vars = ["SHAREPOINT_CLIENT_ID", "SHAREPOINT_CLIENT_SECRET", "SHAREPOINT_TENANT_ID", "SHAREPOINT_SITE_ID", "SHAREPOINT_LIST_ID"]
-try:
-    for var in required_env_vars:
-        if not os.getenv(var):
-            logger.error(f"Missing required environment variable: {var}")
-            raise ValueError(f"Missing {var}")
-    for var in optional_env_vars:
-        if not os.getenv(var):
-            logger.warning(f"Optional environment variable {var} not set; SharePoint integration disabled")
-    logger.info({"event": "env_vars_validated"})
-except Exception as e:
-    logger.error(f"Environment variable validation failed: {e}")
-    raise
+# --- Environment Validation ---
+def validate_environment() -> None:
+    required_env_vars = ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"]
+    optional_env_vars = [
+        "SHAREPOINT_CLIENT_ID", "SHAREPOINT_CLIENT_SECRET",
+        "SHAREPOINT_TENANT_ID", "SHAREPOINT_SITE_ID", "SHAREPOINT_LIST_ID"
+    ]
+    try:
+        for var in required_env_vars:
+            if not os.getenv(var):
+                logger.error({"event": "missing_env_var", "variable": var})
+                raise ValueError(f"Missing required environment variable: {var}")
+        for var in optional_env_vars:
+            if not os.getenv(var):
+                logger.warning({"event": "optional_env_var_missing", "variable": var, "message": "SharePoint integration disabled"})
+        logger.info({"event": "env_vars_validated"})
+    except Exception as e:
+        logger.error({"event": "env_validation_failed", "error": str(e)})
+        raise
 
-# --- Initialize OpenAI client ---
+validate_environment()
+
+# --- Initialize OpenAI Client ---
 try:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     logger.info({"event": "openai_client_initialized"})
 except Exception as e:
-    logger.error(f"OpenAI initialization failed: {e}")
+    logger.error({"event": "openai_init_failed", "error": str(e)})
     raise
 
-# --- GPT Prompt for complex input parsing ---
-gpt_prompt = """
+# --- GPT Prompt ---
+GPT_PROMPT = """
 You are an AI assistant extracting a construction site report from user input. Extract all explicitly mentioned fields and return them in JSON format. Process the entire input as a single unit, splitting on commas or periods only when fields are clearly separated by keywords. Map natural language phrases and standardized commands (add, insert, delete, correct, adjust) to fields accurately, prioritizing specific fields over comments or site_name. Do not treat reset commands ("new", "new report", "reset", "reset report", "/new") as comments or fields; return {} for these. Handle "none" inputs (e.g., "Tools: none") as clearing the respective field, and vague inputs (e.g., "Activities: many") by adding them and noting clarification needed.
 
 Fields to extract (omit if not present):
@@ -175,28 +191,24 @@ Examples:
     Output: {"activities": []} // Assuming tone was in the list
 """
 
-# --- Session data persistence ---
-SESSION_FILE = "/opt/render/project/src/session_data.json"
-PAUSE_THRESHOLD = 300  # 5 minutes in seconds
-MAX_HISTORY = 10  # Max commands to store for undo
-
-def load_session_data():
+# --- Session Management ---
+def load_session_data() -> Dict[str, Any]:
     try:
-        if os.path.exists(SESSION_FILE):
-            with open(SESSION_FILE) as f:
+        if os.path.exists(CONFIG["SESSION_FILE"]):
+            with open(CONFIG["SESSION_FILE"]) as f:
                 data = json.load(f)
                 for chat_id in data:
                     if "command_history" in data[chat_id]:
-                        data[chat_id]["command_history"] = deque(data[chat_id]["command_history"], maxlen=MAX_HISTORY)
+                        data[chat_id]["command_history"] = deque(data[chat_id]["command_history"], maxlen=CONFIG["MAX_HISTORY"])
                 logger.info({"event": "session_data_loaded"})
                 return data
-        logger.info({"event": "session_data_not_found", "file": SESSION_FILE})
+        logger.info({"event": "session_data_not_found", "file": CONFIG["SESSION_FILE"]})
         return {}
     except Exception as e:
         logger.error({"event": "load_session_data_error", "error": str(e)})
         return {}
 
-def save_session_data(data):
+def save_session_data(data: Dict[str, Any]) -> None:
     try:
         serializable_data = {}
         for chat_id, session in data.items():
@@ -204,10 +216,10 @@ def save_session_data(data):
             if "command_history" in serializable_session:
                 serializable_session["command_history"] = list(serializable_session["command_history"])
             serializable_data[chat_id] = serializable_session
-        os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
-        with open(SESSION_FILE, "w") as f:
+        os.makedirs(os.path.dirname(CONFIG["SESSION_FILE"]), exist_ok=True)
+        with open(CONFIG["SESSION_FILE"], "w") as f:
             json.dump(serializable_data, f)
-        logger.info({"event": "session_data_saved", "file": SESSION_FILE})
+        logger.info({"event": "session_data_saved", "file": CONFIG["SESSION_FILE"]})
     except Exception as e:
         logger.error({"event": "save_session_data_error", "error": str(e)})
 
@@ -218,7 +230,7 @@ except Exception as e:
     logger.error({"event": "session_data_initialization_failed", "error": str(e)})
     raise
 
-def blank_report():
+def blank_report() -> Dict[str, Any]:
     today = datetime.now().strftime("%d-%m-%Y")
     return {
         "site_name": "", "segment": "", "category": "",
@@ -228,7 +240,7 @@ def blank_report():
         "comments": "", "date": today
     }
 
-# --- Centralized regex patterns ---
+# --- Regex Patterns ---
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
@@ -260,8 +272,9 @@ except Exception as e:
     logger.error({"event": "regex_pattern_validation_failed", "field": field, "error": str(e)})
     raise
 
+# --- Telegram Messaging ---
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def send_telegram_message(chat_id, text):
+def send_telegram_message(chat_id: str, text: str) -> requests.Response:
     try:
         token = os.getenv("TELEGRAM_BOT_TOKEN")
         url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -269,12 +282,12 @@ def send_telegram_message(chat_id, text):
         response.raise_for_status()
         logger.info({"event": "send_telegram_message", "chat_id": chat_id, "text": text[:50]})
         return response
-    except Exception as e:
+    except requests.RequestException as e:
         logger.error({"event": "send_telegram_message_error", "chat_id": chat_id, "error": str(e)})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def get_telegram_file_path(file_id):
+def get_telegram_file_path(file_id: str) -> str:
     try:
         token = os.getenv("TELEGRAM_BOT_TOKEN")
         response = requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}")
@@ -282,12 +295,12 @@ def get_telegram_file_path(file_id):
         file_path = response.json()["result"]["file_path"]
         logger.info({"event": "get_telegram_file_path", "file_id": file_id})
         return f"https://api.telegram.org/file/bot{token}/{file_path}"
-    except Exception as e:
+    except requests.RequestException as e:
         logger.error({"event": "get_telegram_file_path_error", "file_id": file_id, "error": str(e)})
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def transcribe_from_telegram_voice(file_id):
+def transcribe_from_telegram_voice(file_id: str) -> str:
     try:
         audio_url = get_telegram_file_path(file_id)
         audio_response = requests.get(audio_url)
@@ -304,11 +317,12 @@ def transcribe_from_telegram_voice(file_id):
             return ""
         logger.info({"event": "transcription_success", "text": text})
         return text
-    except Exception as e:
+    except (requests.RequestException, Exception) as e:
         logger.error({"event": "transcription_failed", "error": str(e)})
         return ""
 
-def save_to_sharepoint(chat_id, report_data):
+# --- SharePoint Integration (Placeholder) ---
+def save_to_sharepoint(chat_id: str, report_data: Dict[str, Any]) -> bool:
     logger.info({"event": "save_to_sharepoint", "chat_id": chat_id, "status": "placeholder"})
     try:
         logger.warning({"event": "save_to_sharepoint", "status": "not_implemented"})
@@ -317,7 +331,8 @@ def save_to_sharepoint(chat_id, report_data):
         logger.error({"event": "sharepoint_error", "error": str(e)})
         return False
 
-def generate_pdf_report(report_data):
+# --- PDF Report Generation ---
+def generate_pdf_report(report_data: Dict[str, Any]) -> Optional[io.BytesIO]:
     logger.info({"event": "generate_pdf_report", "status": "starting"})
     try:
         buffer = io.BytesIO()
@@ -335,7 +350,7 @@ def generate_pdf_report(report_data):
             ("Companies", ", ".join(c.get("name", "") for c in report_data.get("company", []))),
             ("People", ", ".join(report_data.get("people", []))),
             ("Roles", ", ".join(f"{r.get('name', '')} ({r.get('role', '')})" for r in report_data.get("roles", []))),
-            ("Services", ", ".join(s.get("task", "") chevron
+            ("Services", ", ".join(s.get("task", "") for s in report_data.get("service", []))),
             ("Tools", ", ".join(t.get("item", "") for t in report_data.get("tools", []))),
             ("Activities", ", ".join(report_data.get("activities", []))),
             ("Issues", "; ".join(i.get("description", "") + (f" (by {i.get('caused_by', '')})" if i.get("caused_by") else "") for i in report_data.get("issues", []))),
@@ -360,7 +375,7 @@ def generate_pdf_report(report_data):
         return None
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def send_pdf_to_user(chat_id, pdf_buffer):
+def send_pdf_to_user(chat_id: str, pdf_buffer: io.BytesIO) -> bool:
     logger.info({"event": "send_pdf_to_user", "chat_id": chat_id, "status": "starting"})
     try:
         token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -371,66 +386,67 @@ def send_pdf_to_user(chat_id, pdf_buffer):
         response.raise_for_status()
         logger.info({"event": "pdf_sent", "chat_id": chat_id})
         return True
-    except Exception as e:
+    except requests.RequestException as e:
         logger.error({"event": "pdf_send_error", "error": str(e)})
         return False
 
-def enrich_with_date(d):
+# --- Data Processing ---
+def enrich_with_date(data: Dict[str, Any]) -> Dict[str, Any]:
     try:
         today = datetime.now().strftime("%d-%m-%Y")
-        if not d.get("date"):
-            d["date"] = today
+        if not data.get("date"):
+            data["date"] = today
         else:
             try:
-                input_date = datetime.strptime(d["date"], "%d-%m-%Y")
+                input_date = datetime.strptime(data["date"], "%d-%m-%Y")
                 if input_date > datetime.now():
-                    d["date"] = today
+                    data["date"] = today
             except ValueError:
-                d["date"] = today
-        logger.info({"event": "date_enriched", "date": d["date"]})
-        return d
+                data["date"] = today
+        logger.info({"event": "date_enriched", "date": data["date"]})
+        return data
     except Exception as e:
         logger.error({"event": "enrich_with_date_error", "error": str(e)})
         raise
 
-def summarize_data(d):
+def summarize_data(data: Dict[str, Any]) -> str:
     try:
-        logger.info({"event": "summarize_data", "data": json.dumps(d, indent=2)})
+        logger.info({"event": "summarize_data", "data": json.dumps(data, indent=2)})
         lines = []
-        lines.append(f"🏗️ **Site**: {d.get('site_name', '') or ''}")
-        lines.append(f"🛠️ **Segment**: {d.get('segment', '') or ''}")
-        lines.append(f"📋 **Category**: {d.get('category', '') or ''}")
+        lines.append(f"🏗️ **Site**: {data.get('site_name', '') or ''}")
+        lines.append(f"🛠️ **Segment**: {data.get('segment', '') or ''}")
+        lines.append(f"📋 **Category**: {data.get('category', '') or ''}")
         lines.append(
             "🏢 **Companies**: " +
-            ", ".join(c.get("name", "") for c in d.get("company", []) if isinstance(c, dict) and c.get("name")) or ""
+            ", ".join(c.get("name", "") for c in data.get("company", []) if isinstance(c, dict) and c.get("name")) or ""
         )
         lines.append(
             "👷 **People**: " +
-            ", ".join(p for p in d.get("people", []) if p) or ""
+            ", ".join(p for p in data.get("people", []) if p) or ""
         )
         lines.append(
             "🎭 **Roles**: " +
             ", ".join(
                 f"{r.get('name', '')} ({r.get('role', '')})" if isinstance(r, dict) and r.get('role') else r.get('name', '')
-                for r in d.get("roles", [])
+                for r in data.get("roles", [])
             ) or ""
         )
         lines.append(
             "🔧 **Services**: " +
             ", ".join(
-                f"{s.get('task', '')}" for s in d.get("service", []) if isinstance(s, dict) and s.get('task')
+                f"{s.get('task', '')}" for s in data.get("service", []) if isinstance(s, dict) and s.get('task')
             ) or ""
         )
         lines.append(
             "🛠️ **Tools**: " +
             ", ".join(
-                f"{t.get('item', '')}" for t in d.get("tools", []) if isinstance(t, dict) and t.get('item')
+                f"{t.get('item', '')}" for t in data.get("tools", []) if isinstance(t, dict) and t.get('item')
             ) or ""
         )
-        lines.append("📅 **Activities**: " + ", ".join(d.get("activities", [])) or "")
+        lines.append("📅 **Activities**: " + ", ".join(data.get("activities", [])) or "")
         lines.append("⚠️ **Issues**:")
         valid_issues = [
-            i for i in d.get("issues", [])
+            i for i in data.get("issues", [])
             if isinstance(i, dict) and i.get("description", "").strip()
         ]
         if valid_issues:
@@ -442,11 +458,11 @@ def summarize_data(d):
                 lines.append(f"  • {desc}{extra}{photo}")
         else:
             lines.append("")
-        lines.append(f"⏰ **Time**: {d.get('time', '') or ''}")
-        lines.append(f"🌦️ **Weather**: {d.get('weather', '') or ''}")
-        lines.append(f"😊 **Impression**: {d.get('impression', '') or ''}")
-        lines.append(f"💬 **Comments**: {d.get('comments', '') or ''}")
-        lines.append(f"📆 **Date**: {d.get('date', '') or ''}")
+        lines.append(f"⏰ **Time**: {data.get('time', '') or ''}")
+        lines.append(f"🌦️ **Weather**: {data.get('weather', '') or ''}")
+        lines.append(f"😊 **Impression**: {data.get('impression', '') or ''}")
+        lines.append(f"💬 **Comments**: {data.get('comments', '') or ''}")
+        lines.append(f"📆 **Date**: {data.get('date', '') or ''}")
         summary = "\n".join(line for line in lines if line.strip())
         logger.info({"event": "summary_generated", "summary": summary})
         return summary
@@ -454,21 +470,20 @@ def summarize_data(d):
         logger.error({"event": "summarize_data_error", "error": str(e)})
         raise
 
-def clean_value(value, field):
-    """Clean input value to remove erroneous prefixes like 's:' and normalize."""
+def clean_value(value: Optional[str], field: str) -> Optional[str]:
+    """Clean input value to remove erroneous prefixes and normalize."""
     if not value:
         return value
     cleaned = re.sub(r'^(?:s\s*[:\s]*|add\s+|insert\s+|from\s+)', '', value.strip(), flags=re.IGNORECASE)
-    # Prevent common transcription errors (e.g., 'tone' for 'stone')
     cleaned = cleaned.replace('tone', 'stone') if 'tone' in cleaned.lower() and field == 'activities' else cleaned
     logger.info({"event": "cleaned_field_value", "field": field, "raw_value": value, "cleaned_value": cleaned})
     return cleaned
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def extract_site_report(text):
+def extract_site_report(text: str) -> Dict[str, Any]:
     try:
         logger.info({"event": "extract_site_report", "input_text": text})
-        result = {}
+        result: Dict[str, Any] = {}
 
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
 
@@ -478,34 +493,34 @@ def extract_site_report(text):
             return {"reset": True}
 
         commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)[^,]*$)|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
-        processed_result = {"company": [], "roles": [], "tools": [], "service": [], "activities": [], "issues": [], "people": []}
+        processed_result = {
+            "company": [], "roles": [], "tools": [], "service": [],
+            "activities": [], "issues": [], "people": []
+        }
         seen_fields = set()
 
         for cmd in commands:
-            # Handle delete commands
             delete_match = re.match(FIELD_PATTERNS["delete"], cmd, re.IGNORECASE)
             if delete_match:
                 raw_field = delete_match.group(1).lower()
                 value = delete_match.group(2).strip() if delete_match.group(2) else None
-                field = field_mapping.get(raw_field, raw_field)
+                field = FIELD_MAPPING.get(raw_field, raw_field)
                 logger.info({"event": "delete_command_in_list", "field": field, "value": value})
                 if field in processed_result:
                     processed_result[field].append({"delete": value})
                 continue
 
-            # Handle correct commands
             correct_match = re.match(FIELD_PATTERNS["correct"], cmd, re.IGNORECASE)
             if correct_match:
                 raw_field = correct_match.group(1).lower()
                 old_value = correct_match.group(2).strip()
                 new_value = correct_match.group(3).strip() if correct_match.group(3) else None
-                field = field_mapping.get(raw_field, raw_field)
+                field = FIELD_MAPPING.get(raw_field, raw_field)
                 logger.info({"event": "correct_command_in_list", "field": field, "old_value": old_value, "new_value": new_value})
                 if field in processed_result:
                     processed_result[field].append({"correct": {"old": old_value, "new": new_value}})
                 continue
 
-            # Process other commands
             cmd_result = extract_single_command(cmd)
             if cmd_result.get("reset"):
                 return {"reset": True}
@@ -520,7 +535,6 @@ def extract_site_report(text):
                 else:
                     result[key] = value
 
-        # Process deletions and corrections
         for field in processed_result:
             if processed_result[field]:
                 final_items = []
@@ -593,9 +607,9 @@ def extract_site_report(text):
         logger.error({"event": "extract_site_report_error", "input": text, "error": str(e)})
         raise
 
-def extract_single_command(text):
+def extract_single_command(text: str) -> Dict[str, Any]:
     try:
-        result = {}
+        result: Dict[str, Any] = {}
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
         logger.info({"event": "extract_single_command_start", "input": normalized_text})
 
@@ -621,7 +635,7 @@ def extract_single_command(text):
             raw_field = correct_match.group(1).lower()
             old_value = correct_match.group(2).strip()
             new_value = correct_match.group(3).strip() if correct_match.group(3) else None
-            field = field_mapping.get(raw_field, raw_field)
+            field = FIELD_MAPPING.get(raw_field, raw_field)
             logger.info({"event": "corrected_field", "field": field, "old": old_value, "new": new_value})
             if new_value:
                 if field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
@@ -639,7 +653,7 @@ def extract_single_command(text):
                 elif field == "people":
                     result["people"] = [new_value]
                 elif field == "roles":
-                    result["roles"] = [{"name": new_value, "role": "Supervisor"}]  # Preserve existing role or default
+                    result["roles"] = [{"name": new_value, "role": "Supervisor"}]
             else:
                 result["correct_prompt"] = {"field": field, "value": old_value}
             return result
@@ -649,7 +663,7 @@ def extract_single_command(text):
                 continue
             match = re.match(pattern, text, re.IGNORECASE)
             if match:
-                field = field_mapping.get(raw_field, raw_field)
+                field = FIELD_MAPPING.get(raw_field, raw_field)
                 logger.info({"event": "field_matched", "raw_field": raw_field, "mapped_field": field, "input": text})
                 if field == "site_name" and re.search(r'\b(add|insert|delete|remove|correct|adjust|update|none|as|role|new|reset)\b', text.lower()):
                     logger.info({"event": "skipped_site_name", "reason": "command-like input"})
@@ -682,7 +696,7 @@ def extract_single_command(text):
                     result["company"] = [{"name": name}]
                     logger.info({"event": "extracted_field", "field": "company", "value": name})
                 elif field == "clear":
-                    field_name = field_mapping.get(match.group(1).lower(), match.group(1).lower())
+                    field_name = FIELD_MAPPING.get(match.group(1).lower(), match.group(1).lower())
                     result[field_name] = [] if field_name in ["issues", "activities", "tools", "service", "company", "people", "roles"] else ""
                     logger.info({"event": "extracted_field", "field": field_name, "value": "none"})
                 elif field in ["service"]:
@@ -721,11 +735,11 @@ def extract_single_command(text):
 
         messages = [
             {"role": "system", "content": "Extract explicitly stated fields from construction site report input. Handle multi-field inputs by processing the entire input as a single unit. Return JSON with extracted fields."},
-            {"role": "user", "content": gpt_prompt + "\nInput text: " + text}
+            {"role": "user", "content": GPT_PROMPT + "\nInput text: " + text}
         ]
         try:
             response = client.chat.completions.create(
-                model="gpt-3.5-turbo", messages=messages, temperature=0.2
+                model=CONFIG["OPENAI_MODEL"], messages=messages, temperature=CONFIG["OPENAI_TEMPERATURE"]
             )
             raw_response = response.choices[0].message.content
             logger.info({"event": "gpt_response", "raw_response": raw_response})
@@ -768,7 +782,7 @@ def extract_single_command(text):
                     data = {"comments": clean_value(text.strip(), "comments")}
                     logger.info({"event": "fallback_comments", "data": data})
             return data
-        except Exception as e:
+        except (json.JSONDecodeError, Exception) as e:
             logger.error({"event": "gpt_extract_error", "input": text, "error": str(e)})
             if text.strip():
                 issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
@@ -784,7 +798,7 @@ def extract_single_command(text):
         logger.error({"event": "extract_single_command_error", "input": text, "error": str(e)})
         raise
 
-def string_similarity(a, b):
+def string_similarity(a: str, b: str) -> float:
     try:
         similarity = SequenceMatcher(None, a.lower(), b.lower()).ratio()
         logger.info({"event": "string_similarity", "a": a, "b": b, "similarity": similarity})
@@ -793,7 +807,7 @@ def string_similarity(a, b):
         logger.error({"event": "string_similarity_error", "error": str(e)})
         raise
 
-def merge_structured_data(existing, new):
+def merge_structured_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
     try:
         merged = existing.copy()
         for key, value in new.items():
@@ -836,7 +850,7 @@ def merge_structured_data(existing, new):
                             existing_list.append(new_item)
                             logger.info({"event": "added_role", "name": new_name})
                     elif key == "issues" and "description" in new_item:
-                        new_desc = new_item.get("description", "")
+                        new碌desc = new_item.get("description", "")
                         replaced = False
                         for i, existing_item in enumerate(existing_list):
                             if (isinstance(existing_item, dict) and
@@ -900,7 +914,7 @@ def merge_structured_data(existing, new):
         logger.error({"event": "merge_structured_data_error", "error": str(e)})
         raise
 
-def delete_entry(data, field, value=None):
+def delete_entry(data: Dict[str, Any], field: str, value: Optional[str] = None) -> Dict[str, Any]:
     try:
         logger.info({"event": "delete_entry", "field": field, "value": value})
         if field in ["company", "roles", "tools", "service", "issues"]:
@@ -938,8 +952,9 @@ def delete_entry(data, field, value=None):
         logger.error({"event": "delete_entry_error", "field": field, "error": str(e)})
         raise
 
+# --- Webhook Handler ---
 @app.route("/webhook", methods=["POST"])
-def webhook():
+def webhook() -> tuple[str, int]:
     try:
         logger.info({"event": "webhook_hit", "request_data": request.get_data(as_text=True)})
         data = request.get_json(force=True)
@@ -960,7 +975,7 @@ def webhook():
                 "last_interaction": time(),
                 "pending_input": None,
                 "awaiting_reset_confirmation": False,
-                "command_history": deque(maxlen=MAX_HISTORY),
+                "command_history": deque(maxlen=CONFIG["MAX_HISTORY"]),
                 "awaiting_spelling_correction": None
             }
             logger.info({"event": "new_session_created", "chat_id": chat_id})
@@ -976,7 +991,6 @@ def webhook():
 
         current_time = time()
 
-        # Handle spelling correction response
         if sess.get("awaiting_spelling_correction"):
             field, old_value = sess["awaiting_spelling_correction"]
             new_value = text.strip()
@@ -1011,7 +1025,6 @@ def webhook():
                 f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nHere’s the updated report:\n\n{tpl}\n\nAnything else to add or correct?")
             return "ok", 200
 
-        # Handle reset confirmation
         if sess.get("awaiting_reset_confirmation", False):
             normalized_text = re.sub(r'[.!?]\s*$', '', text.strip()).lower()
             logger.info({"event": "reset_confirmation", "text": normalized_text, "pending_input": sess["pending_input"]})
@@ -1037,7 +1050,6 @@ def webhook():
                     "Please clarify: Reset the report? Reply 'yes' or 'no'.")
                 return "ok", 200
 
-        # Check for reset based on pause
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip()) if text else ""
         if normalized_text:
             normalized_text_lower = normalized_text.lower()
@@ -1047,7 +1059,7 @@ def webhook():
                 "⚠️ Empty input received. Please provide a valid command (e.g., 'add site Downtown Project' or 'add issue Power outage').")
             return "ok", 200
 
-        if (current_time - sess.get("last_interaction", 0) > PAUSE_THRESHOLD and
+        if (current_time - sess.get("last_interaction", 0) > CONFIG["PAUSE_THRESHOLD"] and
                 normalized_text_lower not in ("yes", "no", "new", "new report", "reset", "reset report", "/new", "existing", "continue")):
             sess["pending_input"] = text
             sess["awaiting_reset_confirmation"] = True
@@ -1060,7 +1072,6 @@ def webhook():
 
         sess["last_interaction"] = current_time
 
-        # Handle explicit reset commands
         if normalized_text_lower in ("new", "new report", "reset", "reset report", "/new"):
             sess["awaiting_reset_confirmation"] = True
             sess["pending_input"] = text
@@ -1070,7 +1081,6 @@ def webhook():
                 "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
             return "ok", 200
 
-        # Handle undo command
         if normalized_text_lower in ("undo", "/undo"):
             if sess["command_history"]:
                 prev_state = sess["command_history"].pop()
@@ -1085,7 +1095,6 @@ def webhook():
                     "No actions to undo. Add fields like 'add site X' or 'add people Y'.")
             return "ok", 200
 
-        # Handle status command
         if normalized_text_lower in ("status", "/status"):
             tpl = summarize_data(sess["structured_data"])
             send_telegram_message(chat_id,
@@ -1093,7 +1102,6 @@ def webhook():
                 "\n\nAdd more fields or use commands like '/export pdf'.")
             return "ok", 200
 
-        # Handle export pdf command
         if normalized_text_lower in ("export pdf", "/export pdf"):
             pdf_buffer = generate_pdf_report(sess["structured_data"])
             if pdf_buffer:
@@ -1105,11 +1113,10 @@ def webhook():
                 send_telegram_message(chat_id, "⚠️ Failed to generate PDF report. Please try again later.")
             return "ok", 200
 
-        # Handle clear commands
         clear_match = re.match(FIELD_PATTERNS["clear"], text, re.IGNORECASE)
         if clear_match:
             raw_field = clear_match.group(1).lower()
-            field = field_mapping.get(raw_field, raw_field)
+            field = FIELD_MAPPING.get(raw_field, raw_field)
             sess["command_history"].append(sess["structured_data"].copy())
             sess["structured_data"][field] = [] if field in ["issues", "activities", "tools", "service", "company", "people", "roles"] else ""
             save_session_data(session_data)
@@ -1119,59 +1126,12 @@ def webhook():
                 f"Cleared {field}\n\nHere’s the updated report:\n\n{tpl}\n\nAnything else to add or correct?")
             return "ok", 200
 
-        # Handle deletion commands
         delete_match = re.match(FIELD_PATTERNS["delete"], text, re.IGNORECASE)
         if delete_match:
             groups = [delete_match.group(i) for i in range(len(delete_match.groups()) + 1)]
             logger.info({"event": "delete_command_detected", "groups": groups})
             raw_field = delete_match.group(1).lower()
             value = delete_match.group(2).strip() if delete_match.group(2) else None
-            field = field_mapping.get(raw_field, raw_field)
+            field = FIELD_MAPPING.get(raw_field, raw_field)
             if not field:
                 logger.error({"event": "delete_command_error", "text": text, "error": "No field captured"})
-                send_telegram_message(chat_id,
-                    f"⚠️ Invalid delete command: '{text}'. Try formats like 'delete company Taekwondo Agi', 'delete Jonas from people', or 'activities delete tone'.")
-                return "ok", 200
-            sess["command_history"].append(sess["structured_data"].copy())
-            sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
-            save_session_data(session_data)
-            logger.info({"event": "deleted", "field": field, "value": value})
-            tpl = summarize_data(sess["structured_data"])
-            send_telegram_message(chat_id,
-                f"Removed {field}" + (f": {value}" if value else "") + f"\n\nHere’s the updated report:\n\n{tpl}\n\nAnything else to add or correct?")
-            return "ok", 200
-
-        # Process new data or corrections
-        extracted = extract_site_report(text)
-        logger.info({"event": "extracted_data", "extracted": extracted})
-        if extracted.get("reset"):
-            sess["awaiting_reset_confirmation"] = True
-            sess["pending_input"] = text
-            save_session_data(session_data)
-            logger.info({"event": "reset_initiated_extracted"})
-            send_telegram_message(chat_id,
-                "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
-            return "ok", 200
-        if extracted.get("correct_prompt"):
-            field = extracted["correct_prompt"]["field"]
-            value = extracted["correct_prompt"]["value"]
-            sess["awaiting_spelling_correction"] = (field, value)
-            save_session_data(session_data)
-            logger.info({"event": "awaiting_spelling_correction", "field": field, "value": value})
-            send_telegram_message(chat_id,
-                f"Please provide the correct spelling for '{value}' in {field}.")
-            return "ok", 200
-        if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
-            logger.warning({"event": "unrecognized_input", "input": text})
-            send_telegram_message(chat_id,
-                f"⚠️ Unrecognized input: '{text}'. Try formats like 'add site Downtown Project', 'add issue power outage', 'Activities: laying foundation', 'delete company Taekwondo Agi', or 'correct company OrientCorp to Orion Corp'.")
-            return "ok", 200
-        sess["command_history"].append(sess["structured_data"].copy())
-        sess["structured_data"] = merge_structured_data(
-            sess["structured_data"], enrich_with_date(extracted)
-        )
-        save_to_sharepoint(chat_id, sess["structured_data"])
-        sess["awaiting_correction"] = True
-        save_session_data(session_data)
-        logger.info({"event": "updated_session", "awaiting_correction": sess["awaiting_correction"]})
-        clarification =
