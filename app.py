@@ -570,17 +570,17 @@ def extract_site_report(text):
                     else:
                         final_items.append(item)
                 if field == "company":
-                    result[field] = [{"name": i} for i in existing_items] + final_items
+                    result[field] = [{"name": i} for i in existing_items if isinstance(i, str)] + final_items
                 elif field == "issues":
-                    result[field] = [{"description": i} for i in existing_items] + final_items
+                    result[field] = [{"description": i} for i in existing_items if isinstance(i, str)] + final_items
                 elif field == "service":
-                    result[field] = [{"task": i} for i in existing_items] + final_items
+                    result[field] = [{"task": i} for i in existing_items if isinstance(i, str)] + final_items
                 elif field == "tools":
-                    result[field] = [{"item": i} for i in existing_items] + final_items
+                    result[field] = [{"item": i} for i in existing_items if isinstance(i, str)] + final_items
                 elif field == "roles":
                     result[field] = [
                         {"name": i.split(' (')[0], "role": i.split(' (')[1].rstrip(')')}
-                        for i in existing_items if ' (' in i
+                        for i in existing_items if isinstance(i, str) and ' (' in i
                     ] + final_items
                 elif field == "people":
                     result[field] = existing_items + [item for item in final_items if isinstance(item, str)]
@@ -734,19 +734,18 @@ def extract_single_command(text):
             for field in ["category", "segment"]:
                 if field in data and isinstance(data[field], str):
                     data[field] = clean_value(data[field], field)
-            for field in ["tools", "service", "issues", "activities"]:
+            for field in ["tools", "service", "issues"]:
                 if field in data:
-                    if field == "activities":
-                        data[field] = [clean_value(item, field) for item in data[field] if isinstance(item, str)]
-                    else:
-                        for item in data[field]:
-                            if isinstance(item, dict):
-                                if field == "tools" and "item" in item:
-                                    item["item"] = clean_value(item["item"], field)
-                                elif field == "service" and "task" in item:
-                                    item["task"] = clean_value(item["task"], field)
-                                elif field == "issues" and "description" in item:
-                                    item["description"] = clean_value(item["description"], field)
+                    for item in data[field]:
+                        if isinstance(item, dict):
+                            if field == "tools" and "item" in item:
+                                item["item"] = clean_value(item["item"], field)
+                            elif field == "service" and "task" in item:
+                                item["task"] = clean_value(item["task"], field)
+                            elif field == "issues" and "description" in item:
+                                item["description"] = clean_value(item["description"], field)
+            if "activities" in data:
+                data["activities"] = [clean_value(item, "activities") for item in data[field] if isinstance(item, str)]
             if "roles" in data:
                 for role in data["roles"]:
                     if isinstance(role, dict) and "name" in role and role["name"] not in data.get("people", []):
@@ -800,17 +799,17 @@ def merge_structured_data(existing, new):
         for key, value in new.items():
             if key in ["reset", "undo", "status", "export_pdf", "correct_prompt"]:
                 continue
-            if key in ["company", "roles", "tools", "service", "activities", "issues", "people"]:
+            if key in ["company", "roles", "tools", "service", "issues"]:
                 if value == []:
                     merged[key] = []
                     logger.info({"event": "cleared_list", "field": key})
                     continue
                 existing_list = merged.get(key, [])
                 new_items = value if isinstance(value, list) else []
-                if key == "company":
-                    for new_item in new_items:
-                        if not isinstance(new_item, dict) or "name" not in new_item:
-                            continue
+                for new_item in new_items:
+                    if not isinstance(new_item, dict):
+                        continue
+                    if key == "company" and "name" in new_item:
                         new_name = new_item.get("name", "")
                         replaced = False
                         for i, existing_item in enumerate(existing_list):
@@ -820,14 +819,10 @@ def merge_structured_data(existing, new):
                                 replaced = True
                                 logger.info({"event": "replaced_company", "old": existing_item.get("name"), "new": new_name})
                                 break
-                        if not replaced and new_item not in existing_list:
+                        if not replaced:
                             existing_list.append(new_item)
                             logger.info({"event": "added_company", "name": new_name})
-                    merged[key] = existing_list
-                elif key == "roles":
-                    for new_item in new_items:
-                        if not isinstance(new_item, dict) or "name" not in new_item:
-                            continue
+                    elif key == "roles" and "name" in new_item:
                         new_name = new_item.get("name", "")
                         replaced = False
                         for i, existing_item in enumerate(existing_list):
@@ -840,11 +835,7 @@ def merge_structured_data(existing, new):
                         if not replaced:
                             existing_list.append(new_item)
                             logger.info({"event": "added_role", "name": new_name})
-                    merged[key] = existing_list
-                elif key == "issues":
-                    for new_item in new_items:
-                        if not isinstance(new_item, dict) or "description" not in new_item:
-                            continue
+                    elif key == "issues" and "description" in new_item:
                         new_desc = new_item.get("description", "")
                         replaced = False
                         for i, existing_item in enumerate(existing_list):
@@ -857,37 +848,45 @@ def merge_structured_data(existing, new):
                         if not replaced:
                             existing_list.append(new_item)
                             logger.info({"event": "added_issue", "description": new_desc})
-                    merged[key] = existing_list
-                elif key == "activities":
-                    for item in new_items:
-                        if isinstance(item, str) and item not in existing_list:
-                            existing_list.append(item)
-                            logger.info({"event": "added_activity", "value": item})
-                    merged[key] = existing_list
-                elif key == "people":
-                    for item in new_items:
-                        if isinstance(item, str) and item not in existing_list:
-                            existing_list.append(item)
-                            logger.info({"event": "added_person", "value": item})
-                    merged[key] = existing_list
-                else:
-                    for item in new_items:
-                        if key in ["tools", "service"]:
-                            if not isinstance(item, dict) or ("item" not in item and "task" not in item):
-                                continue
-                            existing_items = [
-                                (existing_item.get("item") or existing_item.get("task"),
-                                 existing_item.get("company"))
-                                for existing_item in existing_list if isinstance(existing_item, dict)
-                            ]
-                            new_key = item.get("item") or item.get("task")
-                            if not any(string_similarity(existing_key, new_key) > 0.6 and
-                                       string_similarity(existing_company or "", item.get("company") or "") > 0.6
-                                       for existing_key, existing_company in existing_items):
-                                existing_list.append(item)
-                        elif item not in existing_list:
-                            existing_list.append(item)
-                    merged[key] = existing_list
+                    elif key == "tools" and "item" in new_item:
+                        new_item_name = new_item.get("item", "")
+                        replaced = False
+                        for i, existing_item in enumerate(existing_list):
+                            if (isinstance(existing_item, dict) and
+                                string_similarity(existing_item.get("item", ""), new_item_name) > 0.6):
+                                existing_list[i] = new_item
+                                replaced = True
+                                logger.info({"event": "replaced_tool", "old": existing_item.get("item"), "new": new_item_name})
+                                break
+                        if not replaced:
+                            existing_list.append(new_item)
+                            logger.info({"event": "added_tool", "item": new_item_name})
+                    elif key == "service" and "task" in new_item:
+                        new_task = new_item.get("task", "")
+                        replaced = False
+                        for i, existing_item in enumerate(existing_list):
+                            if (isinstance(existing_item, dict) and
+                                string_similarity(existing_item.get("task", ""), new_task) > 0.6):
+                                existing_list[i] = new_item
+                                replaced = True
+                                logger.info({"event": "replaced_service", "old": existing_item.get("task"), "new": new_task})
+                                break
+                        if not replaced:
+                            existing_list.append(new_item)
+                            logger.info({"event": "added_service", "task": new_task})
+                merged[key] = existing_list
+            elif key in ["activities", "people"]:
+                if value == []:
+                    merged[key] = []
+                    logger.info({"event": "cleared_list", "field": key})
+                    continue
+                existing_list = merged.get(key, [])
+                new_items = value if isinstance(value, list) else []
+                for item in new_items:
+                    if isinstance(item, str) and item not in existing_list:
+                        existing_list.append(item)
+                        logger.info({"event": f"added_{key}", "value": item})
+                merged[key] = existing_list
             else:
                 if value == "" and key in ["comments"]:
                     merged[key] = ""
@@ -1129,72 +1128,4 @@ def webhook():
             value = delete_match.group(2).strip() if delete_match.group(2) else None
             field = field_mapping.get(raw_field, raw_field)
             if not field:
-                logger.error({"event": "delete_command_error", "text": text, "error": "No field captured"})
-                send_telegram_message(chat_id,
-                    f"⚠️ Invalid delete command: '{text}'. Try formats like 'delete company Taekwondo Agi', 'delete Jonas from people', or 'activities delete tone'.")
-                return "ok", 200
-            sess["command_history"].append(sess["structured_data"].copy())
-            sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
-            save_session_data(session_data)
-            logger.info({"event": "deleted", "field": field, "value": value})
-            tpl = summarize_data(sess["structured_data"])
-            send_telegram_message(chat_id,
-                f"Removed {field}" + (f": {value}" if value else "") + f"\n\nHere’s the updated report:\n\n{tpl}\n\nAnything else to add or correct?")
-            return "ok", 200
-
-        # Process new data or corrections
-        extracted = extract_site_report(text)
-        logger.info({"event": "extracted_data", "extracted": extracted})
-        if extracted.get("reset"):
-            sess["awaiting_reset_confirmation"] = True
-            sess["pending_input"] = text
-            save_session_data(session_data)
-            logger.info({"event": "reset_initiated_extracted"})
-            send_telegram_message(chat_id,
-                "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
-            return "ok", 200
-        if extracted.get("correct_prompt"):
-            field = extracted["correct_prompt"]["field"]
-            value = extracted["correct_prompt"]["value"]
-            sess["awaiting_spelling_correction"] = (field, value)
-            save_session_data(session_data)
-            logger.info({"event": "awaiting_spelling_correction", "field": field, "value": value})
-            send_telegram_message(chat_id,
-                f"Please provide the correct spelling for '{value}' in {field}.")
-            return "ok", 200
-        if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
-            logger.warning({"event": "unrecognized_input", "input": text})
-            send_telegram_message(chat_id,
-                f"⚠️ Unrecognized input: '{text}'. Try formats like 'add site Downtown Project', 'add issue power outage', 'Activities: laying foundation', 'delete company Taekwondo Agi', or 'correct company OrientCorp to Orion Corp'.")
-            return "ok", 200
-        sess["command_history"].append(sess["structured_data"].copy())
-        sess["structured_data"] = merge_structured_data(
-            sess["structured_data"], enrich_with_date(extracted)
-        )
-        save_to_sharepoint(chat_id, sess["structured_data"])
-        sess["awaiting_correction"] = True
-        save_session_data(session_data)
-        logger.info({"event": "updated_session", "awaiting_correction": sess["awaiting_correction"]})
-        clarification = "\n\nPlease clarify vague inputs (e.g., 'many') with specific details." if any(v == "many" for v in extracted.get("activities", [])) else ""
-        send_telegram_message(chat_id,
-            f"Here’s what I understood:\n\n{summarize_data(sess['structured_data'])}{clarification}\n\nIs this correct? Reply with corrections or more details.")
-        return "ok", 200
-    except Exception as e:
-        logger.error({"event": "webhook_error", "error": str(e)})
-        return "error", 500
-
-@app.get("/")
-def health():
-    logger.info({"event": "health_check"})
-    return "OK", 200
-
-# Log startup
-logger.info({"event": "app_init", "message": "Initializing Flask app for deployment"})
-
-if __name__ == "__main__":
-    try:
-        logger.info({"event": "app_start", "mode": "local"})
-        app.run(port=int(os.getenv("PORT", 10000)), debug=True)
-    except Exception as e:
-        logger.error({"event": "app_start_error", "error": str(e)})
-        raise
+                logger.error({"event": "delete_command_error", "text":
