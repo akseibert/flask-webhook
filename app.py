@@ -1126,16 +1126,4 @@ def webhook() -> tuple[str, int]:
                 f"Cleared {field}\n\nHere’s the updated report:\n\n{tpl}\n\nAnything else to add or correct?")
             return "ok", 200
 
-        delete_match = re.match(FIELD_PATTERNS["delete"], text, re.IGNORECASE)
-        if delete_match:
-            groups = [delete_match.group(i) for i in range(len(delete_match.groups()) + 1)]
-            logger.info({"event": "delete_command_detected", "groups": groups})
-            raw_field = delete_match.group(1).lower()
-            value = delete_match.group(2).strip() if delete_match.group(2) else None
-            field = FIELD_MAPPING.get(raw_field, raw_field)
-            if not field:
-                logger.error({"event": "delete_command_error", "text": text, "error": "No field captured"})
-                send_telegram_message(chat_id,
-                    f"⚠️ Invalid delete command: '{text}'. Try formats like 'delete company Taekwondo Agi', 'delete Jonas from people', or 'activities delete tone'.")
-                return "ok", 200
-            sess["command_history"].append
+        delete_match = re.match(FIELD_PATTERNS["delete"], text, re
