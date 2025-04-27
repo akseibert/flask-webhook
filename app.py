@@ -408,12 +408,15 @@ def extract_fields(text: str) -> Dict[str, Any]:
             correct_match = re.match(FIELD_PATTERNS["correct"], cmd, re.IGNORECASE)
             if correct_match:
                 raw_field = correct_match.group(1).lower()
-                old_value = correct_match.group(2).strip()
+                old_value = correct_match.group(2).strip() if correct_match.group(2) else None
                 new_value = correct_match.group(3).strip() if correct_match.group(3) else None
                 field = FIELD_MAPPING.get(raw_field, raw_field)
                 logger.info({"event": "correct_command", "field": field, "old": old_value, "new": new_value})
-                if field in processed_result:
-                    processed_result[field].append({"correct": {"old": clean_value(old_value, field), "new": clean_value(new_value, field)}})
+                if field in processed_result and old_value:
+                    if new_value:
+                        processed_result[field].append({"correct": {"old": clean_value(old_value, field), "new": clean_value(new_value, field)}})
+                    else:
+                        result["correct_prompt"] = {"field": field, "value": clean_value(old_value, field)}
                 continue
 
             cmd_result = extract_single_command(cmd)
