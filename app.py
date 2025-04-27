@@ -242,7 +242,7 @@ FIELD_PATTERNS = {
     "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*[:,]?\s*|issues?\s*(?:encountered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|impression|comments)\s*:)|$|\s*$)',
+    "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "time": r'^(?:(?:add|insert)\s+times?\s+|times?\s*[:,]?\s*|time\s+spent\s+|morning\s+time\s*|afternoon\s+time\s*|evening\s+time\s*)(morning|afternoon|evening|full day)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|weather|impression|comments)\s*:)|$|\s*$)',
     "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$|\s*$)',
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?)\s*[:,]?\s*none$',
@@ -1144,4 +1144,57 @@ def webhook():
 
         # Process new data or corrections
         extracted = extract_site_report(text)
-        logger.info({"event":
+        logger.info({"event": "extracted_data", "extracted": extracted})
+        if extracted.get("reset"):
+            sess["awaiting_reset_confirmation"] = True
+            sess["pending_input"] = text
+            save_session_data(session_data)
+            logger.info({"event": "reset_initiated_extracted"})
+            send_telegram_message(chat_id,
+                "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
+            return "ok", 200
+        if extracted.get("correct_prompt"):
+            field = extracted["correct_prompt"]["field"]
+            value = extracted["correct_prompt"]["value"]
+            sess["awaiting_spelling_correction"] = (field, value)
+            save_session_data(session_data)
+            logger.info({"event": "awaiting_spelling_correction", "field": field, "value": value})
+            send_telegram_message(chat_id,
+                f"Please provide the correct spelling for '{value}' in {field}.")
+            return "ok", 200
+        if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
+            logger.warning({"event": "unrecognized_input", "input": text})
+            send_telegram_message(chat_id,
+                f"⚠️ Unrecognized input: '{text}'. Try formats like 'add site Downtown Project', 'add issue power outage', 'Activities: laying foundation', 'delete company Taekwondo Agi', or 'correct company OrientCorp to Orion Corp'.")
+            return "ok", 200
+        sess["command_history"].append(sess["structured_data"].copy())
+        sess["structured_data"] = merge_structured_data(
+            sess["structured_data"], enrich_with_date(extracted)
+        )
+        save_to_sharepoint(chat_id, sess["structured_data"])
+        sess["awaiting_correction"] = True
+        save_session_data(session_data)
+        logger.info({"event": "updated_session", "awaiting_correction": sess["awaiting_correction"]})
+        clarification = "\n\nPlease clarify vague inputs (e.g., 'many') with specific details." if any(v == "many" for v in extracted.get("activities", [])) else ""
+        send_telegram_message(chat_id,
+            f"Here’s what I understood:\n\n{summarize_data(sess['structured_data'])}{clarification}\n\nIs this correct? Reply with corrections or more details.")
+        return "ok", 200
+    except Exception as e:
+        logger.error({"event": "webhook_error", "error": str(e)})
+        return "error", 500
+
+@app.get("/")
+def health():
+    logger.info({"event": "health_check"})
+    return "OK", 200
+
+# Log startup
+logger.info({"event": "app_init", "message": "Initializing Flask app for deployment"})
+
+if __name__ == "__main__":
+    try:
+        logger.info({"event": "app_start", "mode": "local"})
+        app.run(port=int(os.getenv("PORT", 10000)), debug=True)
+    except Exception as e:
+        logger.error({"event": "app_start_error", "error": str(e)})
+        raise
