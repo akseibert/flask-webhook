@@ -73,7 +73,7 @@ def load_session() -> Dict[str, Any]:
             for chat_id, session in data.items():
                 if "command_history" in session:
                     session["command_history"] = deque(session["command_history"], maxlen=CONFIG["MAX_HISTORY"])
-            logger.info({"event": "session_loaded"})
+            logger.info({"event": "session_loaded", "file": CONFIG["SESSION_FILE"]})
             return data
         logger.info({"event": "session_file_not_found", "file": CONFIG["SESSION_FILE"]})
         return {}
@@ -92,7 +92,7 @@ def save_session(session_data: Dict[str, Any]) -> None:
         os.makedirs(os.path.dirname(CONFIG["SESSION_FILE"]), exist_ok=True)
         with open(CONFIG["SESSION_FILE"], "w") as f:
             json.dump(serializable_data, f)
-        logger.info({"event": "session_saved"})
+        logger.info({"event": "session_saved", "file": CONFIG["SESSION_FILE"]})
     except Exception as e:
         logger.error({"event": "save_session_error", "error": str(e)})
 
@@ -349,7 +349,7 @@ FIELD_PATTERNS = {
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?)\s*[:,]?\s*none$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
     "delete": r'^(?:delete|remove)\s+(?:from\s+)?(?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?)\s*(?:from\s+)?\s*([^\s,]+(?:\s+[^\s,]+)*)?$',
-    "correct": r'^(?:correct|adjust|update)\s+(?:spelling\s+)?(?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?)\s+([^,\s]+(?:\s+[^,\s]+)*)(?:\s+to\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
+    "correct": r'^(?:correct|adjust|update)(?:\s+spelling)?\s+(sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?)\s+(.+?)(?:\s+to\s+(.+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
 }
 
 def validate_patterns() -> None:
