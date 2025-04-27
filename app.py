@@ -318,18 +318,19 @@ def generate_pdf_report(report_data):
         story.append(Spacer(1, 12))
 
         fields = [
-            ("Site", report_data.get("site_name", "")),
-            ("Segment", report_data.get("segment", "")),
-            ("Category", report_data.get("category", "")),
-            ("Companies", ", ".join(c.get("name", "") for c in report_data.get("company", []))),
-            ("People", ", ".join(report_data.get("people", []))),
-            ("Roles", ", ".join(f"{r.get('name', '')} ({r.get('role', '')})" for r in report_data.get("roles", []))),
-            ("Services", ", ".join(s.get("task", "") for s in report_data.get("service", []))),
-            ("Tools", ", ".join(t.get("item", "") for t in report_data.get("tools", []))),
-            ("Activities", ", ".join(report_data.get("activities", []))),
-            ("Issues", "; ".join(i.get("description", "") + (f" (by {i.get('caused_by', '')})" if i.get("caused_by") else "") for i in report_data.get("issues", []))),
-            ("Time", report_data.get("time", "")),
-            ("Weather", report_data.get("weather", "")),
-            ("Impression", report_data.get("impression", "")),
-            ("Comments", report_data.get("comments", "")),
-            ("Date", report_data.get("date
+    ("Site", report_data.get("site_name", "")),
+    ("Segment", report_data.get("segment", "")),
+    ("Category", report_data.get("category", "")),
+    ("Companies", ", ".join(c.get("name", "") for c in report_data.get("company", []))),
+    ("People", ", ".join(report_data.get("people", []))),
+    ("Roles", ", ".join(f"{r.get('name', '')} ({r.get('role', '')})" for r in report_data.get("roles", []))),
+    ("Services", ", ".join(s.get("task", "") for s in report_data.get("service", []))),
+    ("Tools", ", ".join(t.get("item", "") for t in report_data.get("tools", []))),
+    ("Activities", ", ".join(report_data.get("activities", []))),
+    ("Issues", "; ".join(i.get("description", "") + (f" (by {i.get('caused_by', '')})" if i.get("caused_by") else "") for i in report_data.get("issues", []))),
+    ("Time", report_data.get("time", "")),
+    ("Weather", report_data.get("weather", "")),
+    ("Impression", report_data.get("impression", "")),
+    ("Comments", report_data.get("comments", "")),
+    ("Date", report_data.get("date", ""))
+]
