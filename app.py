@@ -266,9 +266,9 @@ def generate_pdf(report_data: Dict[str, Any]) -> Optional[io.BytesIO]:
 
 # --- Data Processing ---
 def clean_value(value: Optional[str], field: str) -> Optional[str]:
-    if not value:
+    if value is None:
         return value
-    cleaned = re.sub(r'^(?:s\s*[:\s]*|add\s+|insert\s+|from\s+)', '', value.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r'^(?:add\s+|insert\s+|from\s+|correct\s+spelling\s+)', '', value.strip(), flags=re.IGNORECASE)
     cleaned = cleaned.replace('tone', 'stone') if 'tone' in cleaned.lower() and field == 'activities' else cleaned
     logger.info({"event": "cleaned_value", "field": field, "raw": value, "cleaned": cleaned})
     return cleaned
@@ -413,7 +413,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 field = FIELD_MAPPING.get(raw_field, raw_field)
                 logger.info({"event": "correct_command", "field": field, "old": old_value, "new": new_value})
                 if field in processed_result:
-                    processed_result[field].append({"correct": {"old": old_value, "new": new_value}})
+                    processed_result[field].append({"correct": {"old": clean_value(old_value, field), "new": clean_value(new_value, field)}})
                 continue
 
             cmd_result = extract_single_command(cmd)
@@ -537,28 +537,28 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     if value.lower() == "none":
                         result[field] = []
                     else:
-                        result[field] = [{"task": value}]
+                        result[field] = [{"task": value.strip()}]
                     logger.info({"event": "extracted_field", "field": field, "value": value})
                 elif field in ["tool"]:
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result[field] = []
                     else:
-                        result[field] = [{"item": value}]
+                        result[field] = [{"item": value.strip()}]
                     logger.info({"event": "extracted_field", "field": field, "value": value})
                 elif field == "issue":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result[field] = []
                     else:
-                        result[field] = [{"description": value}]
+                        result[field] = [{"description": value.strip()}]
                     logger.info({"event": "extracted_field", "field": field, "value": value})
                 elif field == "activity":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result[field] = []
                     else:
-                        result[field] = [value]
+                        result[field] = [value.strip()]
                     logger.info({"event": "extracted_field", "field": field, "value": value})
                 else:
                     value = clean_value(match.group(1), field)
@@ -971,12 +971,14 @@ def webhook() -> tuple[str, int]:
                     sess["structured_data"]["people"].append(new_value)
             elif field == "activities":
                 sess["structured_data"]["activities"] = [new_value if i.lower() == old_value.lower() else i for i in sess["structured_data"].get("activities", [])]
+            elif field == "weather":
+                sess["structured_data"]["weather"] = new_value
             else:
                 sess["structured_data"][field] = [
                     {"name" if field == "company" else "item" if field == "tools" else "task" if field == "service" else "description": new_value}
                     if item.get("name" if field == "company" else "item" if field == "tools" else "task" if field == "service" else "description", "").lower() == old_value.lower()
                     else item
-                    for item in sess["structured_data"].get("field", [])
+                    for item in sess["structured_data"].get(field, [])
                 ]
             save_session(session_data)
             tpl = summarize_report(sess["structured_data"])
