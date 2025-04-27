@@ -54,6 +54,7 @@ app = Flask(__name__)
 # --- Handle shutdown signals ---
 def handle_shutdown(signum, frame):
     logger.info({"event": "shutdown_signal", "signal": signum})
+    # Perform cleanup if needed
     sys.exit(0)
 
 signal.signal(signal.SIGTERM, handle_shutdown)
@@ -182,7 +183,7 @@ def load_session_data():
         logger.info({"event": "session_data_not_found", "file": SESSION_FILE})
         return {}
     except Exception as e:
-        logger.error(f"Failed to load session data: {e}")
+        logger.error({"event": "load_session_data_error", "error": str(e)})
         return {}
 
 def save_session_data(data):
@@ -198,13 +199,13 @@ def save_session_data(data):
             json.dump(serializable_data, f)
         logger.info({"event": "session_data_saved", "file": SESSION_FILE})
     except Exception as e:
-        logger.error(f"Failed to save session data: {e}")
+        logger.error({"event": "save_session_data_error", "error": str(e)})
 
 try:
     session_data = load_session_data()
     logger.info({"event": "session_data_initialized"})
 except Exception as e:
-    logger.error(f"Session data initialization failed: {e}")
+    logger.error({"event": "session_data_initialization_failed", "error": str(e)})
     raise
 
 def blank_report():
@@ -246,7 +247,7 @@ try:
         re.compile(pattern, re.IGNORECASE)
     logger.info({"event": "regex_patterns_validated"})
 except Exception as e:
-    logger.error(f"Regex pattern validation failed for field {field}: {e}")
+    logger.error({"event": "regex_pattern_validation_failed", "field": field, "error": str(e)})
     raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -307,7 +308,7 @@ def save_to_sharepoint(chat_id, report_data):
         return False
 
 def generate_pdf_report(report_data):
-    logger.info({"event": "generate_pdf_report", "status": "placeholder"})
+    logger.info({"event": "generate_pdf_report", "status": "starting"})
     try:
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter)
@@ -350,7 +351,7 @@ def generate_pdf_report(report_data):
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def send_pdf_to_user(chat_id, pdf_buffer):
-    logger.info({"event": "send_pdf_to_user", "chat_id": chat_id, "status": "placeholder"})
+    logger.info({"event": "send_pdf_to_user", "chat_id": chat_id, "status": "starting"})
     try:
         token = os.getenv("TELEGRAM_BOT_TOKEN")
         url = f"https://api.telegram.org/bot{token}/sendDocument"
@@ -376,6 +377,7 @@ def enrich_with_date(d):
                     d["date"] = today
             except ValueError:
                 d["date"] = today
+        logger.info({"event": "date_enriched", "date": d["date"]})
         return d
     except Exception as e:
         logger.error({"event": "enrich_with_date_error", "error": str(e)})
@@ -847,8 +849,9 @@ def delete_entry(data, field, value=None):
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        logger.info({"event": "webhook_hit"})
+        logger.info({"event": "webhook_hit", "request_data": request.get_data(as_text=True)})
         data = request.get_json(force=True)
+        logger.info({"event": "webhook_json", "data": data})
         if "message" not in data:
             logger.info({"event": "no_message"})
             return "ok", 200
@@ -867,6 +870,7 @@ def webhook():
                 "awaiting_reset_confirmation": False,
                 "command_history": deque(maxlen=MAX_HISTORY)
             }
+            logger.info({"event": "new_session_created", "chat_id": chat_id})
         sess = session_data[chat_id]
 
         if "voice" in msg:
