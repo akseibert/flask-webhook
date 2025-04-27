@@ -335,7 +335,7 @@ def generate_pdf_report(report_data):
             ("Companies", ", ".join(c.get("name", "") for c in report_data.get("company", []))),
             ("People", ", ".join(report_data.get("people", []))),
             ("Roles", ", ".join(f"{r.get('name', '')} ({r.get('role', '')})" for r in report_data.get("roles", []))),
-            ("Services", ", ".join(s.get("task", "") for s in report_data.get("service", []))),
+            ("Services", ", ".join(s.get("task", "") chevron
             ("Tools", ", ".join(t.get("item", "") for t in report_data.get("tools", []))),
             ("Activities", ", ".join(report_data.get("activities", []))),
             ("Issues", "; ".join(i.get("description", "") + (f" (by {i.get('caused_by', '')})" if i.get("caused_by") else "") for i in report_data.get("issues", []))),
@@ -1164,4 +1164,14 @@ def webhook():
         if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
             logger.warning({"event": "unrecognized_input", "input": text})
             send_telegram_message(chat_id,
-                f"⚠️ Unrecognized input: '{text}'. Try formats like 'add site Downtown Project', 'add issue power outage',
+                f"⚠️ Unrecognized input: '{text}'. Try formats like 'add site Downtown Project', 'add issue power outage', 'Activities: laying foundation', 'delete company Taekwondo Agi', or 'correct company OrientCorp to Orion Corp'.")
+            return "ok", 200
+        sess["command_history"].append(sess["structured_data"].copy())
+        sess["structured_data"] = merge_structured_data(
+            sess["structured_data"], enrich_with_date(extracted)
+        )
+        save_to_sharepoint(chat_id, sess["structured_data"])
+        sess["awaiting_correction"] = True
+        save_session_data(session_data)
+        logger.info({"event": "updated_session", "awaiting_correction": sess["awaiting_correction"]})
+        clarification =
