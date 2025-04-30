@@ -16,10 +16,11 @@ def delete_entry(data: Dict[str, Any], field: str, value: Optional[str] = None) 
 
         if field in ["company", "roles", "tools", "service", "issues"]:
             if value:
+                value_lower = value.lower()
                 def keep_item(item):
                     for key in ["name", "description", "item", "task"]:
                         field_value = item.get(key)
-                        if field_value and fuzzy_match(field_value, value):
+                        if isinstance(field_value, str) and fuzzy_match(field_value, value_lower):
                             return False
                     return True
                 data[field] = [item for item in data.get(field, []) if isinstance(item, dict) and keep_item(item)]
