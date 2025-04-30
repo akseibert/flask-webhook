@@ -1064,4 +1064,4 @@ def webhook() -> tuple[str, int]:
                     for role in sess["structured_data"].get("roles", [])
                 ]
             elif field in ["activities"]:
-                sess["structured_data"]["activities"] = [new
+                sess["structured_data"]["activities"] = [new]
