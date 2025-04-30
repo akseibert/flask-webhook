@@ -35,7 +35,7 @@ for var in REQUIRED_ENV_VARS:
         raise EnvironmentError(f"Missing required environment variable: {var}")
 
 TELEGRAM_TOKEN = config("TELEGRAM_BOT_TOKEN")
-OPENAI_API_KEY = config "OPENAI_API_KEY")
+OPENAI_API_KEY = config("OPENAI_API_KEY")
 
 # --- Logger Setup ---
 logging.basicConfig(
@@ -195,17 +195,21 @@ signal.signal(signal.SIGINT, handle_shutdown)
 
 # --- Telegram API ---
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
-def send_message(chat_id: str, text: str) -> None:
+def send_message(chat_id: str, text: str, parse_mode: str = "Markdown") -> None:
     try:
         # Sanitize text to avoid Markdown issues
         text = text.replace('_', r'\_').replace('*', r'\*').replace('[', r'\[').replace(']', r'\]')
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        response = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+        response = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
         response.raise_for_status()
         log_event("message_sent", chat_id=chat_id, text=text[:50])
     except requests.RequestException as e:
         log_event("send_message_error", chat_id=chat_id, error=str(e), response_text=getattr(e.response, 'text', 'No response text'))
-        raise
+        if parse_mode == "Markdown":
+            # Retry without Markdown
+            send_message(chat_id, text, parse_mode="")
+        else:
+            raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def get_telegram_file_path(file_id: str) -> str:
