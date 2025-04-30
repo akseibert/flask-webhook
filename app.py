@@ -17,6 +17,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from decouple import config
+from time import time 
 
 # --- Configuration ---
 CONFIG = {
@@ -48,6 +49,8 @@ logger = logging.getLogger("ConstructionBot")
 def log_event(event: str, **kwargs) -> None:
     """Log an event with additional context."""
     logger.info({"event": event, **kwargs})
+
+
 
 # --- Field Mapping ---
 FIELD_MAPPING = {
