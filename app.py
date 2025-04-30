@@ -35,7 +35,7 @@ for var in REQUIRED_ENV_VARS:
         raise EnvironmentError(f"Missing required environment variable: {var}")
 
 TELEGRAM_TOKEN = config("TELEGRAM_BOT_TOKEN")
-OPENAI_API_KEY = config("OPENAI_API_KEY")
+OPENAI_API_KEY = config "OPENAI_API_KEY")
 
 # --- Logger Setup ---
 logging.basicConfig(
@@ -85,7 +85,7 @@ FIELD_PATTERNS = {
     "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$|\s*$)',
     "clear": r'^(?:(?:add|insert)\s+)?(?:issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*none$',
     "reset": r'^(?:(?:add|insert)\s+)?(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": r'^(?:(?:delete|remove)\s+(?:from\s+)?)((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s*(?:from\s+)?\s*([^,\s]+(?:\s+[^,\s]+)*)?\s*$',
+    "delete": r'^(?:(?:delete|remove)\s+(?:from\s+)?)((?:sites?|segments?|categories?|compan(?:y|ies)|people|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s*(?:from\s+)?\s*([^,\s]+(?:\s+[^,\s]+)*)?\s*$',
     "correct": r'^(?:(?:correct|adjust|update|spell)(?:\s+spelling)?\s+(?:((?:sites?|segments?|categories?|compan(?:y|ies)|people|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+)?)((?:[^,\s]+(?:\s+[^,\s]+)*)?)(?:\s+to\s+([^,\s]+(?:\s+[^,\s]+)*))?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
 }
 
@@ -197,12 +197,14 @@ signal.signal(signal.SIGINT, handle_shutdown)
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def send_message(chat_id: str, text: str) -> None:
     try:
+        # Sanitize text to avoid Markdown issues
+        text = text.replace('_', r'\_').replace('*', r'\*').replace('[', r'\[').replace(']', r'\]')
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         response = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
         response.raise_for_status()
         log_event("message_sent", chat_id=chat_id, text=text[:50])
     except requests.RequestException as e:
-        log_event("send_message_error", chat_id=chat_id, error=str(e))
+        log_event("send_message_error", chat_id=chat_id, error=str(e), response_text=getattr(e.response, 'text', 'No response text'))
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
@@ -297,15 +299,15 @@ def summarize_report(data: Dict[str, Any]) -> str:
     try:
         roles_str = ", ".join(f"{r.get('name', '')} ({r.get('role', '')})" for r in data.get("roles", []) if r.get("role"))
         lines = [
-            f"🏗️ **Site**: {data.get('site_name', '') or ''}",
-            f"🛠️ **Segment**: {data.get('segment', '') or ''}",
-            f"📋 **Category**: {data.get('category', '') or ''}",
-            f"🏢 **Companies**: {', '.join(c.get('name', '') for c in data.get('company', []) if c.get('name')) or ''}",
-            f"👷 **People**: {', '.join(data.get('people', []) or [])}",
-            f"🎭 **Roles**: {roles_str}",
-            f"🔧 **Services**: {', '.join(s.get('task', '') for s in data.get('service', []) if s.get('task')) or ''}",
-            f"🛠️ **Tools**: {', '.join(t.get('item', '') for t in data.get('tools', []) if t.get('item')) or ''}",
-            f"📅 **Activities**: {', '.join(data.get('activities', []) or [])}",
+            f"🏗️ **Site**: {data.get('site_name', '') or 'N/A'}",
+            f"🛠️ **Segment**: {data.get('segment', '') or 'N/A'}",
+            f"📋 **Category**: {data.get('category', '') or 'N/A'}",
+            f"🏢 **Companies**: {', '.join(c.get('name', '') for c in data.get('company', []) if c.get('name')) or 'None'}",
+            f"👷 **People**: {', '.join(data.get('people', []) or ['None'])}",
+            f"🎭 **Roles**: {roles_str or 'None'}",
+            f"🔧 **Services**: {', '.join(s.get('task', '') for s in data.get('service', []) if s.get('task')) or 'None'}",
+            f"🛠️ **Tools**: {', '.join(t.get('item', '') for t in data.get('tools', []) if t.get('item')) or 'None'}",
+            f"📅 **Activities**: {', '.join(data.get('activities', []) or ['None'])}",
             "⚠️ **Issues**:"
         ]
         valid_issues = [i for i in data.get("issues", []) if isinstance(i, dict) and i.get("description", "").strip()]
@@ -313,17 +315,17 @@ def summarize_report(data: Dict[str, Any]) -> str:
             for i in valid_issues:
                 desc = i["description"]
                 by = i.get("caused_by", "")
-                photo = " 📸" if i.get("has_photo") else ""
+                photo = " 📸" if i.get("has_photo", False) else ""
                 extra = f" (by {by})" if by else ""
                 lines.append(f"  • {desc}{extra}{photo}")
         else:
-            lines.append("")
+            lines.append("  None")
         lines.extend([
-            f"⏰ **Time**: {data.get('time', '') or ''}",
-            f"🌦️ **Weather**: {data.get('weather', '') or ''}",
-            f"😊 **Impression**: {data.get('impression', '') or ''}",
-            f"💬 **Comments**: {data.get('comments', '') or ''}",
-            f"📆 **Date**: {data.get('date', '') or ''}"
+            f"⏰ **Time**: {data.get('time', '') or 'N/A'}",
+            f"🌦️ **Weather**: {data.get('weather', '') or 'N/A'}",
+            f"😊 **Impression**: {data.get('impression', '') or 'N/A'}",
+            f"💬 **Comments**: {data.get('comments', '') or 'N/A'}",
+            f"📆 **Date**: {data.get('date', '') or 'N/A'}"
         ])
         summary = "\n".join(line for line in lines if line.strip())
         log_event("summarize_report", summary=summary)
@@ -500,8 +502,18 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     result["correct_prompt"] = {"field": field, "value": old_value}
                 return result
 
+        # Handle role assignment (e.g., "add people Lisa as engineer")
+        role_match = re.match(r'^(?:add|insert)\s+(?:peoples?|persons?)\s+([^,\s]+(?:\s+[^,\s]+)*)\s+as\s+([^,\s]+)$', normalized_text, re.IGNORECASE)
+        if role_match:
+            name = clean_value(role_match.group(1), "people")
+            role = role_match.group(2).title()
+            log_event("role_matched", name=name, role=role)
+            result["people"] = [name]
+            result["roles"] = [{"name": name, "role": role}]
+            return result
+
         for raw_field, pattern in FIELD_PATTERNS.items():
-            if raw_field in ["reset", "delete", "correct", "clear"]:
+            if raw_field in ["reset", "delete", "correct", "clear", "role"]:
                 continue
             match = re.match(pattern, text, re.IGNORECASE)
             if match:
@@ -510,7 +522,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                 if field == "site_name" and re.search(r'\b(add|insert|delete|remove|correct|adjust|update|spell|none|as|role|new|reset)\b', text.lower()):
                     log_event("skipped_site_name", reason="command-like input")
                     continue
-                if field == "people" and re.search(r'\b(correct|spell|delete|remove)\b', text.lower()):
+                if field == "people" and re.search(r'\b(correct|spell|delete|remove|as)\b', text.lower()):
                     log_event("skipped_people", reason="command-like input")
                     continue
                 if field == "people":
@@ -520,15 +532,6 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                         continue
                     result["people"] = [name]
                     log_event("extracted_field", field="people", value=name)
-                elif field == "role":
-                    name = clean_value(match.group(1) or match.group(3), field)
-                    role = (match.group(2) or match.group(4)).title()
-                    if name.lower() == "supervisor":
-                        log_event("skipped_role_supervisor", reason="supervisor is a role")
-                        continue
-                    result["people"] = [name.strip()]
-                    result["roles"] = [{"name": name.strip(), "role": role}]
-                    log_event("extracted_field", field="roles", name=name, role=role)
                 elif field == "supervisor":
                     name = clean_value(match.group(1), field) if match.group(1) else "User"
                     result["people"] = [name]
@@ -570,6 +573,8 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result[field] = []
+                    elif re.match(r'^\w+$', value.lower()):  # Check for vague inputs
+                        result["activity_prompt"] = {"value": value}
                     else:
                         result[field] = [value.strip()]
                     log_event("extracted_field", field=field, value=value)
@@ -662,7 +667,7 @@ def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
     try:
         merged = existing.copy()
         for key, value in new.items():
-            if key in ["reset", "undo", "status", "export_pdf", "correct_prompt", "delete", "correct"]:
+            if key in ["reset", "undo", "status", "export_pdf", "correct_prompt", "delete", "correct", "activity_prompt"]:
                 continue
             if key in ["company", "roles", "tools", "service", "issues"]:
                 if value == []:
@@ -952,6 +957,10 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             tpl = summarize_report(sess["structured_data"])
             send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
             return "ok", 200
+        if extracted.get("activity_prompt"):
+            value = extracted["activity_prompt"]["value"]
+            send_message(chat_id, f"Activity '{value}' is vague. Please provide a more descriptive activity (e.g., 'Concrete pouring').")
+            return "ok", 200
         if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
             log_event("unrecognized_input", input=text)
             send_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Try 'add site Downtown Project', 'add issue power outage', or 'spell people Micael'.")
@@ -1034,6 +1043,10 @@ def webhook() -> tuple[str, int]:
             field, old_value = sess["awaiting_spelling_correction"]
             new_value = text.strip()
             log_event("spelling_correction_response", field=field, old_value=old_value, new_value=new_value)
+            # Validate new_value to avoid including field name
+            if new_value.lower().startswith(field.lower()):
+                send_message(chat_id, f"⚠️ Please provide only the corrected value for '{old_value}' in {field}, without including the field name.")
+                return "ok", 200
             if new_value.lower() == old_value.lower():
                 sess["awaiting_spelling_correction"] = None
                 save_session(session_data)
