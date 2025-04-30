@@ -22,15 +22,14 @@ from decouple import config
 # --- Configuration ---
 CONFIG = {
     "SESSION_FILE": config("SESSION_FILE", default="/opt/render/project/src/session_data.json"),
-    "PAUSE_THRESHOLD": config("PAUSE_THRESHOLD", default=300, cast=int),  # 5 minutes in seconds
-    "MAX_HISTORY": config("MAX_HISTORY", default=10, cast=int),  # Max commands for undo
+    "PAUSE_THRESHOLD": config("PAUSE_THRESHOLD", default=300, cast=int),
+    "MAX_HISTORY": config("MAX_HISTORY", default=10, cast=int),
     "OPENAI_MODEL": config("OPENAI_MODEL", default="gpt-3.5-turbo"),
     "OPENAI_TEMPERATURE": config("OPENAI_TEMPERATURE", default=0.2, cast=float),
 }
 
 REQUIRED_ENV_VARS = ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"]
 
-# Ensure required environment variables are set
 for var in REQUIRED_ENV_VARS:
     if not config(var, default=None):
         raise EnvironmentError(f"Missing required environment variable: {var}")
@@ -47,7 +46,6 @@ logging.basicConfig(
 logger = logging.getLogger("ConstructionBot")
 
 def log_event(event: str, **kwargs) -> None:
-    """Log an event with additional context."""
     logger.info({"event": event, **kwargs})
 
 # --- Field Mapping ---
@@ -68,9 +66,31 @@ FIELD_MAPPING = {
     'comment': 'comments', 'comments': 'comments'
 }
 
+# --- Regex Patterns ---
+FIELD_PATTERNS = {
+    "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
+    "category": r'^(?:(?:add|insert)\s+categories?\s+|categories?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
+    "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|comments)\s*:)|$|\s*$)',
+    "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+(?:peoples?|persons?)\s*)([^,\s]+(?:\s+[^,\s]+)*)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "role": r'^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+|\w+)\s*[:,]?\s*as\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+|\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "supervisor": r'^(?:i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*$)(?:\s+by\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:|\s+issues?\s*:|\s+times?\s*:|$|\s*$))',
+    "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*[:,]?\s*|issues?\s*(?:encountered|included)?\s*|problem\s*:?\s*|delay\s*:?\s*|injury\s*:?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|times?|weather|impression|comments)\s*:|\s+times?\s*:|$|\s*$))',
+    "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|impression|comments)\s*:)|$|\s*$)',
+    "time": r'^(?:(?:add|insert)\s+times?\s+|times?\s*[:,]?\s*|time\s+spent\s+|morning\s+time\s*|afternoon\s+time\s*|evening\s+time\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|weather|impression|comments)\s*:)|$|\s*$)',
+    "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$|\s*$)',
+    "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*none$',
+    "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
+    "delete": r'^(?:delete|remove)\s+(?:from\s+)?((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s*(?:from\s+)?\s*([^,]+?)?\s*$',
+    "correct": r'^(?:correct|adjust|update|spell)(?:\s+spelling)?\s+((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+([^,]+?)(?:\s+to\s+([^,]+?))?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
+}
+
 # --- Session Management ---
 def load_session() -> Dict[str, Any]:
-    """Load session data from the JSON file."""
     try:
         if os.path.exists(CONFIG["SESSION_FILE"]):
             with open(CONFIG["SESSION_FILE"], "r") as f:
@@ -89,7 +109,6 @@ def load_session() -> Dict[str, Any]:
         return {}
 
 def save_session(session_data: Dict[str, Any]) -> None:
-    """Save session data to the JSON file."""
     try:
         serializable_data = {}
         for chat_id, session in session_data.items():
@@ -109,7 +128,6 @@ def save_session(session_data: Dict[str, Any]) -> None:
 session_data = load_session()
 
 def blank_report() -> Dict[str, Any]:
-    """Return a blank report template."""
     return {
         "site_name": "", "segment": "", "category": "",
         "company": [], "people": [], "roles": [], "tools": [], "service": [],
@@ -166,7 +184,6 @@ Rules:
 
 # --- Signal Handlers ---
 def handle_shutdown(signum: int, frame: Any) -> None:
-    """Handle shutdown signals."""
     log_event("shutdown_signal", signal=signum)
     save_session(session_data)
     sys.exit(0)
@@ -177,7 +194,6 @@ signal.signal(signal.SIGINT, handle_shutdown)
 # --- Telegram API ---
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def send_message(chat_id: str, text: str) -> None:
-    """Send a message to a Telegram chat."""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         response = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
@@ -189,7 +205,6 @@ def send_message(chat_id: str, text: str) -> None:
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def get_telegram_file_path(file_id: str) -> str:
-    """Get the file path for a Telegram file ID."""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
         response = requests.get(url)
@@ -203,7 +218,6 @@ def get_telegram_file_path(file_id: str) -> str:
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def transcribe_voice(file_id: str) -> str:
-    """Transcribe a voice message."""
     try:
         audio_url = get_telegram_file_path(file_id)
         audio_response = requests.get(audio_url)
@@ -226,7 +240,6 @@ def transcribe_voice(file_id: str) -> str:
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def send_pdf(chat_id: str, pdf_buffer: io.BytesIO) -> bool:
-    """Send a PDF file to a Telegram chat."""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument"
         files = {'document': ('report.pdf', pdf_buffer, 'application/pdf')}
@@ -241,7 +254,6 @@ def send_pdf(chat_id: str, pdf_buffer: io.BytesIO) -> bool:
 
 # --- Report Generation ---
 def generate_pdf(report_data: Dict[str, Any]) -> Optional[io.BytesIO]:
-    """Generate a PDF report."""
     try:
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter)
@@ -280,7 +292,6 @@ def generate_pdf(report_data: Dict[str, Any]) -> Optional[io.BytesIO]:
         return None
 
 def summarize_report(data: Dict[str, Any]) -> str:
-    """Summarize the report data into a formatted string."""
     try:
         roles_str = ", ".join(f"{r.get('name', '')} ({r.get('role', '')})" for r in data.get("roles", []) if r.get("role"))
         lines = [
@@ -321,7 +332,6 @@ def summarize_report(data: Dict[str, Any]) -> str:
 
 # --- Data Processing ---
 def clean_value(value: Optional[str], field: str) -> Optional[str]:
-    """Clean input values by removing command prefixes."""
     if value is None:
         return value
     cleaned = re.sub(r'^(?:add\s+|insert\s+|from\s+|correct\s+spelling\s+|spell\s+|delete\s+|remove\s+)', '', value.strip(), flags=re.IGNORECASE)
@@ -330,7 +340,6 @@ def clean_value(value: Optional[str], field: str) -> Optional[str]:
     return cleaned
 
 def enrich_date(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Enrich report data with the current date if missing or invalid."""
     try:
         today = datetime.now().strftime("%d-%m-%Y")
         if not data.get("date"):
@@ -349,9 +358,19 @@ def enrich_date(data: Dict[str, Any]) -> Dict[str, Any]:
         raise
 
 # --- Field Extraction ---
+def validate_patterns() -> None:
+    try:
+        for field, pattern in FIELD_PATTERNS.items():
+            re.compile(pattern, re.IGNORECASE)
+        log_event("patterns_validated")
+    except Exception as e:
+        log_event("pattern_validation_error", field=field, error=str(e))
+        raise
+
+validate_patterns()
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def extract_fields(text: str) -> Dict[str, Any]:
-    """Extract fields from user input."""
     try:
         log_event("extract_fields", input=text)
         result: Dict[str, Any] = {}
@@ -448,7 +467,6 @@ def extract_fields(text: str) -> Dict[str, Any]:
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def extract_single_command(text: str) -> Dict[str, Any]:
-    """Extract a single command from user input."""
     try:
         result: Dict[str, Any] = {}
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
@@ -601,7 +619,6 @@ def extract_single_command(text: str) -> Dict[str, Any]:
         raise
 
 def string_similarity(a: str, b: str) -> float:
-    """Calculate string similarity using SequenceMatcher."""
     try:
         similarity = SequenceMatcher(None, a.lower(), b.lower()).ratio()
         log_event("string_similarity", a=a, b=b, similarity=similarity)
@@ -611,7 +628,6 @@ def string_similarity(a: str, b: str) -> float:
         raise
 
 def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge new data into existing report data."""
     try:
         merged = existing.copy()
         for key, value in new.items():
@@ -714,7 +730,6 @@ def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
         raise
 
 def delete_entry(data: Dict[str, Any], field: str, value: Optional[str] = None) -> Dict[str, Any]:
-    """Delete an entry from the report data."""
     try:
         log_event("delete_entry", field=field, value=value)
         if field in ["company", "roles", "tools", "service", "issues"]:
@@ -758,7 +773,6 @@ def delete_entry(data: Dict[str, Any], field: str, value: Optional[str] = None) 
 COMMAND_HANDLERS: Dict[str, Callable[[str, Dict[str, Any]], None]] = {}
 
 def command(name: str) -> Callable:
-    """Decorator to register a command handler."""
     def decorator(func: Callable) -> Callable:
         COMMAND_HANDLERS[name] = func
         return func
@@ -766,7 +780,6 @@ def command(name: str) -> Callable:
 
 @command("reset")
 def handle_reset(chat_id: str, session: Dict[str, Any]) -> None:
-    """Handle reset command."""
     session["structured_data"] = blank_report()
     session["command_history"].clear()
     save_session(session_data)
@@ -775,7 +788,6 @@ def handle_reset(chat_id: str, session: Dict[str, Any]) -> None:
 
 @command("undo")
 def handle_undo(chat_id: str, session: Dict[str, Any]) -> None:
-    """Handle undo command."""
     if session["command_history"]:
         session["structured_data"] = session["command_history"].pop()
         save_session(session_data)
@@ -786,13 +798,11 @@ def handle_undo(chat_id: str, session: Dict[str, Any]) -> None:
 
 @command("status")
 def handle_status(chat_id: str, session: Dict[str, Any]) -> None:
-    """Handle status command."""
     summary = summarize_report(session["structured_data"])
     send_message(chat_id, f"**Current report status**\n\n{summary}")
 
 @command("export")
 def handle_export(chat_id: str, session: Dict[str, Any]) -> None:
-    """Handle export command."""
     pdf_buffer = generate_pdf(session["structured_data"])
     if pdf_buffer:
         if send_pdf(chat_id, pdf_buffer):
@@ -806,7 +816,6 @@ def handle_export(chat_id: str, session: Dict[str, Any]) -> None:
 app = Flask(__name__)
 
 def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, int]:
-    """Handle incoming commands."""
     try:
         normalized_text = text.strip().lower() if text else ""
         if not normalized_text:
@@ -930,7 +939,6 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
 
 @app.route("/webhook", methods=["POST"])
 def webhook() -> tuple[str, int]:
-    """Handle incoming Telegram webhook requests."""
     try:
         data = request.get_json(force=True)
         log_event("webhook_received", data=data)
@@ -957,7 +965,6 @@ def webhook() -> tuple[str, int]:
 
         sess = session_data[chat_id]
 
-        # Clean up invalid "Supervisor" entries
         if "Supervisor" in sess["structured_data"].get("people", []):
             sess["structured_data"]["people"] = [p for p in sess["structured_data"].get("people", []) if p != "Supervisor"]
             sess["structured_data"]["roles"] = [r for r in sess["structured_data"].get("roles", []) if r.get("name") != "Supervisor"]
