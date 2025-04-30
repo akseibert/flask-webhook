@@ -299,7 +299,7 @@ def summarize_report(data: Dict[str, Any]) -> str:
             f"📋 **Category**: {data.get('category', '') or ''}",
             f"🏢 **Companies**: {', '.join(c.get('name', '') for c in data.get('company', []) if c.get('name')) or ''}",
             f"👷 **People**: {', '.join(data.get('people', []) or [])}",
-            f"🎭 **Roles**: {', '.join([f'{r.get('name', '')} ({r.get('role', '')})' for r in data.get('roles', []) if r.get('role')]) or ''}",
+            f"🎭 **Roles**: {', '.join(r.get('name', '') + ' (' + r.get('role', '') + ')' for r in data.get('roles', []) if r.get('role')) or ''}",
             f"🔧 **Services**: {', '.join(s.get('task', '') for s in data.get('service', []) if s.get('task')) or ''}",
             f"🛠️ **Tools**: {', '.join(t.get('item', '') for t in data.get('tools', []) if t.get('item')) or ''}",
             f"📅 **Activities**: {', '.join(data.get('activities', []) or [])}",
