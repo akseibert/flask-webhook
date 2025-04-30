@@ -748,40 +748,41 @@ def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
 def delete_entry(data: Dict[str, Any], field: str, value: Optional[str] = None) -> Dict[str, Any]:
     try:
         logger.info({"event": "delete_entry", "field": field, "value": value})
+
         if field in ["company", "roles", "tools", "service", "issues"]:
             if value:
                 data[field] = [item for item in data[field]
-                              if not (isinstance(item, dict) and
-                                      (item.get("name", "").lower() == value.lower() or
-                                       item.get("description", "").lower() == value.lower() or
-                                       item.get("item", "").lower() == value.lower() or
-                                       item.get("task", "").lower() == value.lower()))]
+                               if not (isinstance(item, dict) and any(
+                                   item.get(k, '').lower() == value.lower() for k in ["name", "description", "item", "task"] if item.get(k)
+                               ))]
             else:
                 data[field] = []
-        elif field in ["people"]:
+
+        elif field == "people":
             if value:
                 data[field] = [item for item in data[field] if item.lower() != value.lower()]
-                data["roles"] = [role for role in data.get("roles", []) if role.get("name", "").lower() != value.lower()]
-                logger.info({"event": "people_deleted", "value": value})
+                data["roles"] = [r for r in data.get("roles", []) if r.get("name", "").lower() != value.lower()]
             else:
                 data[field] = []
                 data["roles"] = []
-                logger.info({"event": "people_cleared"})
-        elif field in ["activities"]:
+
+        elif field == "activities":
             if value:
                 data[field] = [item for item in data[field] if item.lower() != value.lower()]
-                logger.info({"event": "activities_deleted", "value": value})
             else:
                 data[field] = []
-                logger.info({"event": "activities_cleared"})
+
         elif field in ["site_name", "segment", "category", "time", "weather", "impression", "comments", "date"]:
-            data[field] = ""
-            logger.info({"event": f"{field}_cleared"})
+            # For string fields, treat "delete comment" as field-clear
+            if not value or value.lower() == "comment":
+                data[field] = ""
+
         logger.info({"event": "data_after_deletion", "data": json.dumps(data, indent=2)})
         return data
     except Exception as e:
         logger.error({"event": "delete_entry_error", "field": field, "error": str(e)})
         raise
+
 
 # --- Flask App ---
 app = Flask(__name__)
