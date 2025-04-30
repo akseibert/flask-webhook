@@ -124,7 +124,7 @@ Fields to extract (omit if not present):
 - service: list of objects with "task" (e.g., [{"task": "Excavation"}])
 - activities: list of strings (e.g., ["Concrete pouring"])
 - issues: list of objects with "description" (required), "caused_by" (optional), "has_photo" (optional, default false)
-- time: string (e.g., "morning", "full day")
+- time: String (e.g., "morning", "full day")
 - weather: string (e.g., "cloudy")
 - impression: string (e.g., "productive")
 - comments: string (e.g., "Ensure safety protocols")
@@ -299,7 +299,7 @@ def summarize_report(data: Dict[str, Any]) -> str:
             f"📋 **Category**: {data.get('category', '') or ''}",
             f"🏢 **Companies**: {', '.join(c.get('name', '') for c in data.get('company', []) if c.get('name')) or ''}",
             f"👷 **People**: {', '.join(data.get('people', []) or [])}",
-            f"🎭 **Roles**: {', '.join(f'{r.get('name', '')} ({r.get('role', '')})' for r in data.get('roles', []) if r.get('role')) or ''}",
+            f"🎭 **Roles**: {', '.join([f'{r.get('name', '')} ({r.get('role', '')})' for r in data.get('roles', []) if r.get('role')]) or ''}",
             f"🔧 **Services**: {', '.join(s.get('task', '') for s in data.get('service', []) if s.get('task')) or ''}",
             f"🛠️ **Tools**: {', '.join(t.get('item', '') for t in data.get('tools', []) if t.get('item')) or ''}",
             f"📅 **Activities**: {', '.join(data.get('activities', []) or [])}",
@@ -490,7 +490,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
         logger.info({"event": "fields_extracted", "result": result})
         return result
     except Exception as e:
-        logger.error({"event": "extract.Fields_error", "input": text, "error": str(e)})
+        logger.error({"event": "extract_fields_error", "input": text, "error": str(e)})
         raise
 
 def extract_single_command(text: str) -> Dict[str, Any]:
@@ -608,7 +608,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                         data.setdefault("people", []).append(clean_value(role["name"], "people"))
             if not data and text.strip():
                 issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
-                activity_keywords = r'\b(work\s+was\s+done|activity|activities|task|progress Fleißig arbeitenprogress|construction|building|laying|setting|wiring|installation|scaffolding)\b'
+                activity_keywords = r'\b(work\s+was\s+done|activity|activities|task|progress|construction|building|laying|setting|wiring|installation|scaffolding)\b'
                 location_keywords = r'\b(at|in|on)\b'
                 if re.search(issue_keywords, text.lower()):
                     cleaned_text = clean_value(text.strip(), "issues")
