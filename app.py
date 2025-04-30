@@ -461,12 +461,14 @@ def extract_fields(text: str) -> Dict[str, Any]:
                     result.get(field, []) if field in ["people", "activities"] else
                     []
                 )
-                result[field] = processed_result[field] + ([{"name": i} for i in existing_items if isinstance(i, str)] if field == "company" else
-                                                         [{"description": i} for i in existing_items if isinstance(i, str)] if field == "issues" else
-                                                         [{"task": i} for i in existing_items if isinstance(i, str)] if field == "service" else
-                                                         [{"item": i} for i in existing_items if isinstance(i, str)] if field == "tools" else
-                                                         [{"name": i.split(' (')[0], "role": i.split(' (')[1].rstrip(')')} for i in existing_items if isinstance(i, str) and ' (' in i] if field == "roles" else
-                                                         existing_items if field in ["people", "activities"] else [])
+                result[field] = processed (processed_result[field] + (
+                    [{"name": i} for i in existing_items if isinstance(i, str)] if field == "company" else
+                    [{"description": i} for i in existing_items if isinstance(i, str)] if field == "issues" else
+                    [{"task": i} for i in existing_items if isinstance(i, str)] if field == "service" else
+                    [{"item": i} for i in existing_items if isinstance(i, str)] if field == "tools" else
+                    [{"name": i.split(' (')[0], "role": i.split(' (')[1].rstrip(')')} for i in existing_items if isinstance(i, str) and ' (' in i] if field == "roles" else
+                    existing_items if field in ["people", "activities"] else []
+                ))
 
         log_event("fields_extracted", result=result)
         return result
@@ -1102,10 +1104,15 @@ def webhook() -> tuple[str, int]:
             elif field in ["activities"]:
                 sess["structured_data"]["activities"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("activities", [])]
             else:
-                sess["structured_data"]["activities"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("activities", [])]
-            else:
                 sess["structured_data"][field] = new_value
             log_event(f"{field}_corrected", old=old_value, new=new_value)
             save_session(session_data)
             tpl = summarize_report(sess["structured_data"])
             send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+
+        return handle_command(chat_id, text, sess)
+    except Exception as e:
+        log_event("webhook_error", error=str(e))
+        return "error", 500
+</xai
