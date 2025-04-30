@@ -70,7 +70,7 @@ FIELD_MAPPING = {
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
-    "category": r'^(?:(?:add|insert)\s+categories?\s+|categories?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
+    "category": r'^(?:(?:add|insert)\s+categoriesFORCE_QUIT?\s+|categories?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
     "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|comments)\s*:)|$|\s*$)',
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+(?:peoples?|persons?)\s*)([^,\s]+(?:\s+[^,\s]+)*)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "role": r'^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+|\w+)\s*[:,]?\s*as\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+|\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
@@ -85,8 +85,8 @@ FIELD_PATTERNS = {
     "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$|\s*$)',
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*none$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": r'^(?:delete|remove)\s+(?:from\s+)?((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s*(?:from\s+)?\s*([^,]+?)?\s*$',
-    "correct": r'^(?:correct|adjust|update|spell)(?:\s+spelling)?\s+((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+([^,]+?)(?:\s+to\s+([^,]+?))?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
+    "delete": r'^(?:delete|remove)\s+(?:from\s+)?((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s*(?:from\s+)?\s*([^,\s]+(?:\s+[^,\s]+)*)?\s*$',
+    "correct": r'^(?:correct|adjust|update|spell)(?:\s+spelling)?\s+(?:((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+)?([^,\s]+(?:\s+[^,\s]+)*)(?:\s+to\s+([^,\s]+(?:\s+[^,\s]+)*))?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
 }
 
 # --- Session Management ---
@@ -162,7 +162,7 @@ Fields to extract (omit if not present):
 Commands:
 - add|insert <category> <value>: Add a value to the category (e.g., "add site Downtown Project" or "insert issues water leakage").
 - delete|remove <category> [value|from <category> <value>]: Remove a value or clear the category (e.g., "delete activities Laying foundation", "delete Jonas from people", or "delete companies").
-- correct|adjust|spell <category> <old> to <new>|correct spelling <category> <value>|spell <category> <value>: Update a value or correct spelling (e.g., "correct site Downtown to Uptown", "spell companies Orient Corp").
+- correct|adjust|spell <category> <old> to <new>|correct spelling <category> <value>|spell <category> <value>|correct spelling <value>: Update a value or prompt for spelling correction (e.g., "correct site Downtown to Uptown", "spell people Micael", "correct spelling Micael").
 - <category>: <value>: Add a value (e.g., "Services: abc" -> "service": [{"task": "abc"}]).
 - <category>: none: Clear the category (e.g., "Tools: none" -> "tools": []).
 
@@ -170,16 +170,18 @@ Rules:
 - Accept both singular and plural category names (e.g., "issue" or "issues", "company" or "companies").
 - Extract fields from colon-separated inputs (e.g., "Services: abc"), natural language (e.g., "weather was cloudy" -> "weather": "cloudy"), or commands (e.g., "add people Anna").
 - For segment and category: Extract only the value (e.g., "Segment: 5" -> "segment": "5").
-- For issues: Recognize keywords: "Issue", "Issues", "Problem", "Delay", "Injury". "Issues: none" clears the issues list.
-- For activities: Recognize keywords: "Activity", "Activities", "Task", "Progress", "Construction", or action-oriented phrases. "Activities: none" clears the activities list. Handle vague inputs like "Activities: many" by adding them and noting clarification needed.
+- For issues: Recognize keywords: "Issue", "Issues", "Problem", "Delay", "Injury". "Issues: none" clears the issues list. Ensure "add issue <description>" is captured (e.g., "add issue power outage" -> "issues": [{"description": "power outage"}]).
+- For activities: Recognize keywords: "Activity", "Activities", "Task", "Progress", "Construction", or action-oriented phrases. "Activities: none" clears the activities list.
 - For site_name: Recognize location-like phrases following "at", "in", "on" (e.g., "Work was done at East Wing" -> "site_name": "East Wing", "activities": ["Work was done"]).
 - For people and roles: Recognize "add [name] as [role]" (e.g., "add Anna as engineer" -> "people": ["Anna"], "roles": [{"name": "Anna", "role": "Engineer"}]). "Roles supervisor" assigns "Supervisor" to the user.
 - For tools and service: Recognize "Tool: [item]", "Service: [task]", or commands like "add service abc".
-- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Handle "delete company <name>" to remove the company. Handle "correct company <old> to <new>" to update the company name.
-- Comments should only include non-field-specific notes.
+- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Handle "delete company <name>" to remove the company.
+- For spelling correction: Recognize "correct spelling <value>" or "<category> correct spelling <value>" and prompt for the new value (e.g., "correct spelling Micael" -> prompt for new spelling).
+- For deletion: Recognize "delete <category> <value>" or "delete <value> from <category>" (e.g., "delete Michael from people" -> remove "Michael" from people).
+- Comments should only include non-field-specific notes and avoid capturing commands like "correct spelling" or "delete".
 - Return {} for reset commands or irrelevant inputs.
 - Case-insensitive matching.
-- Handle natural language inputs flexibly, allowing variations like "Activities: laying foundation", "Add issue power outage", "Delete Jonas from people", or "spell companies Orient Corp".
+- Handle natural language inputs flexibly, allowing variations like "Activities: laying foundation", "Add issue power outage", "Delete Jonas from people", or "spell people Micael".
 """
 
 # --- Signal Handlers ---
@@ -393,7 +395,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
             log_event("export_pdf_detected")
             return {"export_pdf": True}
 
-        commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)|(?:add|insert)\s+(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments))|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
+        commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)|(?:add|insert|delete|remove|correct|spell)\s+(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments))|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
         log_event("commands_split", commands=commands)
         processed_result = {
             "company": [], "roles": [], "tools": [], "service": [],
@@ -402,6 +404,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
         seen_fields = set()
 
         for cmd in commands:
+            # Prioritize delete and correct commands
             delete_match = re.match(FIELD_PATTERNS["delete"], cmd, re.IGNORECASE)
             if delete_match:
                 raw_field = delete_match.group(1).lower() if delete_match.group(1) else None
@@ -417,13 +420,13 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 raw_field = correct_match.group(1).lower() if correct_match.group(1) else None
                 old_value = correct_match.group(2).strip() if correct_match.group(2) else None
                 new_value = correct_match.group(3).strip() if correct_match.group(3) else None
-                field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
+                field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else 'people'  # Default to people for generic spelling correction
                 log_event("correct_command", field=field, old=old_value, new=new_value)
                 if field and old_value:
                     if new_value:
-                        result.setdefault("correct", []).append({"field": field, "old": clean_value(old_value, field), "new": clean_value(new_value, field)})
+                        result.setdefault("correct", []).append({"field": field, "old": old_value, "new": new_value})
                     else:
-                        result["correct_prompt"] = {"field": field, "value": clean_value(old_value, field)}
+                        result["correct_prompt"] = {"field": field, "value": old_value}
                 continue
 
             cmd_result = extract_single_command(cmd)
@@ -472,6 +475,31 @@ def extract_single_command(text: str) -> Dict[str, Any]:
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
         log_event("extract_single_command", input=normalized_text)
 
+        # Check for delete and correct commands first
+        delete_match = re.match(FIELD_PATTERNS["delete"], normalized_text, re.IGNORECASE)
+        if delete_match:
+            raw_field = delete_match.group(1).lower() if delete_match.group(1) else None
+            value = delete_match.group(2).strip() if delete_match.group(2) else None
+            field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
+            if field:
+                log_event("delete_command", field=field, value=value)
+                result["delete"] = [{"field": field, "value": value}]
+                return result
+
+        correct_match = re.match(FIELD_PATTERNS["correct"], normalized_text, re.IGNORECASE)
+        if correct_match:
+            raw_field = correct_match.group(1).lower() if correct_match.group(1) else None
+            old_value = correct_match.group(2).strip() if correct_match.group(2) else None
+            new_value = correct_match.group(3).strip() if correct_match.group(3) else None
+            field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else 'people'
+            if field and old_value:
+                log_event("correct_command", field=field, old=old_value, new=new_value)
+                if new_value:
+                    result["correct"] = [{"field": field, "old": old_value, "new": new_value}]
+                else:
+                    result["correct_prompt"] = {"field": field, "value": old_value}
+                return result
+
         for raw_field, pattern in FIELD_PATTERNS.items():
             if raw_field in ["reset", "delete", "correct", "clear"]:
                 continue
@@ -481,6 +509,9 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                 log_event("field_matched", raw_field=raw_field, mapped_field=field, input=text)
                 if field == "site_name" and re.search(r'\b(add|insert|delete|remove|correct|adjust|update|spell|none|as|role|new|reset)\b', text.lower()):
                     log_event("skipped_site_name", reason="command-like input")
+                    continue
+                if field == "people" and re.search(r'\b(correct|spell|delete|remove)\b', text.lower()):
+                    log_event("skipped_people", reason="command-like input")
                     continue
                 if field == "people":
                     name = clean_value(match.group(1) or match.group(2), field)
@@ -923,7 +954,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             return "ok", 200
         if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
             log_event("unrecognized_input", input=text)
-            send_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Try 'add site Downtown Project', 'add issue power outage', or 'spell companies Orient Corp'.")
+            send_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Try 'add site Downtown Project', 'add issue power outage', or 'spell people Micael'.")
             return "ok", 200
 
         sess["command_history"].append(sess["structured_data"].copy())
@@ -1033,15 +1064,4 @@ def webhook() -> tuple[str, int]:
                     for role in sess["structured_data"].get("roles", [])
                 ]
             elif field in ["activities"]:
-                sess["structured_data"]["activities"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("activities", [])]
-            else:
-                sess["structured_data"][field] = new_value
-            save_session(session_data)
-            tpl = summarize_report(sess["structured_data"])
-            send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
-            return "ok", 200
-
-        return handle_command(chat_id, text, sess)
-    except Exception as e:
-        log_event("webhook_error", error=str(e))
-        return "error", 500
+                sess["structured_data"]["activities"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("
