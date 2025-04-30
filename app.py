@@ -86,7 +86,7 @@ FIELD_PATTERNS = {
     "clear": r'^(?:(?:add|insert)\s+)?(?:issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*none$',
     "reset": r'^(?:(?:add|insert)\s+)?(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
     "delete": r'^(?:(?:delete|remove)\s+(?:from\s+)?)((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s*(?:from\s+)?\s*([^,\s]+(?:\s+[^,\s]+)*)?\s*$',
-    "correct": r'^(?:(?:correct|adjust|update|spell)(?:\s+spelling)?\s+(?:((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+)?)((?:[^,\s]+(?:\s+[^,\s]+)*)?)(?:\s+to\s+([^,\s]+(?:\s+[^,\s]+)*))?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
+    "correct": r'^(?:(?:correct|adjust|update|spell)(?:\s+spelling)?\s+(?:((?:sites?|segments?|categories?|compan(?:y|ies)|people|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+)?)((?:[^,\s]+(?:\s+[^,\s]+)*)?)(?:\s+to\s+([^,\s]+(?:\s+[^,\s]+)*))?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
 }
 
 # --- Session Management ---
@@ -781,155 +781,299 @@ def delete_entry(data: Dict[str, Any], field: str, value: Optional[str] = None) 
                 data["roles"] = [role for role in data.get("roles", []) if role.get("name", "").lower() != value.lower()]
                 log_event("people_deleted", value=value)
             else:
- legible way to manage configurations for your application, which is particularly useful when deploying across different environments (e.g., local, Render). The new environment variables (`SESSION_FILE`, `PAUSE_THRESHOLD`, `MAX_HISTORY`, `OPENAI_MODEL`, `OPENAI_TEMPERATURE`) were introduced to externalize settings that were previously hardcoded in the `CONFIG` dictionary, addressing several limitations and aligning with best practices. Below, I’ll explain why these variables are needed, their purpose, and how they relate to your application’s functionality, while also addressing the specific errors and functional issues you’ve reported.
+                data[field] = []
+                data["roles"] = []
+                log_event("people_cleared")
+        elif field in ["activities"]:
+            if value:
+                data[field] = [item for item in data[field] if item.lower() != value.lower()]
+                log_event("activities_deleted", value=value)
+            else:
+                data[field] = []
+                log_event("activities_cleared")
+        elif field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
+            data[field] = ""
+            log_event(f"{field}_cleared")
+        log_event("data_after_deletion", data=json.dumps(data, indent=2))
+        return data
+    except Exception as e:
+        log_event("delete_entry_error", field=field, error=str(e))
+        raise
 
-### Why New Variables Were Introduced
+# --- Command Handlers ---
+COMMAND_HANDLERS: Dict[str, Callable[[str, Dict[str, Any]], None]] = {}
 
-The original `app.py` used a hardcoded `CONFIG` dictionary and direct `os.getenv()` calls for `OPENAI_API_KEY` and `TELEGRAM_BOT_TOKEN`. This approach had limitations:
+def command(name: str) -> Callable:
+    def decorator(func: Callable) -> Callable:
+        COMMAND_HANDLERS[name] = func
+        return func
+    return decorator
 
-- **Hardcoded Settings**: Values like `SESSION_FILE` (`/opt/render/project/src/session_data.json`), `PAUSE_THRESHOLD` (300 seconds), and `OPENAI_MODEL` (`gpt-3.5-turbo`) were fixed, making it difficult to adjust for different environments (e.g., local vs. Render) without code changes.
-- **Inflexibility**: Deploying on different platforms or testing locally required modifying the source code, increasing maintenance effort and error risk.
-- **Security Risks**: Direct `os.getenv()` calls without validation could lead to runtime errors if variables were missing.
-- **Scalability**: Hardcoded settings hindered scalability and future-proofing, especially for experimenting with new models or configurations.
+@command("reset")
+def handle_reset(chat_id: str, session: Dict[str, Any]) -> None:
+    session["structured_data"] = blank_report()
+    session["command_history"].clear()
+    save_session(session_data)
+    summary = summarize_report(session["structured_data"])
+    send_message(chat_id, f"**Report reset**\n\n{summary}")
 
-The improved `app.py` uses `python-decouple` to manage environment variables, introducing new variables to externalize these settings. Here’s a breakdown of each new variable, its purpose, and why it’s needed:
+@command("undo")
+def handle_undo(chat_id: str, session: Dict[str, Any]) -> None:
+    if session["command_history"]:
+        session["structured_data"] = session["command_history"].pop()
+        save_session(session_data)
+        summary = summarize_report(session["structured_data"])
+        send_message(chat_id, f"**Undo successful**\n\n{summary}")
+    else:
+        send_message(chat_id, "Nothing to undo.")
 
-1. **SESSION_FILE** (New):
-   - **Purpose**: Specifies the path to the JSON file storing session data (e.g., `/opt/render/project/src/session_data.json`).
-   - **Why Needed**: The original hardcoded path was Render-specific. Making it configurable allows flexibility for local testing (e.g., `./session_data.json`) or different servers, avoiding code changes.
-   - **Default**: `/opt/render/project/src/session_data.json` (matches original).
-   - **Required?**: Optional, as it has a default.
+@command("status")
+def handle_status(chat_id: str, session: Dict[str, Any]) -> None:
+    summary = summarize_report(session["structured_data"])
+    send_message(chat_id, f"**Current report status**\n\n{summary}")
 
-2. **PAUSE_THRESHOLD** (New):
-   - **Purpose**: Defines the inactivity period (in seconds) after which the bot prompts to reset the report (e.g., 300 seconds = 5 minutes).
-   - **Why Needed**: Hardcoded at 300 seconds, it lacked flexibility. Configurability allows adjusting for testing (e.g., shorter timeouts) or user preferences.
-   - **Default**: 300.
-   - **Required?**: Optional, as it has a default.
+@command("export")
+def handle_export(chat_id: str, session: Dict[str, Any]) -> None:
+    pdf_buffer = generate_pdf(session["structured_data"])
+    if pdf_buffer:
+        if send_pdf(chat_id, pdf_buffer):
+            send_message(chat_id, "PDF report sent successfully!")
+        else:
+            send_message(chat_id, "⚠️ Failed to send PDF report.")
+    else:
+        send_message(chat_id, "⚠️ Failed to generate PDF report.")
 
-3. **MAX_HISTORY** (New):
-   - **Purpose**: Sets the maximum number of commands stored in the undo history (e.g., 10).
-   - **Why Needed**: Hardcoded at 10, it limited flexibility. Configurability supports varying memory constraints or user needs.
-   - **Default**: 10.
-   - **Required?**: Optional, as it has a default.
+# --- Flask App ---
+app = Flask(__name__)
 
-4. **OPENAI_MODEL** (New):
-   - **Purpose**: Specifies the OpenAI model for processing commands (e.g., `gpt-3.5-turbo`).
-   - **Why Needed**: Hardcoded as `gpt-3.5-turbo`, it prevented switching models (e.g., `gpt-4`) without code changes. Configurability supports experimentation and upgrades.
-   - **Default**: `gpt-3.5-turbo`.
-   - **Required?**: Optional, as it has a default.
+def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, int]:
+    try:
+        normalized_text = text.strip().lower() if text else ""
+        if not normalized_text:
+            send_message(chat_id, "⚠️ Empty input. Please provide a command (e.g., 'add site Downtown Project').")
+            return "ok", 200
 
-5. **OPENAI_TEMPERATURE** (New):
-   - **Purpose**: Controls the randomness of OpenAI responses (e.g., 0.2 for deterministic outputs).
-   - **Why Needed**: Hardcoded at 0.2, it limited tuning response creativity. Configurability allows adjusting for different use cases.
-   - **Default**: 0.2.
-   - **Required?**: Optional, as it has a default.
+        current_time = time()
+        if (current_time - sess.get("last_interaction", 0) > CONFIG["PAUSE_THRESHOLD"] and
+                normalized_text not in ("yes", "no", "new", "new report", "reset", "reset report", "/new", "existing", "continue")):
+            sess["pending_input"] = text
+            sess["awaiting_reset_confirmation"] = True
+            sess["last_interaction"] = current_time
+            save_session(session_data)
+            send_message(chat_id, "It’s been a while! Reset the report? Reply 'yes' or 'no'.")
+            return "ok", 200
 
-6. **OPENAI_API_KEY** (Existing):
-   - **Purpose**: Authenticates OpenAI API requests.
-   - **Why Needed**: Required for OpenAI functionality. Now managed via `python-decouple` for validation.
-   - **Default**: None (must be set).
-   - **Required?**: Yes.
+        sess["last_interaction"] = current_time
 
-7. **TELEGRAM_BOT_TOKEN** (Existing):
-   - **Purpose**: Authenticates Telegram API requests.
-   - **Why Needed**: Required for Telegram bot functionality. Now managed via `python-decouple`.
-   - **Default**: None (must be set).
-   - **Required?**: Yes.
+        if normalized_text in COMMAND_HANDLERS:
+            COMMAND_HANDLERS[normalized_text](chat_id, sess)
+            return "ok", 200
 
-### Addressing the SyntaxError
+        if normalized_text in ("new", "new report", "reset", "reset report", "/new"):
+            sess["awaiting_reset_confirmation"] = True
+            sess["pending_input"] = text
+            save_session(session_data)
+            send_message(chat_id, "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
+            return "ok", 200
 
-The `SyntaxError: '[' was never closed` at line 1067 occurred because the previous `app.py` was truncated in the `handle_command` function, specifically in the `if sess.get("awaiting_spelling_correction")` block. The corrected code above completes the list comprehension for `activities`:
+        clear_match = re.match(FIELD_PATTERNS["clear"], text, re.IGNORECASE)
+        if clear_match:
+            raw_field = clear_match.group(1).lower() if clear_match.group(1) else None
+            field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
+            if not field:
+                log_event("clear_command_error", text=text, error="Invalid field")
+                send_message(chat_id, f"⚠️ Invalid clear command: '{text}'. Try 'tools: none' or 'issues: none'.")
+                return "ok", 200
+            sess["command_history"].append(sess["structured_data"].copy())
+            sess["structured_data"] = delete_entry(sess["structured_data"], field)
+            save_session(session_data)
+            tpl = summarize_report(sess["structured_data"])
+            send_message(chat_id, f"Cleared {field}\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
 
-```python
-sess["structured_data"]["activities"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("activities", [])]
-```
+        extracted = extract_fields(text)
+        if extracted.get("reset"):
+            sess["awaiting_reset_confirmation"] = True
+            sess["pending_input"] = text
+            save_session(session_data)
+            send_message(chat_id, "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
+            return "ok", 200
+        if extracted.get("correct_prompt"):
+            field = extracted["correct_prompt"]["field"]
+            value = extracted["correct_prompt"]["value"]
+            sess["awaiting_spelling_correction"] = (field, value)
+            save_session(session_data)
+            send_message(chat_id, f"Please provide the correct spelling for '{value}' in {field}.")
+            return "ok", 200
+        if extracted.get("delete"):
+            sess["command_history"].append(sess["structured_data"].copy())
+            for delete_cmd in extracted["delete"]:
+                field = delete_cmd["field"]
+                value = delete_cmd["value"]
+                sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
+            save_session(session_data)
+            tpl = summarize_report(sess["structured_data"])
+            send_message(chat_id, f"Removed {field}" + (f": {value}" if value else "") + f"\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+        if extracted.get("correct"):
+            sess["command_history"].append(sess["structured_data"].copy())
+            for correct_cmd in extracted["correct"]:
+                field = correct_cmd["field"]
+                old_value = correct_cmd["old"]
+                new_value = correct_cmd["new"]
+                if field in ["company", "roles", "tools", "service", "issues"]:
+                    data_field = (
+                        "name" if field == "company" else
+                        "description" if field == "issues" else
+                        "item" if field == "tools" else
+                        "task" if field == "service" else
+                        "name" if field == "roles" else None
+                    )
+                    sess["structured_data"][field] = [
+                        {data_field: new_value if item.get(data_field, "").lower() == old_value.lower() else item[data_field],
+                         **({} if field != "roles" else {"role": item["role"]})}
+                        for item in sess["structured_data"].get(field, [])
+                        if isinstance(item, dict)
+                    ]
+                    if field == "roles" and new_value not in sess["structured_data"].get("people", []):
+                        sess["structured_data"]["people"].append(new_value)
+                elif field in ["people"]:
+                    sess["structured_data"]["people"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("people", [])]
+                    sess["structured_data"]["roles"] = [
+                        {"name": new_value, "role": role["role"]} if role.get("name", "").lower() == old_value.lower() else role
+                        for role in sess["structured_data"].get("roles", [])
+                    ]
+                elif field in ["activities"]:
+                    sess["structured_data"]["activities"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("activities", [])]
+                else:
+                    sess["structured_data"][field] = new_value
+                log_event(f"{field}_corrected", old=old_value, new=new_value)
+            save_session(session_data)
+            tpl = summarize_report(sess["structured_data"])
+            send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+        if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
+            log_event("unrecognized_input", input=text)
+            send_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Try 'add site Downtown Project', 'add issue power outage', or 'spell people Micael'.")
+            return "ok", 200
 
-This ensures the list comprehension is properly closed with `]`, fixing the syntax error.
+        sess["command_history"].append(sess["structured_data"].copy())
+        sess["structured_data"] = merge_data(sess["structured_data"], enrich_date(extracted))
+        save_session(session_data)
+        tpl = summarize_report(sess["structured_data"])
+        send_message(chat_id, f"✅ Updated report:\n\n{tpl}\n\nAnything else to add or correct?")
+        return "ok", 200
+    except Exception as e:
+        log_event("handle_command_error", error=str(e))
+        send_message(chat_id, "⚠️ An error occurred. Please try again.")
+        return "error", 500
 
-### Addressing Functional Issues
+@app.route("/webhook", methods=["POST"])
+def webhook() -> tuple[str, int]:
+    try:
+        data = request.get_json(force=True)
+        log_event("webhook_received", data=data)
+        if not data or "message" not in data:
+            log_event("no_message")
+            return "ok", 200
 
-1. **Spelling Correction**:
-   - **Fix**: The `correct` regex now matches `Correct spelling <value>` and `<category> correct spelling <value>`, defaulting to `people`. The `extract_single_command` function prioritizes `correct` over `people` when `correct` or `spell` keywords are present, preventing misinterpretation as an `add` command.
-   - **Example**: `People correct spelling Micael` will prompt for a new spelling, and `Correct spelling Micael` will assume `people`.
+        msg = data["message"]
+        chat_id = str(msg["chat"]["id"])
+        text = msg.get("text", "").strip()
+        log_event("message_received", chat_id=chat_id, text=text)
 
-2. **Company Deletion**:
-   - **Fix**: The `delete` regex is refined to match `Delete company <name>` and `Delete <name> from company`. The `extract_fields` function ensures `delete` commands are processed correctly, invoking `delete_entry` to remove the company.
-   - **Example**: `Delete company DELTA BUILD` will remove `DELTA BUILD` from the `company` list.
+        if chat_id not in session_data:
+            session_data[chat_id] = {
+                "structured_data": blank_report(),
+                "awaiting_correction": False,
+                "last_interaction": time(),
+                "pending_input": None,
+                "awaiting_reset_confirmation": False,
+                "command_history": deque(maxlen=CONFIG["MAX_HISTORY"]),
+                "awaiting_spelling_correction": None
+            }
+            log_event("session_created", chat_id=chat_id)
 
-3. **Issue Recording**:
-   - **Fix**: The `issue` regex includes `add|insert` and captures a broad range of issue descriptions. The GPT prompt explicitly handles `add issue <description>`, reducing misinterpretation.
-   - **Example**: `Add issue power outage` will add `[{"description": "power outage"}]` to `issues`.
+        sess = session_data[chat_id]
 
-4. **Adding `add` to Regex Patterns**:
-   - **Fix**: All data-adding fields in `FIELD_PATTERNS` now include `add|insert`, ensuring consistent handling of `Add <field> <value>` commands.
-   - **Example**: `Add impression productive` will set `impression: productive`.
+        if "Supervisor" in sess["structured_data"].get("people", []):
+            sess["structured_data"]["people"] = [p for p in sess["structured_data"].get("people", []) if p != "Supervisor"]
+            sess["structured_data"]["roles"] = [r for r in sess["structured_data"].get("roles", []) if r.get("name") != "Supervisor"]
+            log_event("cleaned_supervisor_entries", chat_id=chat_id)
 
-### Installation Requirements
-Ensure `requirements.txt` includes:
-```
-flask
-openai
-requests
-tenacity
-python-decouple
-reportlab
-```
-Install locally:
-```bash
-pip install -r requirements.txt
-```
+        if "voice" in msg:
+            text = transcribe_voice(msg["voice"]["file_id"])
+            if not text:
+                send_message(chat_id, "⚠️ Couldn't understand the audio. Please speak clearly (e.g., 'add site Downtown Project').")
+                return "ok", 200
+            log_event("transcribed_voice", text=text)
 
-### Environment Variables
-Set in Render’s dashboard or `.env`:
-```
-OPENAI_API_KEY=your_openai_api_key
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-```
-Optional (defaults provided):
-```
-SESSION_FILE=/opt/render/project/src/session_data.json
-PAUSE_THRESHOLD=300
-MAX_HISTORY=10
-OPENAI_MODEL=gpt-3.5-turbo
-OPENAI_TEMPERATURE=0.2
-```
+        if sess.get("awaiting_reset_confirmation", False):
+            normalized_text = re.sub(r'[.!?]\s*$', '', text.strip()).lower()
+            log_event("reset_confirmation", text=normalized_text, pending_input=sess["pending_input"])
+            if normalized_text in ("yes", "new", "new report"):
+                sess["structured_data"] = blank_report()
+                sess["awaiting_correction"] = False
+                sess["awaiting_reset_confirmation"] = False
+                sess["pending_input"] = None
+                sess["command_history"].clear()
+                save_session(session_data)
+                tpl = summarize_report(sess["structured_data"])
+                send_message(chat_id, f"**Starting a fresh report**\n\n{tpl}\n\nSpeak or type your first field (e.g., 'add site Downtown Project').")
+                return "ok", 200
+            elif normalized_text in ("no", "existing", "continue"):
+                text = sess["pending_input"]
+                sess["awaiting_reset_confirmation"] = False
+                sess["pending_input"] = None
+                sess["last_interaction"] = time()
+            else:
+                send_message(chat_id, "Please clarify: Reset the report? Reply 'yes' or 'no'.")
+                return "ok", 200
 
-### Instructions
-1. **Replace `app.py`**:
-   - Copy the entire code above into `app.py`.
-   - Save carefully to avoid truncation.
+        if sess.get("awaiting_spelling_correction"):
+            field, old_value = sess["awaiting_spelling_correction"]
+            new_value = text.strip()
+            log_event("spelling_correction_response", field=field, old_value=old_value, new_value=new_value)
+            if new_value.lower() == old_value.lower():
+                sess["awaiting_spelling_correction"] = None
+                save_session(session_data)
+                send_message(chat_id, f"⚠️ New value '{new_value}' is the same as the old value '{old_value}'. Please provide a different spelling for '{old_value}' in {field}.")
+                return "ok", 200
+            sess["awaiting_spelling_correction"] = None
+            sess["command_history"].append(sess["structured_data"].copy())
+            if field in ["company", "roles", "tools", "service", "issues"]:
+                data_field = (
+                    "name" if field == "company" else
+                    "description" if field == "issues" else
+                    "item" if field == "tools" else
+                    "task" if field == "service" else
+                    "name" if field == "roles" else None
+                )
+                sess["structured_data"][field] = [
+                    {data_field: new_value if item.get(data_field, "").lower() == old_value.lower() else item[data_field],
+                     **({} if field != "roles" else {"role": item["role"]})}
+                    for item in sess["structured_data"].get(field, [])
+                    if isinstance(item, dict)
+                ]
+                if field == "roles" and new_value not in sess["structured_data"].get("people", []):
+                    sess["structured_data"]["people"].append(new_value)
+            elif field in ["people"]:
+                sess["structured_data"]["people"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("people", [])]
+                sess["structured_data"]["roles"] = [
+                    {"name": new_value, "role": role["role"]} if role.get("name", "").lower() == old_value.lower() else role
+                    for role in sess["structured_data"].get("roles", [])
+                ]
+            elif field in ["activities"]:
+                sess["structured_data"]["activities"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("activities", [])]
+            else:
+                sess["structured_data"][field] = new_value
+            log_event(f"{field}_corrected", old=old_value, new=new_value)
+            save_session(session_data)
+            tpl = summarize_report(sess["structured_data"])
+            send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
 
-2. **Verify Locally**:
-   - Run `python -m py_compile app.py` to check for syntax errors.
-   - Test commands:
-     - `Add issue power outage`
-     - `Correct spelling Micael` (respond with `Michael`)
-     - `People correct spelling Micael` (respond with `Michael`)
-     - `Delete company DELTA BUILD`
-     - `Add site Downtown Project`
-     - `Add impression productive`
-
-3. **Redeploy on Render**:
-   - Commit and push `app.py` and `requirements.txt`.
-   - Trigger redeployment via Render’s dashboard or CLI (`render deploy`).
-   - Monitor logs to confirm successful processing.
-
-4. **Test the Bot**:
-   - **Voice Input**: Send a voice message with `Add issue power outage` to verify transcription and processing.
-   - **Commands**: Test:
-     - Add: `Add issue power outage`, `Add tool crane`, `Add company DELTA BUILD`
-     - Delete: `Delete company DELTA BUILD`, `Delete Michael from people`
-     - Correct: `Correct spelling Micael`, `People correct spelling Micael`
-     - Clear: `Issues: none`, `Tools: none`
-   - Verify multi-field: `Activities laying the floor issues power outage time morning`
-   - Test others: `Segment 2`, `Category Bestand`, `Add impression productive`
-
-### Expected Outcome
-- **SyntaxError**: Fixed by completing the list comprehension for `activities`.
-- **Spelling Correction**: `Correct spelling Micael` and `People correct spelling Micael` will prompt for a new spelling.
-- **Company Deletion**: `Delete company DELTA BUILD` will remove the company.
-- **Issue Recording**: `Add issue power outage` will add the issue correctly.
-- **Regex Consistency**: All fields support `add|insert`, improving command reliability.
-- **Previous Fixes**: `time`, `GPT_PROMPT`, `FIELD_PATTERNS`, and other fixes are preserved.
-
-If errors persist or new issues arise, please share the updated logs and specific command outputs for a targeted fix.
+        return handle_command(chat_id, text, sess)
+    except Exception as e:
+        log_event("webhook_error", error=str(e))
+        return "error", 500
