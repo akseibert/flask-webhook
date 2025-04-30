@@ -69,7 +69,7 @@ FIELD_MAPPING = {
 # --- Regex Patterns ---
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
+    "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*)(\d+)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
     "category": r'^(?:(?:add|insert)\s+categories?\s+|categories?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
     "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|comments)\s*:)|$|\s*$)',
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+(?:peoples?|persons?)\s*)([^,\s]+(?:\s+[^,\s]+)*)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
@@ -144,7 +144,7 @@ You are an AI assistant extracting a construction site report from user input. E
 
 Fields to extract (omit if not present):
 - site_name: string (e.g., "Downtown Project")
-- segment: string (e.g., "5")
+- segment: string (numeric, e.g., "5")
 - category: string (e.g., "Bestand")
 - company: list of objects with "name" (e.g., [{"name": "Acme Corp"}])
 - people: list of strings (e.g., ["Anna", "Tobias"])
@@ -152,7 +152,7 @@ Fields to extract (omit if not present):
 - tools: list of objects with "item" (e.g., [{"item": "Crane"}])
 - service: list of objects with "task" (e.g., [{"task": "Excavation"}])
 - activities: list of strings (e.g., ["Concrete pouring"])
-- issues: list of objects with "description" (required), "caused_by" (optional), "has_photo" (optional, default false)
+- issues: list of objects with "description" (required, string), "caused_by" (optional, string), "has_photo" (optional, default false)
 - time: string (e.g., "morning", "full day")
 - weather: string (e.g., "cloudy")
 - impression: string (e.g., "productive")
@@ -169,13 +169,13 @@ Commands:
 Rules:
 - Accept both singular and plural category names (e.g., "issue" or "issues", "company" or "companies").
 - Extract fields from colon-separated inputs (e.g., "Services: abc"), natural language (e.g., "weather was cloudy" -> "weather": "cloudy"), or commands (e.g., "add people Anna").
-- For segment and category: Extract only the value (e.g., "Segment: 5" -> "segment": "5").
+- For segment: Extract only numeric values (e.g., "Segment: 5" -> "segment": "5"). Reject non-numeric inputs.
 - For issues: Recognize keywords: "Issue", "Issues", "Problem", "Delay", "Injury". "Issues: none" clears the issues list. Ensure "add issue <description>" is captured (e.g., "add issue power outage" -> "issues": [{"description": "power outage"}]).
 - For activities: Recognize keywords: "Activity", "Activities", "Task", "Progress", "Construction", or action-oriented phrases. "Activities: none" clears the activities list.
 - For site_name: Recognize location-like phrases following "at", "in", "on" (e.g., "Work was done at East Wing" -> "site_name": "East Wing", "activities": ["Work was done"]).
 - For people and roles: Recognize "add [name] as [role]" (e.g., "add Anna as engineer" -> "people": ["Anna"], "roles": [{"name": "Anna", "role": "Engineer"}]). "Roles supervisor" assigns "Supervisor" to the user.
 - For tools and service: Recognize "Tool: [item]", "Service: [task]", or commands like "add service abc".
-- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Handle "delete company <name>" to remove the company.
+- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Handle "delete company <name>" to remove the company. For corrections, ensure new value resembles a company name (alphabetic, not numeric or field-like).
 - For spelling correction: Recognize "correct spelling <value>" or "<category> correct spelling <value>" and prompt for the new value (e.g., "correct spelling Micael" -> prompt for new spelling).
 - For deletion: Recognize "delete <category> <value>" or "delete <value> from <category>" (e.g., "delete Michael from people" -> remove "Michael" from people).
 - Comments should only include non-field-specific notes and avoid capturing commands like "correct spelling" or "delete".
@@ -303,16 +303,16 @@ def summarize_report(data: Dict[str, Any]) -> str:
     try:
         roles_str = ", ".join(f"{r.get('name', '')} ({r.get('role', '')})" for r in data.get("roles", []) if r.get("role"))
         lines = [
-            f"🏗️ **Site**: {data.get('site_name', '') or 'N/A'}",
-            f"🛠️ **Segment**: {data.get('segment', '') or 'N/A'}",
-            f"📋 **Category**: {data.get('category', '') or 'N/A'}",
-            f"🏢 **Companies**: {', '.join(c.get('name', '') for c in data.get('company', []) if c.get('name')) or 'None'}",
-            f"👷 **People**: {', '.join(data.get('people', []) or ['None'])}",
-            f"🎭 **Roles**: {roles_str or 'None'}",
-            f"🔧 **Services**: {', '.join(s.get('task', '') for s in data.get('service', []) if s.get('task')) or 'None'}",
-            f"🛠️ **Tools**: {', '.join(t.get('item', '') for t in data.get('tools', []) if t.get('item')) or 'None'}",
-            f"📅 **Activities**: {', '.join(data.get('activities', []) or ['None'])}",
-            "⚠️ **Issues**:"
+            f"🏗️ Site: {data.get('site_name', '')}",
+            f"🛠️ Segment: {data.get('segment', '')}",
+            f"📋 Category: {data.get('category', '')}",
+            f"🏢 Companies: {', '.join(c.get('name', '') for c in data.get('company', []) if c.get('name'))}",
+            f"👷 People: {', '.join(data.get('people', []))}",
+            f"🎭 Roles: {roles_str}",
+            f"🔧 Services: {', '.join(s.get('task', '') for s in data.get('service', []) if s.get('task'))}",
+            f"🛠️ Tools: {', '.join(t.get('item', '') for t in data.get('tools', []) if t.get('item'))}",
+            f"📅 Activities: {', '.join(data.get('activities', []))}",
+            "⚠️ Issues:"
         ]
         valid_issues = [i for i in data.get("issues", []) if isinstance(i, dict) and i.get("description", "").strip()]
         if valid_issues:
@@ -323,13 +323,13 @@ def summarize_report(data: Dict[str, Any]) -> str:
                 extra = f" (by {by})" if by else ""
                 lines.append(f"  • {desc}{extra}{photo}")
         else:
-            lines.append("  None")
+            lines.append("")
         lines.extend([
-            f"⏰ **Time**: {data.get('time', '') or 'N/A'}",
-            f"🌦️ **Weather**: {data.get('weather', '') or 'N/A'}",
-            f"😊 **Impression**: {data.get('impression', '') or 'N/A'}",
-            f"💬 **Comments**: {data.get('comments', '') or 'N/A'}",
-            f"📆 **Date**: {data.get('date', '') or 'N/A'}"
+            f"⏰ Time: {data.get('time', '')}",
+            f"🌦️ Weather: {data.get('weather', '')}",
+            f"😊 Impression: {data.get('impression', '')}",
+            f"💬 Comments: {data.get('comments', '')}",
+            f"📆 Date: {data.get('date', '')}"
         ])
         summary = "\n".join(line for line in lines if line.strip())
         log_event("summarize_report", summary=summary)
@@ -529,6 +529,12 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                 if field == "people" and re.search(r'\b(correct|spell|delete|remove|as)\b', text.lower()):
                     log_event("skipped_people", reason="command-like input")
                     continue
+                if field == "segment":
+                    value = match.group(1)
+                    if not value.isdigit():
+                        log_event("invalid_segment", value=value, reason="non-numeric")
+                        result["segment_prompt"] = {"value": value}
+                        return result
                 if field == "people":
                     name = clean_value(match.group(1) or match.group(2), field)
                     if name.lower() == "supervisor":
@@ -671,7 +677,7 @@ def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
     try:
         merged = existing.copy()
         for key, value in new.items():
-            if key in ["reset", "undo", "status", "export_pdf", "correct_prompt", "delete", "correct", "activity_prompt"]:
+            if key in ["reset", "undo", "status", "export_pdf", "correct_prompt", "delete", "correct", "activity_prompt", "segment_prompt"]:
                 continue
             if key in ["company", "roles", "tools", "service", "issues"]:
                 if value == []:
@@ -824,7 +830,7 @@ def handle_reset(chat_id: str, session: Dict[str, Any]) -> None:
     session["command_history"].clear()
     save_session(session_data)
     summary = summarize_report(session["structured_data"])
-    send_message(chat_id, f"**Report reset**\n\n{summary}")
+    send_message(chat_id, f"Report reset\n\n{summary}")
 
 @command("undo")
 def handle_undo(chat_id: str, session: Dict[str, Any]) -> None:
@@ -832,14 +838,14 @@ def handle_undo(chat_id: str, session: Dict[str, Any]) -> None:
         session["structured_data"] = session["command_history"].pop()
         save_session(session_data)
         summary = summarize_report(session["structured_data"])
-        send_message(chat_id, f"**Undo successful**\n\n{summary}")
+        send_message(chat_id, f"Undo successful\n\n{summary}")
     else:
         send_message(chat_id, "Nothing to undo.")
 
 @command("status")
 def handle_status(chat_id: str, session: Dict[str, Any]) -> None:
     summary = summarize_report(session["structured_data"])
-    send_message(chat_id, f"**Current report status**\n\n{summary}")
+    send_message(chat_id, f"Current report status\n\n{summary}")
 
 @command("export")
 def handle_export(chat_id: str, session: Dict[str, Any]) -> None:
@@ -965,6 +971,10 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             value = extracted["activity_prompt"]["value"]
             send_message(chat_id, f"Activity '{value}' is vague. Please provide a more descriptive activity (e.g., 'Concrete pouring').")
             return "ok", 200
+        if extracted.get("segment_prompt"):
+            value = extracted["segment_prompt"]["value"]
+            send_message(chat_id, f"Segment '{value}' is invalid. Please provide a numeric segment (e.g., '5').")
+            return "ok", 200
         if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
             log_event("unrecognized_input", input=text)
             send_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Try 'add site Downtown Project', 'add issue power outage', or 'spell people Micael'.")
@@ -974,7 +984,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
         sess["structured_data"] = merge_data(sess["structured_data"], enrich_date(extracted))
         save_session(session_data)
         tpl = summarize_report(sess["structured_data"])
-        send_message(chat_id, f"✅ Updated report:\n\n{tpl}\n\nAnything else to add or correct?")
+        send_message(chat_id, f"Updated report:\n\n{tpl}\n\nAnything else to add or correct?")
         return "ok", 200
     except Exception as e:
         log_event("handle_command_error", error=str(e))
@@ -1032,7 +1042,7 @@ def webhook() -> tuple[str, int]:
                 sess["command_history"].clear()
                 save_session(session_data)
                 tpl = summarize_report(sess["structured_data"])
-                send_message(chat_id, f"**Starting a fresh report**\n\n{tpl}\n\nSpeak or type your first field (e.g., 'add site Downtown Project').")
+                send_message(chat_id, f"Starting a fresh report\n\n{tpl}\n\nSpeak or type your first field (e.g., 'add site Downtown Project').")
                 return "ok", 200
             elif normalized_text in ("no", "existing", "continue"):
                 text = sess["pending_input"]
@@ -1040,57 +1050,3 @@ def webhook() -> tuple[str, int]:
                 sess["pending_input"] = None
                 sess["last_interaction"] = time()
             else:
-                send_message(chat_id, "Please clarify: Reset the report? Reply 'yes' or 'no'.")
-                return "ok", 200
-
-        if sess.get("awaiting_spelling_correction"):
-            field, old_value = sess["awaiting_spelling_correction"]
-            new_value = text.strip()
-            log_event("spelling_correction_response", field=field, old_value=old_value, new_value=new_value)
-            # Validate new_value to avoid including field name
-            if new_value.lower().startswith(field.lower()):
-                send_message(chat_id, f"⚠️ Please provide only the corrected value for '{old_value}' in {field}, without including the field name.")
-                return "ok", 200
-            if new_value.lower() == old_value.lower():
-                sess["awaiting_spelling_correction"] = None
-                save_session(session_data)
-                send_message(chat_id, f"⚠️ New value '{new_value}' is the same as the old value '{old_value}'. Please provide a different spelling for '{old_value}' in {field}.")
-                return "ok", 200
-            sess["awaiting_spelling_correction"] = None
-            sess["command_history"].append(sess["structured_data"].copy())
-            if field in ["company", "roles", "tools", "service", "issues"]:
-                data_field = (
-                    "name" if field == "company" else
-                    "description" if field == "issues" else
-                    "item" if field == "tools" else
-                    "task" if field == "service" else
-                    "name" if field == "roles" else None
-                )
-                sess["structured_data"][field] = [
-                    {data_field: new_value if item.get(data_field, "").lower() == old_value.lower() else item[data_field],
-                     **({} if field != "roles" else {"role": item["role"]})}
-                    for item in sess["structured_data"].get(field, [])
-                    if isinstance(item, dict)
-                ]
-                if field == "roles" and new_value not in sess["structured_data"].get("people", []):
-                    sess["structured_data"]["people"].append(new_value)
-            elif field in ["people"]:
-                sess["structured_data"]["people"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("people", [])]
-                sess["structured_data"]["roles"] = [
-                    {"name": new_value, "role": role["role"]} if role.get("name", "").lower() == old_value.lower() else role
-                    for role in sess["structured_data"].get("roles", [])
-                ]
-            elif field in ["activities"]:
-                sess["structured_data"]["activities"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("activities", [])]
-            else:
-                sess["structured_data"][field] = new_value
-            log_event(f"{field}_corrected", old=old_value, new=new_value)
-            save_session(session_data)
-            tpl = summarize_report(sess["structured_data"])
-            send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
-            return "ok", 200
-
-        return handle_command(chat_id, text, sess)
-    except Exception as e:
-        log_event("webhook_error", error=str(e))
-        return "error", 500
