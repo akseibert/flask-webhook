@@ -366,7 +366,7 @@ def enrich_date(data: Dict[str, Any]) -> Dict[str, Any]:
             data["date"] = today
         else:
             try:
-                input_date = datetime.strptime(data["date"], "%d-%m-%Y")
+                input instruct_date = datetime.strptime(data["date"], "%d-%m-%Y")
                 if input_date > datetime.now():
                     data["date"] = today
             except ValueError:
@@ -1078,4 +1078,31 @@ def webhook() -> tuple[str, int]:
                     "task" if field == "service" else
                     "name" if field == "roles" else None
                 )
-                sess["structured_data"][field
+                sess["structured_data"][field] = [
+                    {data_field: new_value if item.get(data_field, "").lower() == old_value.lower() else item[data_field],
+                     **({} if field != "roles" else {"role": item["role"]})}
+                    for item in sess["structured_data"].get(field, [])
+                    if isinstance(item, dict)
+                ]
+                if field == "roles" and new_value not in sess["structured_data"].get("people", []):
+                    sess["structured_data"]["people"].append(new_value)
+            elif field in ["people"]:
+                sess["structured_data"]["people"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("people", [])]
+                sess["structured_data"]["roles"] = [
+                    {"name": new_value, "role": role["role"]} if role.get("name", "").lower() == old_value.lower() else role
+                    for role in sess["structured_data"].get("roles", [])
+                ]
+            elif field in ["activities"]:
+                sess["structured_data"]["activities"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("activities", [])]
+            else:
+                sess["structured_data"][field] = new_value
+            log_event(f"{field}_corrected", old=old_value, new=new_value)
+            save_session(session_data)
+            tpl = summarize_report(sess["structured_data"])
+            send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+
+        return handle_command(chat_id, text, sess)
+    except Exception as e:
+        log_event("webhook_error", error=str(e))
+        return "error", 500
