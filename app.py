@@ -366,7 +366,7 @@ def enrich_date(data: Dict[str, Any]) -> Dict[str, Any]:
             data["date"] = today
         else:
             try:
-                input instruct_date = datetime.strptime(data["date"], "%d-%m-%Y")
+                input_date = datetime.strptime(data["date"], "%d-%m-%Y")
                 if input_date > datetime.now():
                     data["date"] = today
             except ValueError:
