@@ -417,7 +417,7 @@ def summarize_data(d):
         raise
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def extract_site_report(text):
+def extract_site_report(text, sess):
     try:
         logger.info({"event": "extract_site_report", "input_text": text})
         result = {}
@@ -433,7 +433,7 @@ def extract_site_report(text):
         if len(commands) > 1:
             seen_fields = set()
             for cmd in commands:
-                cmd_result = extract_single_command(cmd)
+                cmd_result = extract_single_command(cmd, sess)
                 if cmd_result.get("reset"):
                     return {"reset": True}
                 for key, value in cmd_result.items():
@@ -447,12 +447,12 @@ def extract_site_report(text):
             logger.info({"event": "multi_field_extracted", "result": result})
             return result
 
-        return extract_single_command(text)
+        return extract_single_command(text, sess)
     except Exception as e:
         logger.error({"event": "extract_site_report_error", "input": text, "error": str(e)})
         raise
 
-def extract_single_command(text):
+def extract_single_command(text, sess):
     try:
         result = {}
 
@@ -1004,7 +1004,7 @@ def webhook():
                     return "ok", 200
 
         # Process new data or corrections
-        extracted = extract_site_report(text)
+        extracted = extract_site_report(text, sess)
         logger.info({"event": "extracted_data", "extracted": extracted})
         if extracted.get("reset"):
             sess["awaiting_reset_confirmation"] = True
