@@ -1080,4 +1080,42 @@ def webhook() -> tuple[str, int]:
                 sess["awaiting_spelling_correction"] = None
                 save_session(session_data)
                 send_message(chat_id, f"⚠️ New value '{new_value}' is the same as the old value '{old_value}'. Please provide a different spelling for '{old_value}' in {field}.")
-                return "ok
+                return "ok", 200
+            sess["awaiting_spelling_correction"] = None
+            sess["command_history"].append(sess["structured_data"].copy())
+            if field in ["company", "roles", "tools", "service", "issues"]:
+                data_field = (
+                    "name" if field == "company" else
+                    "description" if field == "issues" else
+                    "item" if field == "tools" else
+                    "task" if field == "service" else
+                    "name" if field == "roles" else None
+                )
+                sess["structured_data"][field] = [
+                    {data_field: new_value if item.get(data_field, "").lower() == old_value.lower() else item[data_field],
+                     **({} if field != "roles" else {"role": item["role"]})}
+                    for item in sess["structured_data"].get(field, [])
+                    if isinstance(item, dict)
+                ]
+                if field == "roles" and new_value not in sess["structured_data"].get("people", []):
+                    sess["structured_data"]["people"].append(new_value)
+            elif field in ["people"]:
+                sess["structured_data"]["people"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("people", [])]
+                sess["structured_data"]["roles"] = [
+                    {"name": new_value, "role": role["role"]} if role.get("name", "").lower() == old_value.lower() else role
+                    for role in sess["structured_data"].get("roles", [])
+                ]
+            elif field in ["activities"]:
+                sess["structured_data"]["activities"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("activities", [])]
+            else:
+                sess["structured_data"][field] = new_value
+            log_event(f"{field}_corrected", old=old_value, new=new_value)
+            save_session(session_data)
+            tpl = summarize_report(sess["structured_data"])
+            send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+
+        return handle_command(chat_id, text, sess)
+    except Exception as e:
+        log_event("webhook_error", error=str(e))
+        return "error", 500
