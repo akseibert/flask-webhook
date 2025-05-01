@@ -68,18 +68,18 @@ FIELD_MAPPING = {
 
 # --- Regex Patterns ---
 FIELD_PATTERNS = {
-    "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*|at\s+|in\s+|on\s+)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*)(\d+)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
+    "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
     "category": r'^(?:(?:add|insert)\s+categories?\s+|categories?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
     "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|comments)\s*:)|$|\s*$)',
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+(?:peoples?|persons?)\s*)([^,\s]+(?:\s+[^,\s]+)*)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "role": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+)?(\w+\s+\w+|\w+)\s*[:,]?\s*as\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^(?:add|insert)\s*(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+|\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "supervisor": r'^(?:(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*|supervisors?\s*(?:were|included)\s+|i\s+(?:was\s+supervising|am\s+supervising|supervised))(?:\s+by\s+)?([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*(?:involved\s*(?:were)?|[:,])?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)([^,]+?(?:(?:\s+and\s+|\s*,\s*)([^,]+?))?)(?=(?:\s*,\s*(?:site|segment|category|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*(?:[:,]|\s*(?:were|provided)\s+))([^,]+?(?:(?:\s+and\s+|\s*,\s*)([^,]+?))?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*(?:[:,]|\s*used\s*(?:included|were)\s+))([^,]+?(?:(?:\s+and\s+|\s*,\s*)([^,]+?))?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*(?:[:,]|\s*(?:covered|included)?\s*))([^,]+?(?:(?:\s+and\s+|\s*,\s*)([^,]+?))?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:|\s+issues?\s*:|\s+times?\s*:|$|\s*$))',
-    "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*(?:[:,]|\s*(?:encountered|included)?\s*|problem\s*:?\s*|delay\s*:?\s*|injury\s*:?\s*))([^,]+?(?:(?:\s+and\s+|\s*,\s*)([^,]+?))?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|times?|weather|impression|comments)\s*:|\s+times?\s*:|$|\s*$))',
+    "supervisor": r'^(?:(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*|i\s+(?:was\s+supervising|am\s+supervising|supervised))(?:\s+by\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:|\s+issues?\s*:|\s+times?\s*:|$|\s*$))',
+    "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*[:,]?\s*|issues?\s*(?:encountered|included)?\s*|problem\s*:?\s*|delay\s*:?\s*|injury\s*:?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|times?|weather|impression|comments)\s*:|\s+times?\s*:|$|\s*$))',
     "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|impression|comments)\s*:)|$|\s*$)',
     "time": r'^(?:(?:add|insert)\s+times?\s+|times?\s*[:,]?\s*|time\s+spent\s+|morning\s+time\s*|afternoon\s+time\s*|evening\s+time\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|weather|impression|comments)\s*:)|$|\s*$)',
     "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$|\s*$)',
@@ -144,7 +144,7 @@ You are an AI assistant extracting a construction site report from user input. E
 
 Fields to extract (omit if not present):
 - site_name: string (e.g., "Downtown Project")
-- segment: string (numeric, e.g., "5")
+- segment: string (e.g., "5")
 - category: string (e.g., "Bestand")
 - company: list of objects with "name" (e.g., [{"name": "Acme Corp"}])
 - people: list of strings (e.g., ["Anna", "Tobias"])
@@ -152,7 +152,7 @@ Fields to extract (omit if not present):
 - tools: list of objects with "item" (e.g., [{"item": "Crane"}])
 - service: list of objects with "task" (e.g., [{"task": "Excavation"}])
 - activities: list of strings (e.g., ["Concrete pouring"])
-- issues: list of objects with "description" (required, string), "caused_by" (optional, string), "has_photo" (optional, default false)
+- issues: list of objects with "description" (required), "caused_by" (optional), "has_photo" (optional, default false)
 - time: string (e.g., "morning", "full day")
 - weather: string (e.g., "cloudy")
 - impression: string (e.g., "productive")
@@ -169,13 +169,13 @@ Commands:
 Rules:
 - Accept both singular and plural category names (e.g., "issue" or "issues", "company" or "companies").
 - Extract fields from colon-separated inputs (e.g., "Services: abc"), natural language (e.g., "weather was cloudy" -> "weather": "cloudy"), or commands (e.g., "add people Anna").
-- For segment: Extract only numeric values (e.g., "Segment: 5" -> "segment": "5"). Reject non-numeric inputs.
+- For segment and category: Extract only the value (e.g., "Segment: 5" -> "segment": "5").
 - For issues: Recognize keywords: "Issue", "Issues", "Problem", "Delay", "Injury". "Issues: none" clears the issues list. Ensure "add issue <description>" is captured (e.g., "add issue power outage" -> "issues": [{"description": "power outage"}]).
 - For activities: Recognize keywords: "Activity", "Activities", "Task", "Progress", "Construction", or action-oriented phrases. "Activities: none" clears the activities list.
 - For site_name: Recognize location-like phrases following "at", "in", "on" (e.g., "Work was done at East Wing" -> "site_name": "East Wing", "activities": ["Work was done"]).
 - For people and roles: Recognize "add [name] as [role]" (e.g., "add Anna as engineer" -> "people": ["Anna"], "roles": [{"name": "Anna", "role": "Engineer"}]). "Roles supervisor" assigns "Supervisor" to the user.
 - For tools and service: Recognize "Tool: [item]", "Service: [task]", or commands like "add service abc".
-- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Handle "delete company <name>" to remove the company. For corrections, ensure new value resembles a company name (alphabetic, not numeric or field-like).
+- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Handle "delete company <name>" to remove the company.
 - For spelling correction: Recognize "correct spelling <value>" or "<category> correct spelling <value>" and prompt for the new value (e.g., "correct spelling Micael" -> prompt for new spelling).
 - For deletion: Recognize "delete <category> <value>" or "delete <value> from <category>" (e.g., "delete Michael from people" -> remove "Michael" from people).
 - Comments should only include non-field-specific notes and avoid capturing commands like "correct spelling" or "delete".
@@ -303,16 +303,16 @@ def summarize_report(data: Dict[str, Any]) -> str:
     try:
         roles_str = ", ".join(f"{r.get('name', '')} ({r.get('role', '')})" for r in data.get("roles", []) if r.get("role"))
         lines = [
-            f"Site: {data.get('site_name', '')}",
-            f"Segment: {data.get('segment', '')}",
-            f"Category: {data.get('category', '')}",
-            f"Companies: {', '.join(c.get('name', '') for c in data.get('company', []) if c.get('name'))}",
-            f"People: {', '.join(data.get('people', []))}",
-            f"Roles: {roles_str}",
-            f"Services: {', '.join(s.get('task', '') for s in data.get('service', []) if s.get('task'))}",
-            f"Tools: {', '.join(t.get('item', '') for t in data.get('tools', []) if t.get('item'))}",
-            f"Activities: {', '.join(data.get('activities', []))}",
-            "Issues:"
+            f"🏗️ **Site**: {data.get('site_name', '') or 'N/A'}",
+            f"🛠️ **Segment**: {data.get('segment', '') or 'N/A'}",
+            f"📋 **Category**: {data.get('category', '') or 'N/A'}",
+            f"🏢 **Companies**: {', '.join(c.get('name', '') for c in data.get('company', []) if c.get('name')) or 'None'}",
+            f"👷 **People**: {', '.join(data.get('people', []) or ['None'])}",
+            f"🎭 **Roles**: {roles_str or 'None'}",
+            f"🔧 **Services**: {', '.join(s.get('task', '') for s in data.get('service', []) if s.get('task')) or 'None'}",
+            f"🛠️ **Tools**: {', '.join(t.get('item', '') for t in data.get('tools', []) if t.get('item')) or 'None'}",
+            f"📅 **Activities**: {', '.join(data.get('activities', []) or ['None'])}",
+            "⚠️ **Issues**:"
         ]
         valid_issues = [i for i in data.get("issues", []) if isinstance(i, dict) and i.get("description", "").strip()]
         if valid_issues:
@@ -323,13 +323,13 @@ def summarize_report(data: Dict[str, Any]) -> str:
                 extra = f" (by {by})" if by else ""
                 lines.append(f"  • {desc}{extra}{photo}")
         else:
-            lines.append("")
+            lines.append("  None")
         lines.extend([
-            f"Time: {data.get('time', '')}",
-            f"Weather: {data.get('weather', '')}",
-            f"Impression: {data.get('impression', '')}",
-            f"Comments: {data.get('comments', '')}",
-            f"Date: {data.get('date', '')}"
+            f"⏰ **Time**: {data.get('time', '') or 'N/A'}",
+            f"🌦️ **Weather**: {data.get('weather', '') or 'N/A'}",
+            f"😊 **Impression**: {data.get('impression', '') or 'N/A'}",
+            f"💬 **Comments**: {data.get('comments', '') or 'N/A'}",
+            f"📆 **Date**: {data.get('date', '') or 'N/A'}"
         ])
         summary = "\n".join(line for line in lines if line.strip())
         log_event("summarize_report", summary=summary)
@@ -342,20 +342,8 @@ def summarize_report(data: Dict[str, Any]) -> str:
 def clean_value(value: Optional[str], field: str) -> Optional[str]:
     if value is None:
         return value
-    cleaned = re.sub(r'^(?:add\s+|insert\s+|from\s+|correct\s+spelling\s+|spell\s+|delete\s+|remove\s+|involved\s*(?:were)?\s*)', '', value.strip(), flags=re.IGNORECASE)
-    # For multi-item fields, split by 'and' or commas and stop at unrelated fields
-    if field in ["company", "tools", "service", "activities", "issues"]:
-        # Stop at unrelated fields
-        cleaned = re.split(r'(?=\s*(?:supervisors?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*(?:[:,]|\s*(?:were|included|encountered)\s+))', cleaned, flags=re.IGNORECASE)[0].strip()
-        # Split multiple items and clean punctuation
-        items = [re.sub(r'[.,;]$', '', item.strip()) for item in re.split(r'\s*and\s+|\s*,\s*', cleaned) if item.strip()]
-        # For issues, return string unless multiple distinct issues
-        if field == "issues" and len(items) == 1:
-            cleaned = items[0]
-        else:
-            cleaned = items
-    else:
-        cleaned = cleaned.replace('tone', 'stone') if 'tone' in cleaned.lower() and field == 'activities' else cleaned
+    cleaned = re.sub(r'^(?:add\s+|insert\s+|from\s+|correct\s+spelling\s+|spell\s+|delete\s+|remove\s+)', '', value.strip(), flags=re.IGNORECASE)
+    cleaned = cleaned.replace('tone', 'stone') if 'tone' in cleaned.lower() and field == 'activities' else cleaned
     log_event("cleaned_value", field=field, raw=value, cleaned=cleaned)
     return cleaned
 
@@ -437,7 +425,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
             if correct_match:
                 raw_field = correct_match.group(1).lower() if correct_match.group(1) else None
                 old_value = correct_match.group(2).strip() if correct_match.group(2) else None
-                new_value = clean_value(correct_match.group(3).strip(), field) if correct_match.group(3) else None
+                new_value = correct_match.group(3).strip() if correct_match.group(3) else None
                 field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else 'people'
                 log_event("correct_command", field=field, old=old_value, new=new_value)
                 if field and old_value:
@@ -473,14 +461,12 @@ def extract_fields(text: str) -> Dict[str, Any]:
                     result.get(field, []) if field in ["people", "activities"] else
                     []
                 )
-                result[field] = processed_result[field] + (
-                    [{"name": i} for i in existing_items if isinstance(i, str)] if field == "company" else
-                    [{"description": i} for i in existing_items if isinstance(i, str)] if field == "issues" else
-                    [{"task": i} for i in existing_items if isinstance(i, str)] if field == "service" else
-                    [{"item": i} for i in existing_items if isinstance(i, str)] if field == "tools" else
-                    [{"name": i.split(' (')[0], "role": i.split(' (')[1].rstrip(')')} for i in existing_items if isinstance(i, str) and ' (' in i] if field == "roles" else
-                    existing_items if field in ["people", "activities"] else []
-                )
+                result[field] = processed_result[field] + ([{"name": i} for i in existing_items if isinstance(i, str)] if field == "company" else
+                                                         [{"description": i} for i in existing_items if isinstance(i, str)] if field == "issues" else
+                                                         [{"task": i} for i in existing_items if isinstance(i, str)] if field == "service" else
+                                                         [{"item": i} for i in existing_items if isinstance(i, str)] if field == "tools" else
+                                                         [{"name": i.split(' (')[0], "role": i.split(' (')[1].rstrip(')')} for i in existing_items if isinstance(i, str) and ' (' in i] if field == "roles" else
+                                                         existing_items if field in ["people", "activities"] else [])
 
         log_event("fields_extracted", result=result)
         return result
@@ -510,10 +496,10 @@ def extract_single_command(text: str) -> Dict[str, Any]:
         if correct_match:
             raw_field = correct_match.group(1).lower() if correct_match.group(1) else None
             old_value = correct_match.group(2).strip() if correct_match.group(2) else None
-            new_value = clean_value(correct_match.group(3).strip(), field) if correct_match.group(3) else None
+            new_value = correct_match.group(3).strip() if correct_match.group(3) else None
             field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else 'people'
-            log_event("correct_command", field=field, old=old_value, new=new_value)
             if field and old_value:
+                log_event("correct_command", field=field, old=old_value, new=new_value)
                 if new_value:
                     result["correct"] = [{"field": field, "old": old_value, "new": new_value}]
                 else:
@@ -543,12 +529,6 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                 if field == "people" and re.search(r'\b(correct|spell|delete|remove|as)\b', text.lower()):
                     log_event("skipped_people", reason="command-like input")
                     continue
-                if field == "segment":
-                    value = match.group(1)
-                    if not value.isdigit():
-                        log_event("invalid_segment", value=value, reason="non-numeric")
-                        result["segment_prompt"] = {"value": value}
-                        return result
                 if field == "people":
                     name = clean_value(match.group(1) or match.group(2), field)
                     if name.lower() == "supervisor":
@@ -557,55 +537,51 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     result["people"] = [name]
                     log_event("extracted_field", field="people", value=name)
                 elif field == "supervisor":
-                    names = clean_value(match.group(1), field)
-                    if isinstance(names, list):
-                        result["people"] = names
-                        result["roles"] = [{"name": name, "role": "Supervisor"} for name in names]
-                    else:
-                        result["people"] = [names or "User"]
-                        result["roles"] = [{"name": names or "User", "role": "Supervisor"}]
-                    log_event("extracted_field", field="roles", value=names)
+                    name = clean_value(match.group(1), field) if match.group(1) else "User"
+                    result["people"] = [name]
+                    result["roles"] = [{"name": name, "role": "Supervisor"}]
+                    log_event("extracted_field", field="roles", value=name)
                 elif field == "company":
-                    values = clean_value(match.group(2) or match.group(1), field)
-                    if isinstance(values, list):
-                        result["company"] = [{"name": value} for value in values if value]
-                    else:
-                        result["company"] = [{"name": values}] if values else []
-                    log_event("extracted_field", field="company", value=values)
+                    name = clean_value(match.group(2) if match.group(2) else match.group(1), field)
+                    if re.match(r'^(?:delete|remove|correct|adjust|update|spell)\b', name.lower()):
+                        log_event("skipped_company", reason="command-like name", value=name)
+                        continue
+                    result["company"] = [{"name": name}]
+                    log_event("extracted_field", field="company", value=name)
                 elif field == "clear":
                     field_name = FIELD_MAPPING.get(match.group(1).lower(), match.group(1).lower())
                     result[field_name] = [] if field_name in ["issues", "activities", "tools", "service", "company", "people", "roles"] else ""
                     log_event("extracted_field", field=field_name, value="none")
                 elif field in ["service"]:
-                    values = clean_value(match.group(1), field)
-                    if isinstance(values, list):
-                        result[field] = [{"task": value} for value in values if value]
+                    value = clean_value(match.group(1), field)
+                    if value.lower() == "none":
+                        result[field] = []
                     else:
-                        result[field] = [{"task": values}] if values and values.lower() != "none" else []
-                    log_event("extracted_field", field=field, value=values)
-                elif field in ["tools"]:
-                    values = clean_value(match.group(1), field)
-                    if isinstance(values, list):
-                        result[field] = [{"item": value} for value in values if value]
+                        result[field] = [{"task": value.strip()}]
+                    log_event("extracted_field", field=field, value=value)
+                elif field in ["tool"]:
+                    value = clean_value(match.group(1), field)
+                    if value.lower() == "none":
+                        result[field] = []
                     else:
-                        result[field] = [{"item": values}] if values and values.lower() != "none" else []
-                    log_event("extracted_field", field=field, value=values)
+                        result[field] = [{"item": value.strip()}]
+                    log_event("extracted_field", field=field, value=value)
                 elif field == "issue":
-                    values = clean_value(match.group(1), field)
-                    if isinstance(values, list):
-                        result[field] = [{"description": value} for value in values if value]
+                    value = clean_value(match.group(1), field)
+                    if value.lower() == "none":
+                        result[field] = []
                     else:
-                        result[field] = [{"description": values}] if values and values.lower() != "none" else []
-                    log_event("extracted_field", field=field, value=values)
+                        result[field] = [{"description": value.strip()}]
+                    log_event("extracted_field", field=field, value=value)
                 elif field == "activity":
-                    values = clean_value(match.group(1), field)
-                    if isinstance(values, list):
-                        result[field] = [value for value in values if value]
+                    value = clean_value(match.group(1), field)
+                    if value.lower() == "none":
+                        result[field] = []
+                    elif re.match(r'^\w+$', value.lower()):  # Check for vague inputs
+                        result["activity_prompt"] = {"value": value}
                     else:
-                        result[field] = [values] if values and values.lower() != "none" else []
-                    if any(re.match(r'^\w+$', value.lower()) for value in result[field]):
-                        result["activity_prompt"] = {"value": result[field][0]}
-                    log_event("extracted_field", field=field, value=values)
+                        result[field] = [value.strip()]
+                    log_event("extracted_field", field=field, value=value)
                 else:
                     value = clean_value(match.group(1), field)
                     result[field] = value
@@ -660,7 +636,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     parts = re.split(r'\b(at|in|on)\b', text, flags=re.IGNORECASE)
                     location = ", ".join(clean_value(part.strip().title(), "site_name") for part in parts[2::2] if part.strip())
                     activity = clean_value(parts[0].strip(), "activities")
-                    data = {"site_name": location, "activities": activity if isinstance(activity, list) else [activity]}
+                    data = {"site_name": location, "activities": [activity]}
                     log_event("fallback_activity_site", data=data)
                 else:
                     data = {"comments": clean_value(text.strip(), "comments")}
@@ -695,7 +671,7 @@ def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
     try:
         merged = existing.copy()
         for key, value in new.items():
-            if key in ["reset", "undo", "status", "export_pdf", "correct_prompt", "delete", "correct", "activity_prompt", "segment_prompt"]:
+            if key in ["reset", "undo", "status", "export_pdf", "correct_prompt", "delete", "correct", "activity_prompt"]:
                 continue
             if key in ["company", "roles", "tools", "service", "issues"]:
                 if value == []:
@@ -848,7 +824,7 @@ def handle_reset(chat_id: str, session: Dict[str, Any]) -> None:
     session["command_history"].clear()
     save_session(session_data)
     summary = summarize_report(session["structured_data"])
-    send_message(chat_id, f"Report reset\n\n{summary}")
+    send_message(chat_id, f"**Report reset**\n\n{summary}")
 
 @command("undo")
 def handle_undo(chat_id: str, session: Dict[str, Any]) -> None:
@@ -856,14 +832,14 @@ def handle_undo(chat_id: str, session: Dict[str, Any]) -> None:
         session["structured_data"] = session["command_history"].pop()
         save_session(session_data)
         summary = summarize_report(session["structured_data"])
-        send_message(chat_id, f"Undo successful\n\n{summary}")
+        send_message(chat_id, f"**Undo successful**\n\n{summary}")
     else:
         send_message(chat_id, "Nothing to undo.")
 
 @command("status")
 def handle_status(chat_id: str, session: Dict[str, Any]) -> None:
     summary = summarize_report(session["structured_data"])
-    send_message(chat_id, f"Current report status\n\n{summary}")
+    send_message(chat_id, f"**Current report status**\n\n{summary}")
 
 @command("export")
 def handle_export(chat_id: str, session: Dict[str, Any]) -> None:
@@ -989,10 +965,6 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             value = extracted["activity_prompt"]["value"]
             send_message(chat_id, f"Activity '{value}' is vague. Please provide a more descriptive activity (e.g., 'Concrete pouring').")
             return "ok", 200
-        if extracted.get("segment_prompt"):
-            value = extracted["segment_prompt"]["value"]
-            send_message(chat_id, f"Segment '{value}' is invalid. Please provide a numeric segment (e.g., '5').")
-            return "ok", 200
         if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
             log_event("unrecognized_input", input=text)
             send_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Try 'add site Downtown Project', 'add issue power outage', or 'spell people Micael'.")
@@ -1002,7 +974,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
         sess["structured_data"] = merge_data(sess["structured_data"], enrich_date(extracted))
         save_session(session_data)
         tpl = summarize_report(sess["structured_data"])
-        send_message(chat_id, f"Updated report:\n\n{tpl}\n\nAnything else to add or correct?")
+        send_message(chat_id, f"✅ Updated report:\n\n{tpl}\n\nAnything else to add or correct?")
         return "ok", 200
     except Exception as e:
         log_event("handle_command_error", error=str(e))
@@ -1060,7 +1032,7 @@ def webhook() -> tuple[str, int]:
                 sess["command_history"].clear()
                 save_session(session_data)
                 tpl = summarize_report(sess["structured_data"])
-                send_message(chat_id, f"Starting a fresh report\n\n{tpl}\n\nSpeak or type your first field (e.g., 'add site Downtown Project').")
+                send_message(chat_id, f"**Starting a fresh report**\n\n{tpl}\n\nSpeak or type your first field (e.g., 'add site Downtown Project').")
                 return "ok", 200
             elif normalized_text in ("no", "existing", "continue"):
                 text = sess["pending_input"]
@@ -1086,3 +1058,39 @@ def webhook() -> tuple[str, int]:
                 return "ok", 200
             sess["awaiting_spelling_correction"] = None
             sess["command_history"].append(sess["structured_data"].copy())
+            if field in ["company", "roles", "tools", "service", "issues"]:
+                data_field = (
+                    "name" if field == "company" else
+                    "description" if field == "issues" else
+                    "item" if field == "tools" else
+                    "task" if field == "service" else
+                    "name" if field == "roles" else None
+                )
+                sess["structured_data"][field] = [
+                    {data_field: new_value if item.get(data_field, "").lower() == old_value.lower() else item[data_field],
+                     **({} if field != "roles" else {"role": item["role"]})}
+                    for item in sess["structured_data"].get(field, [])
+                    if isinstance(item, dict)
+                ]
+                if field == "roles" and new_value not in sess["structured_data"].get("people", []):
+                    sess["structured_data"]["people"].append(new_value)
+            elif field in ["people"]:
+                sess["structured_data"]["people"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("people", [])]
+                sess["structured_data"]["roles"] = [
+                    {"name": new_value, "role": role["role"]} if role.get("name", "").lower() == old_value.lower() else role
+                    for role in sess["structured_data"].get("roles", [])
+                ]
+            elif field in ["activities"]:
+                sess["structured_data"]["activities"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("activities", [])]
+            else:
+                sess["structured_data"][field] = new_value
+            log_event(f"{field}_corrected", old=old_value, new=new_value)
+            save_session(session_data)
+            tpl = summarize_report(sess["structured_data"])
+            send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+
+        return handle_command(chat_id, text, sess)
+    except Exception as e:
+        log_event("webhook_error", error=str(e))
+        return "error", 500
