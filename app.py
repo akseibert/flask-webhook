@@ -490,6 +490,59 @@ def extract_single_command(text):
                 result["roles"] = [{"name": new_value, "role": old_value}]
             logger.info({"event": "corrected_field", "field": field, "old": old_value, "new": new_value})
             return result
+        else:
+            # New logic to infer correction
+            correct_value_match = re.match(r'^(?:correct|update)\s+(.+)$', text, re.IGNORECASE)
+            if correct_value_match:
+                new_value = correct_value_match.group(1).strip()
+                best_match = None
+                best_similarity = 0
+                for field in ["company", "people", "tools", "service", "activities", "issues"]:
+                    if field == "company":
+                        for item in sess["structured_data"].get(field, []):
+                            existing_value = item.get("name", "")
+                            similarity = string_similarity(existing_value, new_value)
+                            if similarity > best_similarity:
+                                best_similarity = similarity
+                                best_match = (field, existing_value, new_value)
+                    elif field == "people" or field == "activities":
+                        for existing_value in sess["structured_data"].get(field, []):
+                            similarity = string_similarity(existing_value, new_value)
+                            if similarity > best_similarity:
+                                best_similarity = similarity
+                                best_match = (field, existing_value, new_value)
+                    elif field == "tools":
+                        for item in sess["structured_data"].get(field, []):
+                            existing_value = item.get("item", "")
+                            similarity = string_similarity(existing_value, new_value)
+                            if similarity > best_similarity:
+                                best_similarity = similarity
+                                best_match = (field, existing_value, new_value)
+                    elif field == "service":
+                        for item in sess["structured_data"].get(field, []):
+                            existing_value = item.get("task", "")
+                            similarity = string_similarity(existing_value, new_value)
+                            if similarity > best_similarity:
+                                best_similarity = similarity
+                                best_match = (field, existing_value, new_value)
+                    elif field == "issues":
+                        for item in sess["structured_data"].get(field, []):
+                            existing_value = item.get("description", "")
+                            similarity = string_similarity(existing_value, new_value)
+                            if similarity > best_similarity:
+                                best_similarity = similarity
+                                best_match = (field, existing_value, new_value)
+                if best_match and best_similarity > 0.5:  # Similarity threshold
+                    field, old_value, new_value = best_match
+                    if field == "company":
+                        result[field] = [{"name": new_value}]
+                    elif field in ["tools", "service", "issues"]:
+                        key = "item" if field == "tools" else "task" if field == "service" else "description"
+                        result[field] = [{key: new_value}]
+                    elif field in ["people", "activities"]:
+                        result[field] = [new_value]
+                    logger.info({"event": "inferred_correction", "field": field, "old": old_value, "new": new_value})
+                    return result
 
         for field, pattern in FIELD_PATTERNS.items():
             if field in ["reset", "delete", "correct"]:
@@ -500,15 +553,31 @@ def extract_single_command(text):
                     continue
                 if field == "people":
                     name = match.group(1).strip()
-                    result["people"] = [name]
-                    logger.info({"event": "extracted_field", "field": "people", "value": name})
+                    role_match = re.search(r'\s+as\s+([^,\s]+)', text, re.IGNORECASE)
+                    if role_match:
+                        role = role_match.group(1).title()
+                        result["people"] = [name]
+                        result["roles"] = [{"name": name, "role": role}]
+                        logger.info({"event": "extracted_field", "field": "people_with_role", "name": name, "role": role})
+                    else:
+                        result["people"] = [name]
+                        logger.info({"event": "extracted_field", "field": "people", "value": name})
                 elif field == "role":
                     name = match.group(1) or match.group(3)
-                    role = match.group(2) or match.group(4)
-                    role = role.title()
-                    result["people"] = [name.strip()]
-                    result["roles"] = [{"name": name.strip(), "role": role}]
-                    logger.info({"event": "extracted_field", "field": "roles", "name": name, "role": role})
+                    role = (match.group(2) or match.group(4)).title()
+                    if "roles" in text.lower().split()[:2]:  # Check if it starts with "roles"
+                        name = " ".join(text.lower().split("as")[0].replace("roles", "").strip().split())
+                        if name in sess["structured_data"].get("people", []):
+                            result["roles"] = [{"name": name, "role": role}]
+                            logger.info({"event": "extracted_field", "field": "roles", "name": name, "role": role})
+                        else:
+                            result["people"] = [name]
+                            result["roles"] = [{"name": name, "role": role}]
+                            logger.info({"event": "extracted_field", "field": "new_person_with_role", "name": name, "role": role})
+                    else:
+                        result["people"] = [name.strip()]
+                        result["roles"] = [{"name": name.strip(), "role": role}]
+                        logger.info({"event": "extracted_field", "field": "roles", "name": name, "role": role})
                 elif field == "supervisor":
                     if match.group(1):
                         names = [name.strip() for name in match.group(1).split("and") if name.strip()]
@@ -796,10 +865,17 @@ def webhook():
                     "\n\nSpeak or type your first field (e.g., 'add site Downtown Project').")
                 return "ok", 200
             elif normalized_text in ("no", "existing", "continue"):
-                text = sess["pending_input"]
-                sess["awaiting_reset_confirmation"] = False
-                sess["pending_input"] = None
-                sess["last_interaction"] = current_time
+                if sess["pending_input"].lower() in ("new", "new report", "reset", "reset report", "/new"):
+                    sess["awaiting_reset_confirmation"] = False
+                    sess["pending_input"] = None
+                    send_telegram_message(chat_id,
+                        "Report not reset. Please provide your next input.")
+                    return "ok", 200
+                else:
+                    text = sess["pending_input"]
+                    sess["awaiting_reset_confirmation"] = False
+                    sess["pending_input"] = None
+                    sess["last_interaction"] = current_time
             else:
                 send_telegram_message(chat_id,
                     "Please clarify: Reset the report? Reply 'yes' or 'no'.")
@@ -908,6 +984,24 @@ def webhook():
             send_telegram_message(chat_id,
                 f"Removed {field}" + (f": {value}" if value else "") + f"\n\nHere’s the updated report:\n\n{tpl}\n\nAnything else to add or correct?")
             return "ok", 200
+        else:
+            # New logic to infer field for deletion
+            delete_value_match = re.match(r'^(?:delete|remove)\s+(.+)$', text, re.IGNORECASE)
+            if delete_value_match:
+                value = delete_value_match.group(1).strip()
+                if value in sess["structured_data"].get("people", []):
+                    field = "people"
+                    sess["command_history"].append(sess["structured_data"].copy())
+                    sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
+                    save_session_data(session_data)
+                    tpl = summarize_data(sess["structured_data"])
+                    send_telegram_message(chat_id,
+                        f"Removed {field}: {value}\n\nHere’s the updated report:\n\n{tpl}\n\nAnything else to add or correct?")
+                    return "ok", 200
+                else:
+                    send_telegram_message(chat_id,
+                        f"⚠️ Couldn't find '{value}' in the report to delete.")
+                    return "ok", 200
 
         # Process new data or corrections
         extracted = extract_site_report(text)
