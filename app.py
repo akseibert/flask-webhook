@@ -79,7 +79,7 @@ FIELD_PATTERNS = {
     "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*(?:[:,]|\s*(?:were|provided)\s+))([^,]+?(?:(?:\s+and\s+|\s*,\s*)([^,]+?))*)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*(?:[:,]|$))|$|\s*$)',
     "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*(?:[:,]|\s*used\s*(?:included|were)\s+))([^,]+?(?:(?:\s+and\s+|\s*,\s*)([^,]+?))*)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*(?:[:,]|$))|$|\s*$)',
     "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*(?:[:,]|\s*(?:covered|included)?\s*))([^,]+?(?:(?:\s+and\s+|\s*,\s*)([^,]+?))*)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*(?:[:,]|$))|$|\s*$)',
-    "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*(?:[:,]|\s*(?:encountered|included)?\s*|problem\s*:?\s*|delay\s*:?\s*|injury\s*:?\s*))([^,]+?(?:(?:\s+and\s+|\s*,\s*)([^,]+?))*)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|times?|weather|impression|comments)\s*(?:[:,]|$))|$|\s*$)',
+    "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*(?:[:,]|\s*(?:encountered|included)?\s*|problem\s*:?\s*|delay\s*:?\s*|injury\s*:?\s*))([^,]+?(?:(?:\s+and\s+|\s*,\s*)([^,]+?))*)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|time|weather|impression|comments)\s*(?:[:,]|$))|$|\s*$)',
     "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|weather\s*[:,]?\s*|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|impression|comments)\s*(?:[:,]|$))|$|\s*$)',
     "time": r'^(?:(?:add|insert)\s+times?\s+|times?\s*[:,]?\s*|time\s+spent\s+|time\s*[:,]?\s*|morning\s+time\s*|afternoon\s+time\s*|evening\s+time\s*|all\s+day\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|weather|impression|comments)\s*(?:[:,]|$))|$|\s*$)',
     "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*(?:[:,]|$))|$|\s*$)',
@@ -310,7 +310,7 @@ def summarize_report(data: Dict[str, Any]) -> str:
             f"👷 **People**: {', '.join(data.get('people', []) or ['None'])}",
             f"🎭 **Roles**: {roles_str or 'None'}",
             f"🔧 **Services**: {', '.join(s.get('task', '') for s in data.get('service', []) if s.get('task')) or 'None'}",
-            f"🛠️ **Tools**: {', '.join(t.get('item', '') for t in data.get('tools', []) if t.get('item')) or 'None'}",
+            f"🛠️ **Tools**: {', '.join(t.get('item', '') for t in data.get('tools', []) if s.get('item')) or 'None'}",
             f"📅 **Activities**: {', '.join(data.get('activities', []) or ['None'])}",
             "⚠️ **Issues**:"
         ]
@@ -349,8 +349,8 @@ def clean_value(value: Optional[str], field: str) -> Optional[str]:
         cleaned = re.split(r'(?=\s*(?:supervisors?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*(?:[:,]|\s*(?:were|included|encountered)\s+))', cleaned, flags=re.IGNORECASE)[0].strip()
         # Split multiple items and clean punctuation
         items = [re.sub(r'[.,;]$', '', item.strip()) for item in re.split(r'\s*and\s+|\s*,\s*', cleaned) if item.strip()]
-        # For issues, return string unless multiple distinct issues
-        if field == "issues" and len(items) == 1:
+        # Return string for single items to avoid nested lists
+        if len(items) == 1 and field in ["tools", "service"]:
             cleaned = items[0]
         else:
             cleaned = items
@@ -637,8 +637,12 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     for item in data[field]:
                         if isinstance(item, dict):
                             if field == "tools" and "item" in item:
+                                if isinstance(item["item"], list):
+                                    item["item"] = item["item"][0] if item["item"] else ""
                                 item["item"] = clean_value(item["item"], field)
                             elif field == "service" and "task" in item:
+                                if isinstance(item["task"], list):
+                                    item["task"] = item["task"][0] if item["task"] else ""
                                 item["task"] = clean_value(item["task"], field)
                             elif field == "issues" and "description" in item:
                                 item["description"] = clean_value(item["description"], field)
@@ -983,7 +987,12 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             return "ok", 200
 
         sess["command_history"].append(sess["structured_data"].copy())
-        sess["structured_data"] = merge_data(sess["structured_data"], enrich_date(extracted))
+        try:
+            sess["structured_data"] = merge_data(sess["structured_data"], enrich_date(extracted))
+        except Exception as e:
+            log_event("merge_data_failed", error=str(e))
+            send_message(chat_id, f"⚠️ Failed to process some fields: {str(e)}. Please check your input and try again.")
+            return "ok", 200
         save_session(session_data)
         tpl = summarize_report(sess["structured_data"])
         send_message(chat_id, f"✅ Updated report:\n\n{tpl}\n\nAnything else to add or correct?")
@@ -991,7 +1000,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
     except Exception as e:
         log_event("handle_command_error", error=str(e))
         send_message(chat_id, "⚠️ An error occurred. Please try again.")
-        return "error", 500
+        return "ok", 200
 
 @app.route("/webhook", methods=["POST"])
 def webhook() -> tuple[str, int]:
@@ -1066,43 +1075,4 @@ def webhook() -> tuple[str, int]:
             if new_value.lower() == old_value.lower():
                 sess["awaiting_spelling_correction"] = None
                 save_session(session_data)
-                send_message(chat_id, f"⚠️ New value '{new_value}' is the same as the old value '{old_value}'. Please provide a different spelling for '{old_value}' in {field}.")
-                return "ok", 200
-            sess["awaiting_spelling_correction"] = None
-            sess["command_history"].append(sess["structured_data"].copy())
-            if field in ["company", "roles", "tools", "service", "issues"]:
-                data_field = (
-                    "name" if field == "company" else
-                    "description" if field == "issues" else
-                    "item" if field == "tools" else
-                    "task" if field == "service" else
-                    "name" if field == "roles" else None
-                )
-                sess["structured_data"][field] = [
-                    {data_field: new_value if item.get(data_field, "").lower() == old_value.lower() else item[data_field],
-                     **({} if field != "roles" else {"role": item["role"]})}
-                    for item in sess["structured_data"].get(field, [])
-                    if isinstance(item, dict)
-                ]
-                if field == "roles" and new_value not in sess["structured_data"].get("people", []):
-                    sess["structured_data"]["people"].append(new_value)
-            elif field in ["people"]:
-                sess["structured_data"]["people"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("people", [])]
-                sess["structured_data"]["roles"] = [
-                    {"name": new_value, "role": role["role"]} if role.get("name", "").lower() == old_value.lower() else role
-                    for role in sess["structured_data"].get("roles", [])
-                ]
-            elif field in ["activities"]:
-                sess["structured_data"]["activities"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("activities", [])]
-            else:
-                sess["structured_data"][field] = new_value
-            log_event(f"{field}_corrected", old=old_value, new=new_value)
-            save_session(session_data)
-            tpl = summarize_report(sess["structured_data"])
-            send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
-            return "ok", 200
-
-        return handle_command(chat_id, text, sess)
-    except Exception as e:
-        log_event("webhook_error", error=str(e))
-        return "error", 500
+                send_message(chat_id, f"⚠️ New value '{new_value}' is the same as the old value '{old_value}'. Please provide a different spelling for '{old_value}'
