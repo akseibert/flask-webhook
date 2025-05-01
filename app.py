@@ -310,7 +310,7 @@ def summarize_report(data: Dict[str, Any]) -> str:
             f"👷 **People**: {', '.join(data.get('people', []) or ['None'])}",
             f"🎭 **Roles**: {roles_str or 'None'}",
             f"🔧 **Services**: {', '.join(s.get('task', '') for s in data.get('service', []) if s.get('task')) or 'None'}",
-            f"🛠️ **Tools**: {', '.join(t.get('item', '') for t in data.get('tools', []) if s.get('item')) or 'None'}",
+            f"🛠️ **Tools**: {', '.join(t.get('item', '') for t in data.get('tools', []) if t.get('item')) or 'None'}",
             f"📅 **Activities**: {', '.join(data.get('activities', []) or ['None'])}",
             "⚠️ **Issues**:"
         ]
@@ -350,7 +350,7 @@ def clean_value(value: Optional[str], field: str) -> Optional[str]:
         # Split multiple items and clean punctuation
         items = [re.sub(r'[.,;]$', '', item.strip()) for item in re.split(r'\s*and\s+|\s*,\s*', cleaned) if item.strip()]
         # Return string for single items to avoid nested lists
-        if len(items) == 1 and field in ["tools", "service"]:
+        if len(items) == 1:
             cleaned = items[0]
         else:
             cleaned = items
@@ -647,6 +647,8 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                             elif field == "issues" and "description" in item:
                                 item["description"] = clean_value(item["description"], field)
                             elif field == "company" and "name" in item:
+                                if isinstance(item["name"], list):
+                                    item["name"] = item["name"][0] if item["name"] else ""
                                 item["name"] = clean_value(item["name"], field)
                             elif field == "roles" and "name" in item:
                                 item["name"] = clean_value(item["name"], field)
@@ -1075,4 +1077,28 @@ def webhook() -> tuple[str, int]:
             if new_value.lower() == old_value.lower():
                 sess["awaiting_spelling_correction"] = None
                 save_session(session_data)
-                send_message(chat_id, f"⚠️ New value '{new_value}' is the same as the old value '{old_value}'. Please provide a different spelling for '{old_value}'
+                send_message(chat_id, f"⚠️ New value '{new_value}' is the same as the old value '{old_value}'. Please provide a different spelling for '{old_value}' in {field}.")
+                return "ok", 200
+            sess["awaiting_spelling_correction"] = None
+            sess["command_history"].append(sess["structured_data"].copy())
+            if field in ["company", "roles", "tools", "service", "issues"]:
+                data_field = (
+                    "name" if field == "company" else
+                    "description" if field == "issues" else
+                    "item" if field == "tools" else
+                    "task" if field == "service" else
+                    "name" if field == "roles" else None
+                )
+                sess["structured_data"][field] = [
+                    {data_field: new_value if item.get(data_field, "").lower() == old_value.lower() else item[data_field],
+                     **({} if field != "roles" else {"role": item["role"]})}
+                    for item in sess["structured_data"].get(field, [])
+                    if isinstance(item, dict)
+                ]
+                if field == "roles" and new_value not in sess["structured_data"].get("people", []):
+                    sess["structured_data"]["people"].append(new_value)
+            elif field in ["people"]:
+                sess["structured_data"]["people"] = [new_value if item.lower() == old_value.lower() else item for item in sess["structured_data"].get("people", [])]
+                sess["structured_data"]["roles"] = [
+                    {"name": new_value, "role": role["role"]} if role.get("name", "").lower() == old_value.lower() else role
+                    for role in sess["structured_data"].get("roles", [])
