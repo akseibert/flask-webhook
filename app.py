@@ -6,7 +6,6 @@ from config import ENV_VARS, SESSION_FILE, PAUSE_THRESHOLD, MAX_HISTORY
 from utils import load_session_data, save_session_data, blank_report, enrich_with_date, summarize_data
 from handlers import extract_single_command, merge_structured_data
 from services import send_telegram_message, transcribe_from_telegram_voice
-from collections import deque
 
 app = Flask(__name__)
 
