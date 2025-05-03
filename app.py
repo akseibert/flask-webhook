@@ -6,7 +6,7 @@ import re
 import logging
 import signal
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 from difflib import SequenceMatcher
@@ -88,7 +88,7 @@ Fields to extract (omit if not present):
 
 Commands:
 - add <category> <value>: Add a value to the category (e.g., "add site Downtown Project" -> "site_name": "Downtown Project").
-- delete <category> [value]: Remove a value or clear the category (e.g., "delete activities Laying foundation").
+- delete <value>: Remove a value across categories (e.g., "delete Tobias" removes Tobias from people and roles).
 - correct <category> <old> to <new>: Update a value (e.g., "correct site Downtown to Uptown").
 - <category>: <value>: Add a value (e.g., "Services: abc" -> "service": [{"task": "abc"}]).
 - <category>: none: Clear the category (e.g., "Tools: none" -> "tools": []).
@@ -115,24 +115,6 @@ Rules:
 - Comments should only include non-field-specific notes.
 - Return {} for reset commands or irrelevant inputs.
 - Case-insensitive matching.
-
-Examples:
-1. Input: "add site Central Plaza, add segment 5, add issue Power outage"
-   Output: {"site_name": "Central Plaza", "segment": "5", "issues": [{"description": "Power outage"}]}
-2. Input: "new report"
-   Output: {}
-3. Input: "Services: abc"
-   Output: {"service": [{"task": "abc"}]}
-4. Input: "Tools: none"
-   Output: {"tools": []}
-5. Input: "Roles supervisor"
-   Output: {"people": ["User"], "roles": [{"name": "User", "role": "Supervisor"}]}
-6. Input: "Work was done at the East Wing."
-   Output: {"site_name": "East Wing", "activities": ["Work was done"]}
-7. Input: "add Anna as engineer to people"
-   Output: {"people": ["Anna"], "roles": [{"name": "Anna", "role": "Engineer"}]}
-8. Input: "Activities: many"
-   Output: {"activities": ["many"]}
 """
 
 # --- Session data persistence ---
@@ -207,7 +189,7 @@ FIELD_PATTERNS = {
     "comments": r'^(?:add\s+)?(?:comment\s*[:,]?\s*|comments\s*[:,]?\s*)(.+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|time|weather|impression)\s*:)|$)',
     "clear": r'^(issues|activities|comments|tools|service|company|people|roles)\s*[:,]?\s*none$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": r'^(?:delete|remove)\s+(site|segment|category|company|person|people|role|roles|tool|service|activity|activities|issue|issues|time|weather|impression|comments)(?:\s+(.+))?$',
+    "delete": r'^(?:delete|remove)\s+(.+?)$',
     "correct": r'^(?:correct\s+|update\s+)(site|segment|category|company|person|people|role|roles|tool|service|activity|activities|issue|issues|time|weather|impression|comments)\s+(.+?)\s+to\s+(.+?)(?=(?:\s*,\s*(?:site|segment|category|company|people|role|service|tool|activity|issue|time|weather|impression|comments)\s*:)|$)'
 }
 
@@ -262,8 +244,8 @@ def transcribe_from_telegram_voice(file_id):
         if not text:
             logger.warning({"event": "transcription_empty", "result": text})
             return ""
-        # Clean transcribed text from common voice command artifacts
-        text = re.sub(r'^\s*(s|add|delete|remove)\s+', '', text, flags=re.IGNORECASE).strip()
+        # Enhanced cleaning for transcription artifacts
+        text = re.sub(r'^\s*(s|add|delete|remove|as|issue[s]?|tool[s]?|activity|activities)\s+', '', text, flags=re.IGNORECASE).strip()
         logger.info({"event": "transcription_success", "text": text})
         return text
     except Exception as e:
@@ -458,30 +440,14 @@ def extract_single_command(text):
     try:
         result = {}
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
-        cleaned_text = re.sub(r'^\s*(s|add|delete|remove)\s+', '', normalized_text, flags=re.IGNORECASE).strip()
+        cleaned_text = re.sub(r'^\s*(s|add|delete|remove|as|issue[s]?|tool[s]?|activity|activities)\s+', '', normalized_text, flags=re.IGNORECASE).strip()
 
-        # Handle deletion commands first
-        delete_match = re.match(FIELD_PATTERNS["delete"], cleaned_text, re.IGNORECASE)
+        # Handle deletion commands
+        delete_match = re.match(FIELD_PATTERNS["delete"], normalized_text, re.IGNORECASE)
         if delete_match:
-            field = delete_match.group(1).lower()
-            value = delete_match.group(2).strip() if delete_match.group(2) else None
-            if field in ["person", "people"]:
-                field = "people"
-                result[field] = {"delete": value}
-            elif field in ["role", "roles"]:
-                field = "roles"
-                result[field] = {"delete": value}
-            elif field in ["activity", "activities"]:
-                field = "activities"
-                result[field] = {"delete": value}
-            elif field in ["issue", "issues"]:
-                field = "issues"
-                result[field] = {"delete": value}
-            elif field in ["company", "tool", "service"]:
-                result[field] = {"delete": value}
-            elif field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
-                result[field] = {"delete": value}
-            logger.info({"event": "delete_command", "field": field, "value": value})
+            value = delete_match.group(1).strip()
+            result["delete"] = value
+            logger.info({"event": "delete_command", "value": value})
             return result
 
         correct_match = re.match(FIELD_PATTERNS["correct"], cleaned_text, re.IGNORECASE)
@@ -619,29 +585,62 @@ def extract_single_command(text):
 def merge_structured_data(existing, new):
     try:
         merged = existing.copy()
+        deleted = False
+        target = None
+
         for key, value in new.items():
             if key in ["reset", "undo", "status", "export_pdf"]:
                 continue
+            if key == "delete":
+                target = value.lower()
+                fields_to_check = ["company", "people", "roles", "tools", "service", "activities", "issues"]
+                for field in fields_to_check:
+                    if field in merged:
+                        if field == "people":
+                            initial_len = len(merged[field])
+                            merged[field] = [item for item in merged[field] if target not in item.lower()]
+                            if len(merged[field]) < initial_len:
+                                deleted = True
+                            merged["roles"] = [r for r in merged["roles"] if target not in r.get("name", "").lower()]
+                        elif field == "company":
+                            initial_len = len(merged[field])
+                            merged[field] = [item for item in merged[field] if target not in item.get("name", "").lower()]
+                            if len(merged[field]) < initial_len:
+                                deleted = True
+                        elif field == "tools":
+                            initial_len = len(merged[field])
+                            merged[field] = [item for item in merged[field] if target not in item.get("item", "").lower()]
+                            if len(merged[field]) < initial_len:
+                                deleted = True
+                        elif field == "service":
+                            initial_len = len(merged[field])
+                            merged[field] = [item for item in merged[field] if target not in item.get("task", "").lower()]
+                            if len(merged[field]) < initial_len:
+                                deleted = True
+                        elif field == "activities":
+                            initial_len = len(merged[field])
+                            merged[field] = [item for item in merged[field] if target not in item.lower()]
+                            if len(merged[field]) < initial_len:
+                                deleted = True
+                        elif field == "issues":
+                            initial_len = len(merged[field])
+                            merged[field] = [item for item in merged[field] if target not in item.get("description", "").lower()]
+                            if len(merged[field]) < initial_len:
+                                deleted = True
+                        elif field == "roles":
+                            initial_len = len(merged[field])
+                            merged[field] = [item for item in merged[field] if target not in item.get("name", "").lower()]
+                            if len(merged[field]) < initial_len:
+                                deleted = True
+                continue
             if key in ["company", "roles", "tools", "service", "activities", "issues", "people"]:
-                if isinstance(value, dict) and "delete" in value:
-                    if value["delete"] is True:
-                        merged[key] = []
-                    else:
-                        target = value["delete"].lower()
-                        if key == "people":
-                            merged[key] = [item for item in merged.get(key, []) if target not in item.lower()]
-                            merged["roles"] = [r for r in merged.get("roles", []) if target not in r.get("name", "").lower()]
-                        elif key in ["company", "tools", "service", "issues"]:
-                            merged[key] = [item for item in merged.get(key, []) if target not in item.get("name" if key == "company" else "item" if key == "tools" else "task" if key == "service" else "description", "").lower()]
-                        elif key == "activities":
-                            merged[key] = [item for item in merged.get(key, []) if target not in item.lower()]
-                else:
+                if isinstance(value, list):
                     if key == "people":
-                        new_people = [p for p in value if p not in merged.get(key, [])]
+                        new_people = [p for p in value if p not in merged[key]]
                         merged[key].extend(new_people)
                     elif key == "roles":
                         for role in value:
-                            if not any(r.get("name") == role.get("name") for r in merged.get(key, [])):
+                            if not any(r.get("name") == role.get("name") for r in merged[key]):
                                 merged[key].append(role)
                             else:
                                 for i, r in enumerate(merged[key]):
@@ -651,42 +650,13 @@ def merge_structured_data(existing, new):
                     else:
                         merged[key].extend(value)
             else:
-                if isinstance(value, dict) and "delete" in value:
-                    merged[key] = ""
-                elif value:
+                if value:
                     merged[key] = value
+
         logger.info({"event": "merged_data", "data": json.dumps(merged, indent=2)})
-        return merged
+        return merged, deleted, target
     except Exception as e:
         logger.error({"event": "merge_structured_data_error", "error": str(e)})
-        raise
-
-def delete_entry(data, field, value=None):
-    try:
-        logger.info({"event": "delete_entry", "field": field, "value": value})
-        if field in ["company", "tools", "service", "issues", "activities"]:
-            if value:
-                data[field] = [item for item in data[field] if value.lower() not in str(item.get("name" if field == "company" else "item" if field == "tools" else "task" if field == "service" else "description" if field == "issues" else item, "")).lower()]
-            else:
-                data[field] = []
-        elif field == "people":
-            if value:
-                data[field] = [item for item in data[field] if value.lower() not in item.lower()]
-                data["roles"] = [role for role in data.get("roles", []) if value.lower() not in role.get("name", "").lower()]
-            else:
-                data[field] = []
-                data["roles"] = []
-        elif field in ["roles"]:
-            if value:
-                data[field] = [role for role in data[field] if value.lower() not in role.get("name", "").lower()]
-            else:
-                data[field] = []
-        elif field in ["site_name", "segment", "category", "time", "weather", "impression", "comments", "date"]:
-            data[field] = ""
-        logger.info({"event": "data_after_deletion", "data": json.dumps(data, indent=2)})
-        return data
-    except Exception as e:
-        logger.error({"event": "delete_entry_error", "field": field, "error": str(e)})
         raise
 
 @app.route("/webhook", methods=["POST"])
@@ -718,7 +688,7 @@ def webhook():
             text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
             if not text:
                 send_telegram_message(chat_id,
-                    "⚠️ Couldn't understand the audio. Please speak clearly (e.g., 'add site Downtown Project' or 'add people Tobias').")
+                    "⚠️ Couldn't understand the audio. Please speak clearly (e.g., 'add site Downtown Project' or 'delete Tobias').")
                 return "ok", 200
             logger.info({"event": "transcribed_voice", "text": text})
 
@@ -727,7 +697,7 @@ def webhook():
 
         if not normalized_text:
             send_telegram_message(chat_id,
-                "⚠️ Empty input received. Please provide a valid command (e.g., 'add site Downtown Project' or 'add issue Power outage').")
+                "⚠️ Empty input received. Please provide a valid command (e.g., 'add site Downtown Project' or 'delete Power Outage').")
             return "ok", 200
 
         # Handle reset confirmation
@@ -797,7 +767,7 @@ def webhook():
                     "\n\nAnything else to add or correct?")
             else:
                 send_telegram_message(chat_id,
-                    "No actions to undo. Add fields like 'add site X' or 'add people Y'.")
+                    "No actions to undo. Add fields like 'add site X' or 'delete Y'.")
             return "ok", 200
 
         # Handle status command
@@ -850,37 +820,26 @@ def webhook():
             similarity = SequenceMatcher(None, text.lower(), best_match).ratio()
             suggestion = f" Did you mean '{best_match}'?" if similarity > 0.6 else ""
             send_telegram_message(chat_id,
-                f"⚠️ Unrecognized input: '{text}'. Try formats like 'add site Downtown Project', 'add people Tobias', 'add issue Power outage', or 'delete company Acme'.{suggestion}")
+                f"⚠️ Unrecognized input: '{text}'. Try formats like 'add site Downtown Project', 'add people Tobias', or 'delete Power Outage'.{suggestion}")
             return "ok", 200
 
         sess["command_history"].append(sess["structured_data"].copy())
-        original_data = sess["structured_data"].copy()
-        sess["structured_data"] = merge_structured_data(
+        merged_data, deleted, target = merge_structured_data(
             sess["structured_data"], enrich_with_date(extracted)
         )
+        sess["structured_data"] = merged_data
         save_to_sharepoint(chat_id, sess["structured_data"])
         save_session_data(session_data)
 
-        # Check if deletion was successful
-        for field in ["company", "people", "tools", "service", "issues", "activities", "roles"]:
-            if field in extracted and isinstance(extracted[field], dict) and "delete" in extracted[field]:
-                value = extracted[field]["delete"]
-                if value is True:
-                    if original_data.get(field) and not sess["structured_data"].get(field):
-                        send_telegram_message(chat_id,
-                            f"Cleared {field}\n\nHere’s the updated report:\n\n{summarize_data(sess['structured_data'])}\n\nAnything else to add or correct?")
-                    else:
-                        send_telegram_message(chat_id,
-                            f"⚠️ Field '{field}' was already empty.\n\nCurrent report:\n\n{summarize_data(sess['structured_data'])}\n\nTry adding items first.")
-                else:
-                    if any(value.lower() in str(item.get("name" if field == "company" else "item" if field == "tools" else "task" if field == "service" else "description" if field == "issues" else "name" if field == "roles" else item, "")).lower() for item in original_data.get(field, [])) and \
-                       not any(value.lower() in str(item.get("name" if field == "company" else "item" if field == "tools" else "task" if field == "service" else "description" if field == "issues" else "name" if field == "roles" else item, "")).lower() for item in sess["structured_data"].get(field, [])):
-                        send_telegram_message(chat_id,
-                            f"Removed {value} from {field}\n\nHere’s the updated report:\n\n{summarize_data(sess['structured_data'])}\n\nAnything else to add or correct?")
-                    else:
-                        send_telegram_message(chat_id,
-                            f"⚠️ Couldn't find '{value}' in {field} to delete.\n\nCurrent report:\n\n{summarize_data(sess['structured_data'])}\n\nTry 'delete {field} {value}' with an existing entry.")
-                return "ok", 200
+        # Provide feedback for deletion attempts
+        if "delete" in extracted:
+            if deleted:
+                send_telegram_message(chat_id,
+                    f"Removed '{target}' from the report.\n\nHere’s the updated report:\n\n{summarize_data(sess['structured_data'])}\n\nAnything else to add or correct?")
+            else:
+                send_telegram_message(chat_id,
+                    f"⚠️ Couldn't find '{target}' in the report to delete.\n\nCurrent report:\n\n{summarize_data(sess['structured_data'])}\n\nTry 'delete {target}' with an existing entry.")
+            return "ok", 200
 
         tpl = summarize_data(sess["structured_data"])
         send_telegram_message(chat_id,
