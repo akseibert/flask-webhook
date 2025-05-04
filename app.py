@@ -21,7 +21,7 @@ import io
 try:
     logging.basicConfig(
         filename="/opt/render/project/src/app.log",
-        level=logging.DEBUG,  # Increased to DEBUG for better tracing
+        level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     logger = logging.getLogger(__name__)
@@ -112,6 +112,7 @@ Rules:
 - For people and roles:
   - Recognize "add [name] as [role]" or "[name] [role]" (e.g., "Anna Kasel architect" -> "people": ["Anna Kasel"], "roles": [{"name": "Anna Kasel", "role": "Architect"}]).
   - Support multi-word roles (e.g., "Michael Rich as window cleaner" -> "roles": [{"name": "Michael Rich", "role": "Window Cleaner"}]).
+  - Handle multiple person-role pairs (e.g., "People Anna Keller as engineer, Michael Robert as window installation specialist" -> "roles": [{"name": "Anna Keller", "role": "Engineer"}, {"name": "Michael Robert", "role": "Window Installation Specialist"}]).
   - "Roles supervisor" assigns "Supervisor" to the user.
   - Do not assign "Supervisor" unless explicitly stated.
 - For tools and service:
@@ -129,6 +130,7 @@ Examples:
 - Input: "category Bestand" -> {"category": "Bestand"}
 - Input: "Morning! At Mountain View Apartments, section 9C, category Bestand, firms BuildFast AG, time full day..." -> {"site_name": "Mountain View Apartments", "segment": "9C", "category": "Bestand", "company": [{"name": "BuildFast AG"}], "time": "full day", ...}
 - Input: "People Michael Rich as window cleaner" -> {"people": ["Michael Rich"], "roles": [{"name": "Michael Rich", "role": "Window Cleaner"}]}
+- Input: "People Anna Keller as engineer, Michael Robert as window installation specialist" -> {"people": ["Anna Keller", "Michael Robert"], "roles": [{"name": "Anna Keller", "role": "Engineer"}, {"name": "Michael Robert", "role": "Window Installation Specialist"}]}
 - Input: "delete companies" -> {"company": {"delete": true}}
 - Input: "insert company WindowCleaner" -> {"company": [{"name": "WindowCleaner"}]}
 """
@@ -193,7 +195,7 @@ FIELD_PATTERNS = {
     "category": r'^(?:add\s+|insert\s+)?category\s*[:,\s]*\s*(.+?)\s*$',
     "impression": r'^(?:add\s+|insert\s+)?impression\s*[:,\s]*\s*(.+?)\s*$',
     "people": r'^(?:add\s+|insert\s+)?(?:people|person)\s*[:,\s]*\s*(.+?)(?:\s+as\s+|\s+)(architect|engineer|supervisor|manager|worker|window\s+installer)\s*$|^(?:add\s+|insert\s+)?(?:people|person)\s*[:,\s]*\s*([^:,\s]+(?:\s+[^:,\s]+)*?)(?!\s+as\s+.*)\s*$',
-    "role": r'^(?:add\s+|insert\s+)?(?:people\s+|person\s+)?(.+?)\s*[:,\s]*\s*as\s+(.+?)\s*$|^(?:add\s+|insert\s+)?(?:person|people)\s*[:,\s]*\s*(.+?)\s*,\s*role\s*[:,\s]*\s*(.+?)\s*$',
+    "role": r'^(?:add\s+|insert\s+)?(?:people\s+|person\s+)?((?:[^,]+?\s+as\s+[^,]+?)(?:,\s*[^,]+?\s+as\s+[^,]+?)*)\s*$|^(?:add\s+|insert\s+)?(?:person|people)\s*[:,\s]*\s*(.+?)\s*,\s*role\s*[:,\s]*\s*(.+?)\s*$',
     "supervisor": r'^(?:add\s+|insert\s+)?(?:supervisors\s*(?:were|are)\s+|i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|roles?\s*[:,\s]*\s*supervisor\s*$)(.+?)?\s*$',
     "company": r'^(?:add\s+|insert\s+)?(?:company|companies)\s*[:,\s]*\s*(.+?)\s*$',
     "service": r'^(?:add\s+|insert\s+)?(?:service|services|services\s*(?:were|provided))\s*[:,\s]*\s*(.+?)\s*$',
@@ -555,15 +557,31 @@ def extract_single_command(text):
                         result["people"] = names
                     else:
                         logger.debug({"event": "people_regex_failed", "input": normalized_text})
-                        continue  # Try next pattern (e.g., role)
+                        continue
                     logger.info({"event": "extracted_field", "field": "people", "value": result.get("people", [])})
                 elif field == "role":
-                    name = (match.group(1) or match.group(3)).strip()
-                    role = (match.group(2) or match.group(4)).strip().title()
-                    names = [n.strip() for n in name.split(",") if n.strip()]
-                    result["people"] = names
-                    result["roles"] = [{"name": n, "role": role} for n in names]
-                    logger.info({"event": "extracted_field", "field": "roles", "names": names, "role": role})
+                    role_text = match.group(1) or match.group(3)
+                    if role_text:
+                        # Split multiple person-role pairs
+                        pairs = [pair.strip() for pair in role_text.split(",") if pair.strip()]
+                        names = []
+                        roles = []
+                        for pair in pairs:
+                            pair_match = re.match(r'(.+?)\s+as\s+(.+)', pair, re.IGNORECASE)
+                            if pair_match:
+                                name = pair_match.group(1).strip()
+                                role = pair_match.group(2).strip().title()
+                                names.append(name)
+                                roles.append({"name": name, "role": role})
+                        result["people"] = names
+                        result["roles"] = roles
+                    else:
+                        name = match.group(3).strip()
+                        role = match.group(4).strip().title()
+                        names = [n.strip() for n in name.split(",") if n.strip()]
+                        result["people"] = names
+                        result["roles"] = [{"name": n, "role": role} for n in names]
+                    logger.info({"event": "extracted_field", "field": "roles", "names": result.get("people", []), "role": [r["role"] for r in result.get("roles", [])]})
                 elif field == "supervisor":
                     if match.group(1):
                         names = [name.strip() for name in match.group(1).split("and") if name.strip()]
@@ -574,7 +592,7 @@ def extract_single_command(text):
                         result["roles"] = [{"name": "User", "role": "Supervisor"}]
                     logger.info({"event": "extracted_field", "field": "roles", "value": match.group(1) or "User"})
                 elif field == "company":
-                    name = re.sub(r'^\s*(add|insert)\s+', '', match.group(1), flags=re.IGNORECASE).strip()
+                    name = re.sub(r'^(?:add|insert|company|companies)\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
                     companies = [c.strip() for c in re.split(r',|and', name) if c.strip()]
                     result["company"] = [{"name": c} for c in companies]
                     logger.info({"event": "extracted_field", "field": "company", "value": companies})
@@ -583,7 +601,7 @@ def extract_single_command(text):
                     result[field_name] = []
                     logger.info({"event": "extracted_field", "field": field_name, "value": "none"})
                 elif field == "service":
-                    value = re.sub(r'^\s*(add|insert)\s+', '', match.group(1), flags=re.IGNORECASE).strip()
+                    value = re.sub(r'^(?:add|insert|service|services|services\s*(?:were|provided))\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
                     if value.lower() == "none":
                         result["service"] = []
                     else:
@@ -591,7 +609,7 @@ def extract_single_command(text):
                         result["service"] = [{"task": s} for s in services]
                     logger.info({"event": "extracted_field", "field": "service", "value": value})
                 elif field == "tool":
-                    value = re.sub(r'^\s*(add|insert)\s+', '', match.group(1), flags=re.IGNORECASE).strip()
+                    value = re.sub(r'^(?:add|insert|tool|tools|tools\s*used\s*(?:included|were))\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
                     if value.lower() == "none":
                         result["tools"] = []
                     else:
@@ -604,7 +622,7 @@ def extract_single_command(text):
                         result["tools"] = [{"item": t} for t in tools]
                     logger.info({"event": "extracted_field", "field": "tools", "value": value})
                 elif field == "issue":
-                    value = re.sub(r'^\s*(add|insert)\s+', '', match.group(1), flags=re.IGNORECASE).strip()
+                    value = re.sub(r'^(?:add|insert|issue|issues|issues\s*(?:encountered|included))\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
                     if value.lower() == "none":
                         result["issues"] = []
                     else:
@@ -612,30 +630,14 @@ def extract_single_command(text):
                         result["issues"] = [{"description": i} for i in issues]
                     logger.info({"event": "extracted_field", "field": "issues", "value": value})
                 elif field == "activity":
-                    value = re.sub(r'^\s*(add|insert)\s+', '', match.group(1), flags=re.IGNORECASE).strip()
+                    value = re.sub(r'^(?:add|insert|activity|activities|activities\s*(?:covered|included))\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
                     if value.lower() == "none":
                         result["activities"] = []
                     else:
                         activities = [a.strip() for a in re.split(r',|and', value) if a.strip()]
                         result["activities"] = activities
                     logger.info({"event": "extracted_field", "field": "activities", "value": activities})
-                elif field == "weather":
-                    value = match.group(1).strip()
-                    result["weather"] = value
-                    logger.info({"event": "extracted_field", "field": "weather", "value": value})
-                elif field == "time":
-                    value = match.group(1).strip()
-                    result["time"] = value
-                    logger.info({"event": "extracted_field", "field": "time", "value": value})
-                elif field == "comments":
-                    value = match.group(1).strip()
-                    result["comments"] = value
-                    logger.info({"event": "extracted_field", "field": "comments", "value": value})
-                elif field == "site_name":
-                    value = match.group(1).strip()
-                    result["site_name"] = value
-                    logger.info({"event": "extracted_field", "field": "site_name", "value": value})
-                elif field in ["segment", "category"]:
+                elif field in ["weather", "time", "comments", "impression", "site_name", "segment", "category"]:
                     value = match.group(1).strip()
                     result[field] = value
                     logger.info({"event": "extracted_field", "field": field, "value": value})
@@ -745,7 +747,6 @@ def merge_structured_data(existing, new):
                     logger.info({"event": "delete_role_processed", "role": target})
                     continue
                 elif "update_from_roles" in value:
-                    # Handled after roles are updated
                     continue
             elif key in ["company", "roles", "tools", "service", "activities", "issues", "people"]:
                 if isinstance(value, list):
@@ -916,7 +917,6 @@ def webhook():
             return "ok", 200
 
         if not extracted:
-            # Fuzzy matching for misspelled commands
             known_commands = ["site", "add site", "add people", "add tools", "delete company", "correct company", "delete architect", "segment", "category", "insert company"]
             best_match = max(known_commands, key=lambda x: SequenceMatcher(None, text.lower(), x).ratio(), default="")
             similarity = SequenceMatcher(None, text.lower(), best_match).ratio()
@@ -934,13 +934,13 @@ def webhook():
 
         # Provide feedback for deletion or correction
         if deleted:
-            field_name = next(iter(extracted))  # Get the field name from extracted
+            field_name = next(iter(extracted))
             if target:
                 send_telegram_message(chat_id, f"Removed '{target}' from {field_name}.\n\nHere’s the updated report:\n\n{summarize_data(sess['structured_data'])}\n\nAnything else to add or correct?")
             else:
                 send_telegram_message(chat_id, f"Cleared {field_name}.\n\nHere’s the updated report:\n\n{summarize_data(sess['structured_data'])}\n\nAnything else to add or correct?")
         elif corrected:
-            field_name = next(iter(extracted))  # Get the field name from extracted
+            field_name = next(iter(extracted))
             send_telegram_message(chat_id, f"Corrected '{old_value}' to '{new_value}' in {field_name}.\n\nHere’s the updated report:\n\n{summarize_data(sess['structured_data'])}\n\nAnything else to add or correct?")
         else:
             tpl = summarize_data(sess["structured_data"])
