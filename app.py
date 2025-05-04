@@ -107,7 +107,7 @@ FIELD_PATTERNS = {
 def load_session() -> Dict[str, Any]:
     try:
         if os.path.exists(CONFIG["SESSION_FILE"]):
-            with open(CONFIG["SESSION_FILE"]) as f:
+            with open(CONFIG["SESSION_FILE"], "r") as f:
                 data = json.load(f)
             for chat_id, session in data.items():
                 if "command_history" in session:
@@ -960,7 +960,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             sess["awaiting_reset_confirmation"] = True
             sess["pending_input"] = text
             save_session(session_data)
-            send_message(chat_id, "Are you sure you decompress the report? Reply 'yes' or 'no'.")
+            send_message(chat_id, "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
             return "ok", 200
         if extracted.get("correct_prompt"):
             field = extracted["correct_prompt"]["field"]
@@ -1122,4 +1122,21 @@ def webhook() -> tuple[str, int]:
                 if field == "roles" and new_value not in sess["structured_data"].get("people", []):
                     sess["structured_data"]["people"].append(new_value)
             elif field in ["people"]:
-                sess["structured_data
+                sess["structured_data"]["people"] = [new_value if string_similarity(item, old_value) > 0.7 else item for item in sess["structured_data"].get("people", [])]
+                sess["structured_data"]["roles"] = [
+                    {"name": new_value, "role": role["role"]} if string_similarity(role.get("name", ""), old_value) > 0.7 else role
+                    for role in sess["structured_data"].get("roles", [])
+                ]
+            elif field in ["activities"]:
+                sess["structured_data"]["activities"] = [new_value if string_similarity(item, old_value) > 0.7 else item for item in sess["structured_data"].get("activities", [])]
+            else:
+                sess["structured_data"][field] = new_value
+            save_session(session_data)
+            tpl = summarize_report(sess["structured_data"])
+            send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+
+        return handle_command(chat_id, text, sess)
+    except Exception as e:
+        log_event("webhook_error", error=str(e))
+        return "error", 500
