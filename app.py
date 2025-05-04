@@ -592,7 +592,7 @@ def extract_single_command(text):
                         result["roles"] = [{"name": "User", "role": "Supervisor"}]
                     logger.info({"event": "extracted_field", "field": "roles", "value": match.group(1) or "User"})
                 elif field == "company":
-                    name = re.sub(r'^(?:add|insert|company|companies)\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
+                    name = re.sub(r'^(?:add|insert|company|companies|s:)\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
                     companies = [c.strip() for c in re.split(r',|and', name) if c.strip()]
                     result["company"] = [{"name": c} for c in companies]
                     logger.info({"event": "extracted_field", "field": "company", "value": companies})
@@ -601,7 +601,7 @@ def extract_single_command(text):
                     result[field_name] = []
                     logger.info({"event": "extracted_field", "field": field_name, "value": "none"})
                 elif field == "service":
-                    value = re.sub(r'^(?:add|insert|service|services|services\s*(?:were|provided))\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
+                    value = re.sub(r'^(?:add|insert|service|services|services\s*(?:were|provided)|s:)\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
                     if value.lower() == "none":
                         result["service"] = []
                     else:
@@ -609,7 +609,7 @@ def extract_single_command(text):
                         result["service"] = [{"task": s} for s in services]
                     logger.info({"event": "extracted_field", "field": "service", "value": value})
                 elif field == "tool":
-                    value = re.sub(r'^(?:add|insert|tool|tools|tools\s*used\s*(?:included|were))\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
+                    value = re.sub(r'^(?:add|insert|tool|tools|tools\s*used\s*(?:included|were)|s:)\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
                     if value.lower() == "none":
                         result["tools"] = []
                     else:
@@ -622,7 +622,7 @@ def extract_single_command(text):
                         result["tools"] = [{"item": t} for t in tools]
                     logger.info({"event": "extracted_field", "field": "tools", "value": value})
                 elif field == "issue":
-                    value = re.sub(r'^(?:add|insert|issue|issues|issues\s*(?:encountered|included))\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
+                    value = re.sub(r'^(?:add|insert|issue|issues|issues\s*(?:encountered|included)|s:)\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
                     if value.lower() == "none":
                         result["issues"] = []
                     else:
@@ -630,7 +630,7 @@ def extract_single_command(text):
                         result["issues"] = [{"description": i} for i in issues]
                     logger.info({"event": "extracted_field", "field": "issues", "value": value})
                 elif field == "activity":
-                    value = re.sub(r'^(?:add|insert|activity|activities|activities\s*(?:covered|included))\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
+                    value = re.sub(r'^(?:add|insert|activity|activities|activities\s*(?:covered|included)|s:)\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
                     if value.lower() == "none":
                         result["activities"] = []
                     else:
@@ -638,7 +638,7 @@ def extract_single_command(text):
                         result["activities"] = activities
                     logger.info({"event": "extracted_field", "field": "activities", "value": activities})
                 elif field in ["weather", "time", "comments", "impression", "site_name", "segment", "category"]:
-                    value = match.group(1).strip()
+                    value = re.sub(r'^(?:add|insert|s:)\s*[:,\s]*', '', match.group(1), flags=re.IGNORECASE).strip()
                     result[field] = value
                     logger.info({"event": "extracted_field", "field": field, "value": value})
                 return result
