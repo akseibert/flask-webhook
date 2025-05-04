@@ -192,7 +192,7 @@ FIELD_PATTERNS = {
     "segment": r'^(?:add\s+|insert\s+)?segment\s*[:,\s]*\s*(.+?)\s*$',
     "category": r'^(?:add\s+|insert\s+)?category\s*[:,\s]*\s*(.+?)\s*$',
     "impression": r'^(?:add\s+|insert\s+)?impression\s*[:,\s]*\s*(.+?)\s*$',
-    "people": r'^(?:add\s+|insert\s+)?(?:people|person)\s*[:,\s]*\s*(.+?)(?:\s+as\s+|\s+)(architect|engineer|supervisor|manager|worker|window\s+installer)\s*$|^(?:add\s+|insert\s+)?(?:people|person)\s*[:,\s]*\s*([^:,\s]+(?:\s+[^:,\s]+)*)\s*$',
+    "people": r'^(?:add\s+|insert\s+)?(?:people|person)\s*[:,\s]*\s*(.+?)(?:\s+as\s+|\s+)(architect|engineer|supervisor|manager|worker|window\s+installer)\s*$|^(?:add\s+|insert\s+)?(?:people|person)\s*[:,\s]*\s*([^:,\s]+(?:\s+[^:,\s]+)*?)(?!\s+as\s+.*)\s*$',
     "role": r'^(?:add\s+|insert\s+)?(?:people\s+|person\s+)?(.+?)\s*[:,\s]*\s*as\s+(.+?)\s*$|^(?:add\s+|insert\s+)?(?:person|people)\s*[:,\s]*\s*(.+?)\s*,\s*role\s*[:,\s]*\s*(.+?)\s*$',
     "supervisor": r'^(?:add\s+|insert\s+)?(?:supervisors\s*(?:were|are)\s+|i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|roles?\s*[:,\s]*\s*supervisor\s*$)(.+?)?\s*$',
     "company": r'^(?:add\s+|insert\s+)?(?:company|companies)\s*[:,\s]*\s*(.+?)\s*$',
@@ -553,6 +553,9 @@ def extract_single_command(text):
                     elif match.group(3):  # Name without role
                         names = [name.strip() for name in match.group(3).split(",") if name.strip()]
                         result["people"] = names
+                    else:
+                        logger.debug({"event": "people_regex_failed", "input": normalized_text})
+                        continue  # Try next pattern (e.g., role)
                     logger.info({"event": "extracted_field", "field": "people", "value": result.get("people", [])})
                 elif field == "role":
                     name = (match.group(1) or match.group(3)).strip()
