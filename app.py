@@ -21,7 +21,7 @@ import io
 try:
     logging.basicConfig(
         filename="/opt/render/project/src/app.log",
-        level=logging.INFO,
+        level=logging.DEBUG,  # Increased to DEBUG for better tracing
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ except Exception as e:
 
 # --- GPT Prompt for complex input parsing ---
 gpt_prompt = """
-You are an AI assistant extracting a construction site report from user input. Extract all explicitly mentioned fields and return them in JSON format. Process the entire input as a single unit, splitting on commas or periods only when fields are clearly separated by keywords. Map natural language phrases and standardized commands (add, delete, correct) to fields accurately, prioritizing specific fields over comments or site_name. Do not treat reset commands ("new", "new report", "reset", "reset report", "/new") as comments or fields; return {} for these. Handle "none" inputs (e.g., "Tools: none") as clearing the respective field, and vague or misspelled inputs (e.g., "Activities: many", "site lake propert") by adding them and noting clarification needed. Ensure no command words (e.g., "add", "delete", "correct", "s:") appear in the extracted values.
+You are an AI assistant extracting a construction site report from user input. Extract all explicitly mentioned fields and return them in JSON format. Process the entire input as a single unit, splitting on commas or periods only when fields are clearly separated by keywords. Map natural language phrases and standardized commands (add, delete, correct, insert) to fields accurately, prioritizing specific fields over comments or site_name. Do not treat reset commands ("new", "new report", "reset", "reset report", "/new") as comments or fields; return {} for these. Handle "none" inputs (e.g., "Tools: none") as clearing the respective field, and vague or misspelled inputs (e.g., "Activities: many", "site lake propert") by adding them and noting clarification needed. Ensure no command words (e.g., "add", "delete", "correct", "insert", "s:") appear in the extracted values. For fields like time, prioritize the last mentioned value (e.g., "morning, full day" -> "time": "full day"). Always attempt to extract the category field when relevant (e.g., "Bestand" for construction context).
 
 Fields to extract (omit if not present):
 - site_name: string (e.g., "Downtown Project")
@@ -90,6 +90,7 @@ Commands:
 - add <category> <value>: Add a value to the category (e.g., "add site Downtown Project" -> "site_name": "Downtown Project").
 - delete <category> [value]: Remove a value or clear the category (e.g., "delete company Acme Corp" or "delete companies").
 - correct <category> <old> to <new>: Update a value (e.g., "correct company Acme to Acme Corp").
+- insert <category> <value>: Add a value (e.g., "insert company WindowCleaner" -> "company": [{"name": "WindowCleaner"}]).
 - delete <role>: Remove all entries with the specified role (e.g., "delete architect" removes all architects from roles).
 - <category>: <value>: Add or update a value (e.g., "Services: abc" -> "service": [{"task": "abc"}]).
 - <category>: none: Clear the category (e.g., "Tools: none" -> "tools": []).
@@ -110,11 +111,12 @@ Rules:
   - Handle typos like "lake propert" by suggesting "Lake Property" or similar.
 - For people and roles:
   - Recognize "add [name] as [role]" or "[name] [role]" (e.g., "Anna Kasel architect" -> "people": ["Anna Kasel"], "roles": [{"name": "Anna Kasel", "role": "Architect"}]).
+  - Support multi-word roles (e.g., "Michael Rich as window installer" -> "roles": [{"name": "Michael Rich", "role": "Window Installer"}]).
   - "Roles supervisor" assigns "Supervisor" to the user.
   - Do not assign "Supervisor" unless explicitly stated.
 - For tools and service:
   - Recognize "Tool: [item]", "Service: [task]", or commands like "add service abc".
-  - Strip command words like "add" or "delete" from the value.
+  - Strip command words like "add", "delete", "insert" from the value.
 - For time:
   - Prioritize the last mentioned time-related phrase (e.g., "morning, full day" -> "time": "full day").
 - Comments should only include non-field-specific notes.
@@ -125,7 +127,10 @@ Examples:
 - Input: "segment 5" -> {"segment": "5"}
 - Input: "Segment: groundfloor" -> {"segment": "groundfloor"}
 - Input: "category Bestand" -> {"category": "Bestand"}
-- Input: "Morning! At Mountain View Apartments, section 9C, category Bestand, firms BuildFast AG..." -> {"site_name": "Mountain View Apartments", "segment": "9C", "category": "Bestand", "company": [{"name": "BuildFast AG"}], ...}
+- Input: "Morning! At Mountain View Apartments, section 9C, category Bestand, firms BuildFast AG, time full day..." -> {"site_name": "Mountain View Apartments", "segment": "9C", "category": "Bestand", "company": [{"name": "BuildFast AG"}], "time": "full day", ...}
+- Input: "People Michael Rich as window installer" -> {"people": ["Michael Rich"], "roles": [{"name": "Michael Rich", "role": "Window Installer"}]}
+- Input: "delete companies" -> {"company": {"delete": true}}
+- Input: "insert company WindowCleaner" -> {"company": [{"name": "WindowCleaner"}]}
 """
 
 # --- Session data persistence ---
@@ -183,24 +188,24 @@ def blank_report():
 
 # --- Centralized regex patterns ---
 FIELD_PATTERNS = {
-    "site_name": r'^(?:add\s+)?(?:site\s*[:,\s]*\s*|location\s*[:,\s]*\s*|project\s*[:,\s]*\s*)(.+?)\s*$|^(?:site)\s+(.+)$',
-    "segment": r'^(?:add\s+)?segment\s*[:,\s]*\s*(.+?)\s*$',
-    "category": r'^(?:add\s+)?category\s*[:,\s]*\s*(.+?)\s*$',
-    "impression": r'^(?:add\s+)?impression\s*[:,\s]*\s*(.+?)\s*$',
-    "people": r'^(?:add\s+)?(?:people\s+|person\s+|people\s*[:,\s]*\s*|person\s*[:,\s]*\s*)(.+?)(?:\s+as\s+|\s+)(architect|engineer|supervisor|manager|worker)\s*$|^(?:add\s+)?(?:people\s+|person\s+|people\s*[:,\s]*\s*|person\s*[:,\s]*\s*)(.+?)\s*$',
-    "role": r'^(?:add\s+)?(?:people\s+|person\s+)?(.+?)\s*[:,\s]*\s*as\s+([^,\s]+)\s*$|^(?:add\s+)?(?:person|people)\s*[:,\s]*\s*(.+?)\s*,\s*role\s*[:,\s]*\s*([^,\s]+)\s*$',
-    "supervisor": r'^(?:add\s+)?(?:supervisors\s*(?:were|are)\s+|i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|roles?\s*[:,\s]*\s*supervisor\s*$)(.+?)?\s*$',
-    "company": r'^(?:add\s+)?(?:company\s*[:,\s]*\s*|companies\s*[:,\s]*\s*)(.+?)\s*$',
-    "service": r'^(?:add\s+)?(?:service\s*[:,\s]*\s*|services\s*[:,\s]*\s*|services\s*(?:were|provided)\s+)(.+?)\s*$',
-    "tool": r'^(?:add\s+)?(?:tool\s*[:,\s]*\s*|tools\s*[:,\s]*\s*|tools\s*used\s*(?:included|were)\s+)(.+?)\s*$',
-    "activity": r'^(?:add\s+)?(?:activity\s*[:,\s]*\s*|activities\s*[:,\s]*\s*|activities\s*(?:covered|included)\s+)(.+?)\s*$',
-    "issue": r'^(?:add\s+)?(?:issue\s*[:,\s]*\s*|issues\s*[:,\s]*\s*|issues\s*(?:encountered|included)\s+)(.+?)\s*$',
-    "weather": r'^(?:add\s+)?(?:weather\s*[:,\s]*\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)(.+?)\s*$',
-    "time": r'^(?:add\s+)?(?:time\s*[:,\s]*\s*|time\s+spent\s+|morning\s*|afternoon\s*|evening\s*|full\s+day\s*)(.+?)\s*$',
-    "comments": r'^(?:add\s+)?(?:comment\s*[:,\s]*\s*|comments\s*[:,\s]*\s*)(.+?)\s*$',
+    "site_name": r'^(?:add\s+|insert\s+)?(?:site|location|project)\s*[:,\s]*\s*(.+?)\s*$',
+    "segment": r'^(?:add\s+|insert\s+)?segment\s*[:,\s]*\s*(.+?)\s*$',
+    "category": r'^(?:add\s+|insert\s+)?category\s*[:,\s]*\s*(.+?)\s*$',
+    "impression": r'^(?:add\s+|insert\s+)?impression\s*[:,\s]*\s*(.+?)\s*$',
+    "people": r'^(?:add\s+|insert\s+)?(?:people|person)\s*[:,\s]*\s*(.+?)(?:\s+as\s+|\s+)(architect|engineer|supervisor|manager|worker|window\s+installer)\s*$|^(?:add\s+|insert\s+)?(?:people|person)\s*[:,\s]*\s*(.+?)\s*$',
+    "role": r'^(?:add\s+|insert\s+)?(?:people\s+|person\s+)?(.+?)\s*[:,\s]*\s*as\s+(.+?)\s*$|^(?:add\s+|insert\s+)?(?:person|people)\s*[:,\s]*\s*(.+?)\s*,\s*role\s*[:,\s]*\s*(.+?)\s*$',
+    "supervisor": r'^(?:add\s+|insert\s+)?(?:supervisors\s*(?:were|are)\s+|i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|roles?\s*[:,\s]*\s*supervisor\s*$)(.+?)?\s*$',
+    "company": r'^(?:add\s+|insert\s+)?(?:company|companies)\s*[:,\s]*\s*(.+?)\s*$',
+    "service": r'^(?:add\s+|insert\s+)?(?:service|services|services\s*(?:were|provided))\s*[:,\s]*\s*(.+?)\s*$',
+    "tool": r'^(?:add\s+|insert\s+)?(?:tool|tools|tools\s*used\s*(?:included|were))\s*[:,\s]*\s*(.+?)\s*$',
+    "activity": r'^(?:add\s+|insert\s+)?(?:activity|activities|activities\s*(?:covered|included))\s*[:,\s]*\s*(.+?)\s*$',
+    "issue": r'^(?:add\s+|insert\s+)?(?:issue|issues|issues\s*(?:encountered|included))\s*[:,\s]*\s*(.+?)\s*$',
+    "weather": r'^(?:add\s+|insert\s+)?(?:weather|weather\s+was|good\s+weather|bad\s+weather|sunny|cloudy|rainy)\s*[:,\s]*\s*(.+?)\s*$',
+    "time": r'^(?:add\s+|insert\s+)?(?:time|time\s+spent|morning|afternoon|evening|full\s+day)\s*[:,\s]*\s*(.+?)\s*$',
+    "comments": r'^(?:add\s+|insert\s+)?(?:comment|comments)\s*[:,\s]*\s*(.+?)\s*$',
     "clear": r'^(issues|activities|comments|tools|service|company|people|roles)\s*[:,\s]*\s*none\s*$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": r'^(?:delete|remove)\s+(site|segment|category|company|companies|person|people|role|roles|tool|tools|service|services|activity|activities|issue|issues|time|weather|impression|comments|architect|engineer|supervisor|manager|worker)(?:\s+(.+))?\s*$',
+    "delete": r'^(?:delete|remove)\s+(site|segment|category|company|companies|person|people|role|roles|tool|tools|service|services|activity|activities|issue|issues|time|weather|impression|comments|architect|engineer|supervisor|manager|worker|window\s+installer)(?:\s+(.+?))?\s*$',
     "correct": r'^(?:correct\s+|update\s+)(site|segment|category|company|person|people|role|roles|tool|service|activity|issue|time|weather|impression|comments)\s+(.+?)\s+to\s+(.+?)\s*$'
 }
 
@@ -264,7 +269,7 @@ def transcribe_from_telegram_voice(file_id):
         command_words = ["add", "delete", "remove", "correct", "update", "as", "issue", "issues", "tool", "tools", 
                         "activity", "activities", "people", "person", "company", "companies", "service", "services", 
                         "weather", "time", "comments", "category", "site", "segment", "role", "roles", "insert", "s:"]
-        text = re.sub(r'^\s*(s+:?|%s)\s+' % '|'.join(command_words), '', text, flags=re.IGNORECASE).strip()
+        text = re.sub(r'\b(?:%s)\b\s*' % '|'.join(command_words), '', text, flags=re.IGNORECASE).strip()
         logger.info({"event": "transcription_success", "text": text})
         return text
     except Exception as e:
@@ -410,6 +415,7 @@ def summarize_data(d):
         for word in command_words:
             if word.lower() in summary.lower():
                 logger.warning({"event": "command_word_in_summary", "word": word, "summary": summary})
+                summary = re.sub(r'\b%s\b' % word, '', summary, flags=re.IGNORECASE)
         logger.info({"event": "summary_generated", "summary": summary})
         return summary
     except Exception as e:
@@ -430,7 +436,7 @@ def extract_site_report(text):
             return {"reset": True}
 
         # Handle multi-field inputs by splitting on clear separators
-        commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)[^,]*$)|(?<!\w)\.\s*(?=[A-Z])', normalized_text) if cmd.strip()]
+        commands = [cmd.strip() for cmd in re.split(r'(?<!\w)\.\s*(?=[A-Z])|;\s*|\n\s*', normalized_text) if cmd.strip()]
         if len(commands) > 1:
             seen_fields = set()
             for cmd in commands:
@@ -446,7 +452,7 @@ def extract_site_report(text):
                     else:
                         result[key] = value
             logger.info({"event": "multi_field_extracted", "result": result})
-            # Fallback to GPT for complex multi-field inputs
+            # Fallback to GPT for complex multi-field inputs if regex fails
             if not result:
                 return extract_gpt_fallback(normalized_text)
             return result
@@ -484,9 +490,11 @@ def extract_single_command(text):
                 field = "issues"
             elif field == "site":
                 field = "site_name"
-            elif field in ["architect", "engineer", "supervisor", "manager", "worker"]:
+            elif field in ["architect", "engineer", "supervisor", "manager", "worker", "window installer"]:
                 result["roles"] = {"delete_role": field}
                 result["people"] = {"update_from_roles": True}
+                logger.info({"event": "delete_command", "field": "roles", "value": field})
+                return result
             else:
                 result[field] = {"delete": value if value else True}
             logger.info({"event": "delete_command", "field": field, "value": value})
@@ -548,7 +556,7 @@ def extract_single_command(text):
                     logger.info({"event": "extracted_field", "field": "people", "value": result["people"]})
                 elif field == "role":
                     name = (match.group(1) or match.group(3)).strip()
-                    role = (match.group(2) or match.group(4)).title()
+                    role = (match.group(2) or match.group(4)).strip().title()
                     names = [n.strip() for n in name.split(",") if n.strip()]
                     result["people"] = names
                     result["roles"] = [{"name": n, "role": role} for n in names]
@@ -563,7 +571,7 @@ def extract_single_command(text):
                         result["roles"] = [{"name": "User", "role": "Supervisor"}]
                     logger.info({"event": "extracted_field", "field": "roles", "value": match.group(1) or "User"})
                 elif field == "company":
-                    name = match.group(1).strip()
+                    name = re.sub(r'^\s*(add|insert)\s+', '', match.group(1), flags=re.IGNORECASE).strip()
                     companies = [c.strip() for c in re.split(r',|and', name) if c.strip()]
                     result["company"] = [{"name": c} for c in companies]
                     logger.info({"event": "extracted_field", "field": "company", "value": companies})
@@ -572,7 +580,7 @@ def extract_single_command(text):
                     result[field_name] = []
                     logger.info({"event": "extracted_field", "field": field_name, "value": "none"})
                 elif field == "service":
-                    value = match.group(1).strip()
+                    value = re.sub(r'^\s*(add|insert)\s+', '', match.group(1), flags=re.IGNORECASE).strip()
                     if value.lower() == "none":
                         result["service"] = []
                     else:
@@ -580,7 +588,7 @@ def extract_single_command(text):
                         result["service"] = [{"task": s} for s in services]
                     logger.info({"event": "extracted_field", "field": "service", "value": value})
                 elif field == "tool":
-                    value = match.group(1).strip()
+                    value = re.sub(r'^\s*(add|insert)\s+', '', match.group(1), flags=re.IGNORECASE).strip()
                     if value.lower() == "none":
                         result["tools"] = []
                     else:
@@ -593,7 +601,7 @@ def extract_single_command(text):
                         result["tools"] = [{"item": t} for t in tools]
                     logger.info({"event": "extracted_field", "field": "tools", "value": value})
                 elif field == "issue":
-                    value = match.group(1).strip()
+                    value = re.sub(r'^\s*(add|insert)\s+', '', match.group(1), flags=re.IGNORECASE).strip()
                     if value.lower() == "none":
                         result["issues"] = []
                     else:
@@ -601,7 +609,7 @@ def extract_single_command(text):
                         result["issues"] = [{"description": i} for i in issues]
                     logger.info({"event": "extracted_field", "field": "issues", "value": value})
                 elif field == "activity":
-                    value = match.group(1).strip()
+                    value = re.sub(r'^\s*(add|insert)\s+', '', match.group(1), flags=re.IGNORECASE).strip()
                     if value.lower() == "none":
                         result["activities"] = []
                     else:
@@ -621,7 +629,7 @@ def extract_single_command(text):
                     result["comments"] = value
                     logger.info({"event": "extracted_field", "field": "comments", "value": value})
                 elif field == "site_name":
-                    value = match.group(1).strip() if match.group(1) else match.group(2).strip()
+                    value = match.group(1).strip()
                     result["site_name"] = value
                     logger.info({"event": "extracted_field", "field": "site_name", "value": value})
                 elif field in ["segment", "category"]:
@@ -631,7 +639,7 @@ def extract_single_command(text):
                 return result
 
         # Fallback to GPT for complex inputs
-        return extract_gpt_fallback(normalized_text)
+        return extract_gpt_fallback(cleaned_text)
     except Exception as e:
         logger.error({"event": "extract_single_command_error", "input": text, "error": str(e)})
         raise
@@ -712,24 +720,26 @@ def merge_structured_data(existing, new):
                     else:
                         target = value["delete"].lower()
                         if key == "people":
-                            merged[key] = [item for item in merged[key] if target not in item.lower()]
-                            merged["roles"] = [r for r in merged["roles"] if target not in r.get("name", "").lower()]
+                            merged[key] = [item for item in merged[key] if item.lower() != target]
+                            merged["roles"] = [r for r in merged["roles"] if r.get("name", "").lower() != target]
                         elif key == "roles":
-                            merged[key] = [item for item in merged[key] if target not in item.get("name", "").lower()]
+                            merged[key] = [item for item in merged[key] if item.get("name", "").lower() != target]
                             merged["people"] = [p for p in merged["people"] if any(r["name"].lower() == p.lower() for r in merged["roles"])]
                         elif key in ["company", "tools", "service", "issues"]:
                             field_key = "name" if key == "company" else "item" if key == "tools" else "task" if key == "service" else "description"
-                            merged[key] = [item for item in merged[key] if target not in item.get(field_key, "").lower()]
+                            merged[key] = [item for item in merged[key] if item.get(field_key, "").lower() != target]
                         elif key == "activities":
-                            merged[key] = [item for item in merged[key] if target not in item.lower()]
+                            merged[key] = [item for item in merged[key] if item.lower() != target]
                         elif key in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
-                            if target in merged[key].lower():
+                            if target == merged[key].lower():
                                 merged[key] = ""
+                    logger.info({"event": "delete_processed", "field": key, "target": target})
                 elif "delete_role" in value:
                     deleted = True
                     target = value["delete_role"].lower()
                     merged["roles"] = [r for r in merged["roles"] if r.get("role", "").lower() != target]
                     merged["people"] = [p for p in merged["people"] if any(r["name"].lower() == p.lower() for r in merged["roles"])]
+                    logger.info({"event": "delete_role_processed", "role": target})
                     continue
                 elif "update_from_roles" in value:
                     # Handled after roles are updated
@@ -785,7 +795,7 @@ def webhook():
                 "awaiting_reset_confirmation": False,
                 "command_history": deque(maxlen=MAX_HISTORY)
             }
-        sess = session_data[chat_id]
+        sess = session_data[chat-тид]
 
         if "voice" in msg:
             text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
@@ -903,9 +913,9 @@ def webhook():
 
         if not extracted:
             # Fuzzy matching for misspelled commands
-            known_commands = ["site", "add site", "add people", "add tools", "delete company", "correct company", "delete architect", "segment", "category"]
+            known_commands = ["site", "add site", "add people", "add tools", "delete company", "correct company", "delete architect", "segment", "category", "insert company"]
             best_match = max(known_commands, key=lambda x: SequenceMatcher(None, text.lower(), x).ratio(), default="")
-            similarity = SequenceMatcher(None, text.lower(), best_match).ratio()
+            similarity = SequenceMatcher(None, text.lower(), best_matchMéthode).ratio()
             suggestion = f" Did you mean '{best_match}'?" if similarity > 0.6 else ""
             send_telegram_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Try formats like 'site Downtown Project', 'segment 5', 'category Bestand', 'delete company Acme Corp', or 'correct company Acme to Acme Corp'.{suggestion}")
             return "ok", 200
