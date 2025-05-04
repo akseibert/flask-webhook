@@ -200,7 +200,7 @@ FIELD_PATTERNS = {
     "company": r'^(?:add\s+|insert\s+)?(?:company|companies)\s*[:,\s]*\s*(.+?)\s*$',
     "service": r'^(?:add\s+|insert\s+)?(?:service|services|services\s*(?:were|provided))\s*[:,\s]*\s*(.+?)\s*$',
     "tool": r'^(?:add\s+|insert\s+)?(?:tool|tools|tools\s*used\s*(?:included|were))\s*[:,\s]*\s*(.+?)\s*$',
-    "activity": r'^(?:add\s+|insert\s+)?(?:activity|activities|activities\s*(?:covered|included))\s*[:,\s]*\s*(.+?)\s*$',
+    "activity": r'^(?:add\s+|insert\s+)?(?:activity|activities|activities\s*(?:covered|included))\s*[:,\\s]*\s*(.+?)\s*$',
     "issue": r'^(?:add\s+|insert\s+)?(?:issue|issues|issues\s*(?:encountered|included))\s*[:,\s]*\s*(.+?)\s*$',
     "weather": r'^(?:add\s+|insert\s+)?(?:weather|weather\s+was|good\s+weather|bad\s+weather|sunny|cloudy|rainy)\s*[:,\s]*\s*(.+?)\s*$',
     "time": r'^(?:add\s+|insert\s+)?(?:time|time\s+spent|morning|afternoon|evening|full\s+day)\s*[:,\s]*\s*(.+?)\s*$',
