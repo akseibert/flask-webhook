@@ -207,7 +207,7 @@ FIELD_PATTERNS = {
     "company": r'^(?:add\s+|insert\s+)?(?:company|companies)\s*[:,\s]*\s*(.+?)\s*$',
     "service": r'^(?:add\s+|insert\s+)?(?:service|services|services\s*(?:were|provided))\s*[:,\s]*\s*(.+?)\s*$',
     "tool": r'^(?:add\s+|insert\s+)?(?:tool|tools|tools\s*used\s*(?:included|were))\s*[:,\s]*\s*(.+?)\s*$',
-    "activity": r'^(?:add\s+|insert\s+)?(?:activity|activities|activities\s*(?:covered|included))\s*[:,\s]*\s*(.+?)\s*$',
+    "activity": r'^(?:add\s+|insert\s+)?(?:activity|activities|activities\s*(?:covered|included))\s*[:,\\s]*\s*(.+?)\s*$',
     "issue": r'^(?:add\s+|insert\s+)?(?:issue|issues|issues\s*(?:encountered|included))\s*[:,\s]*\s*(.+?)\s*$',
     "weather": r'^(?:add\s+|insert\s+)?(?:weather|weather\s+was|good\s+weather|bad\s+weather|sunny|cloudy|rainy)\s*[:,\s]*\s*(.+?)\s*$',
     "time": r'^(?:add\s+|insert\s+)?(?:time|time\s+spent|morning|afternoon|evening|full\s+day)\s*[:,\s]*\s*(.+?)\s*$',
@@ -362,83 +362,105 @@ def enrich_with_date(d):
         logger.error({"event": "enrich_with_date_error", "error": str(e)})
         raise
 
-def summarize_data(d):
-    try:
-        logger.info({"event": "summarize_data", "data": json.dumps(d, indent=2)})
-        lines = []
-        lines.append(f"🏗️ **Site**: {d.get('site_name', '') or ''}")
-        lines.append(f"🛠️ **Segment**: {d.get('segment', '') or ''}")
-        lines.append(f"📋 **Category**: {d.get('category', '') or ''}")
-        lines.append(
-            "🏢 **Companies**: " +
-            ", ".join(c.get("name", "") for c in d.get("company", [])) or ""
-        )
-        lines.append(
-            "👷 **People**: " +
-            ", ".join(p for p in d.get("people", []) if p) or ""
-        )
-        lines.append(
-            "🎭 **Roles**: " +
-            ", ".join(
-                f"{r.get('name', '')} ({r.get('role', '')})" for r in d.get("roles", [])
-            ) or ""
-        )
-        lines.append(
-            "🔧 **Services**: " +
-            ", ".join(s.get("task", "") for s in d.get("service", [])) or ""
-        )
-        lines.append(
-            "🛠️ **Tools**: " +
-            ", ".join(t.get("item", "") for t in d.get("tools", [])) or ""
-        )
-        lines.append("📅 **Activities**: " + ", ".join(d.get("activities", [])) or "")
-        lines.append("⚠️ **Issues**:")
-        valid_issues = [
-            i for i in d.get("issues", [])
-            if isinstance(i, dict) and i.get("description", "").strip()
-        ]
-        if valid_issues:
-            for i in valid_issues:
-                desc = i["description"]
-                by = i.get("caused_by", "")
-                photo = " 📸" if i.get("has_photo") else ""
-                extra = f" (by {by})" if by else ""
-                lines.append(f"  • {desc}{extra}{photo}")
-        else:
-            lines.append("")
-        lines.append(f"⏰ **Time**: {d.get('time', '') or ''}")
-        lines.append(f"🌦️ **Weather**: {d.get('weather', '') or ''}")
-        lines.append(f"😊 **Impression**: {d.get('impression', '') or ''}")
-        lines.append(f"💬 **Comments**: {d.get('comments', '') or ''}")
-        lines.append(f"📆 **Date**: {d.get('date', '') or ''}")
-        summary = "\n".join(line for line in lines if line.strip())
-        command_words = ["add", "delete", "remove", "correct", "update", "insert", "s:"]
-        for word in command_words:
-            if word.lower() in summary.lower():
-                logger.warning({"event": "command_word_in_summary", "word": word, "summary": summary})
-                summary = re.sub(r'\b%s\b' % word, '', summary, flags=re.IGNORECASE)
-        logger.info({"event": "summary_generated", "summary": summary})
-        return summary
-    except Exception as e:
-        logger.error({"event": "summarize_data_error", "error": str(e)})
-        raise
+def summarize_data(data):
+    lines = [f"📍 Site: {data.get('site_name', '')}",
+             f"📦 Segment: {data.get('segment', '')}",
+             f"📑 Category: {data.get('category', '')}",
+             f"🏢 Company: {', '.join(c['name'] for c in data.get('company', []))}",
+             f"👷 People: {', '.join(data.get('people', []))}",
+             f"🎭 Roles: {', '.join(f'{r['name']} ({r['role']})' for r in data.get('roles', []))}",
+             f"🛠 Tools: {', '.join(t['item'] for t in data.get('tools', []))}",
+             f"🔨 Service: {', '.join(s['task'] for s in data.get('service', []))}",
+             f"🏃 Activities: {', '.join(data.get('activities', []))}",
+             f"⚠ Issues: {', '.join(i['description'] for i in data.get('issues', []))}",
+             f"⏰ Time: {data.get('time', '')}",
+             f"☀ Weather: {data.get('weather', '')}",
+             f"💬 Comments: {data.get('comments', '')}",
+             f"📅 Date: {data.get('date', '')}"]
+    return "\n".join(lines)
+
+def merge_structured_data(existing, new):
+    merged = existing.copy()
+    deleted = False
+    corrected = False
+    target = None
+    old_value = None
+    new_value = None
+
+    for key, value in new.items():
+        if isinstance(value, list) and value and isinstance(value[0], dict) and "correct" in value[0]:
+            corrected = True
+            old_value = value[0]["correct"]["old"]
+            new_value = value[0]["correct"]["new"]
+            if key == "people":
+                merged[key] = [new_value if is_similar(p, old_value) else p for p in merged[key]]
+                for r in merged["roles"]:
+                    if is_similar(r["name"], old_value):
+                        r["name"] = new_value
+            elif key == "roles":
+                for r in merged["roles"]:
+                    if is_similar(r["name"], old_value):
+                        r["name"] = new_value
+            elif key == "company":
+                for c in merged[key]:
+                    if is_similar(c["name"], old_value):
+                        c["name"] = new_value
+            elif key == "tools":
+                for t in merged[key]:
+                    if is_similar(t["item"], old_value):
+                        t["item"] = new_value
+            elif key == "service":
+                for s in merged[key]:
+                    if is_similar(s["task"], old_value):
+                        s["task"] = new_value
+            elif key == "activities":
+                merged[key] = [new_value if is_similar(a, old_value) else a for a in merged[key]]
+            elif key == "issues":
+                for i in merged[key]:
+                    if is_similar(i["description"], old_value):
+                        i["description"] = new_value
+            continue
+
+        if isinstance(value, dict) and "delete" in value:
+            deleted = True
+            target = value["delete"].lower() if value["delete"] else None
+            if key in ["people", "roles", "company", "tools", "service", "activities", "issues"]:
+                field_key = {"people": None, "roles": "name", "company": "name",
+                             "tools": "item", "service": "task", "issues": "description"}.get(key)
+                if target:
+                    if field_key:
+                        merged[key] = [item for item in merged[key] if not is_similar(item[field_key], target)]
+                    else:
+                        merged[key] = [item for item in merged[key] if not is_similar(item, target)]
+                else:
+                    merged[key] = []
+            elif key in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
+                if target is None or is_similar(merged[key], target):
+                    merged[key] = ""
+            continue
+
+        if key in merged:
+            merged[key] = value
+
+    return merged, deleted, corrected, target, old_value, new_value
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def extract_site_report(text):
     try:
         logger.info({"event": "extract_site_report", "input_text": text})
+        result = {}
+
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
-        if re.search(r'\.\s+', normalized_text):  # Check for multiple sentences
-            logger.info({"event": "multi_sentence_detected", "text": normalized_text})
-            return extract_gpt_fallback(normalized_text)
+
         reset_match = re.match(FIELD_PATTERNS["reset"], normalized_text, re.IGNORECASE)
         if reset_match:
             logger.info({"event": "reset_command_detected", "input": normalized_text})
             return {"reset": True}
+
+        # Handle multi-field inputs by splitting on clear separators
         commands = [cmd.strip() for cmd in re.split(r'(?<!\w)\.\s*(?=[A-Z])|;\s*|\n\s*', normalized_text) if cmd.strip()]
         if len(commands) > 1:
             seen_fields = set()
-            result = {}
             for cmd in commands:
                 cmd_result = extract_single_command(cmd)
                 if cmd_result.get("reset"):
@@ -452,9 +474,11 @@ def extract_site_report(text):
                     else:
                         result[key] = value
             logger.info({"event": "multi_field_extracted", "result": result})
+            # Fallback to GPT for complex multi-field inputs if regex fails
             if not result:
                 return extract_gpt_fallback(normalized_text)
             return result
+
         return extract_single_command(normalized_text)
     except Exception as e:
         logger.error({"event": "extract_site_report_error", "input": text, "error": str(e)})
@@ -466,6 +490,8 @@ def extract_single_command(text):
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
         cleaned_text = re.sub(r'^\s*(s+:?|add|delete|remove|correct|update|insert)\s+', '', normalized_text, flags=re.IGNORECASE).strip()
         logger.debug({"event": "extract_single_command", "normalized_text": normalized_text, "cleaned_text": cleaned_text})
+
+        # Handle deletion commands
         delete_match = re.match(FIELD_PATTERNS["delete"], normalized_text, re.IGNORECASE)
         if delete_match:
             field = delete_match.group(1).lower()
@@ -495,6 +521,8 @@ def extract_single_command(text):
                 result[field] = {"delete": value if value else True}
             logger.info({"event": "delete_command", "field": field, "value": value})
             return result
+
+        # Handle correction commands
         correct_match = re.match(FIELD_PATTERNS["correct"], normalized_text, re.IGNORECASE)
         if correct_match:
             field = correct_match.group(1).lower()
@@ -528,6 +556,8 @@ def extract_single_command(text):
                 result[field] = new_value
             logger.info({"event": "correct_command", "field": field, "old_value": old_value, "new_value": new_value})
             return result
+
+        # Handle field extraction
         for field, pattern in FIELD_PATTERNS.items():
             if field in ["reset", "delete", "correct"]:
                 continue
@@ -552,6 +582,7 @@ def extract_single_command(text):
                 elif field == "role":
                     role_text = match.group(1) or match.group(3)
                     if role_text:
+                        # Split multiple person-role pairs
                         pairs = [pair.strip() for pair in role_text.split(",") if pair.strip()]
                         names = []
                         roles = []
@@ -565,8 +596,8 @@ def extract_single_command(text):
                         result["people"] = names
                         result["roles"] = roles
                     else:
-                        name = match.group(2).strip()
-                        role = match.group(3).strip().title()
+                        name = match.group(3).strip()
+                        role = match.group(4).strip().title()
                         names = [n.strip() for n in name.split(",") if n.strip()]
                         result["people"] = names
                         result["roles"] = [{"name": n, "role": role} for n in names]
@@ -631,26 +662,26 @@ def extract_single_command(text):
                     result[field] = value
                     logger.info({"event": "extracted_field", "field": field, "value": value})
                 return result
+
+        # Fallback to GPT for complex inputs
         return extract_gpt_fallback(cleaned_text)
     except Exception as e:
         logger.error({"event": "extract_single_command_error", "input": text, "error": str(e)})
         raise
 
 def extract_gpt_fallback(text):
-    prompt = gpt_prompt + "\nInput text: " + text
     messages = [
         {"role": "system", "content": "Extract explicitly stated fields from construction site report input. Handle multi-field inputs by processing the entire input as a single unit. Return JSON with extracted fields."},
-        {"role": "user", "content": prompt}
+        {"role": "user", "content": gpt_prompt + "\nInput text: " + text}
     ]
     try:
-        response = openai.chat.completions.create(model="gpt-3.5-turbo", messages=messages, temperature=0.2)
-        logger.debug({"event": "gpt_response", "response": response.to_dict()})
-        if not response.choices or not hasattr(response.choices[0], "message") or not hasattr(response.choices[0].message, "content"):
-            logger.error({"event": "gpt_completion_error", "response": response.to_dict()})
-            return {"comments": text} if text.strip() else {}
+        response = openai.chat.completions.create(
+            model="gpt-3.5-turbo", messages=messages, temperature=0.2
+        )
         raw_response = response.choices[0].message.content
-        logger.info({"event": "gpt_raw_response", "raw_response": raw_response})
+        logger.info({"event": "gpt_response", "raw_response": raw_response})
         data = json.loads(raw_response)
+        # Ensure people are populated from roles
         if "roles" in data and data["roles"]:
             existing_people = data.get("people", [])
             for role in data["roles"]:
@@ -661,108 +692,8 @@ def extract_gpt_fallback(text):
         logger.info({"event": "gpt_extracted", "data": data})
         return data
     except Exception as e:
-        logger.error({"event": "gpt_completion_error", "input": text, "error": str(e)})
+        logger.error({"event": "gpt_extract_error", "input": text, "error": str(e)})
         return {"comments": text} if text.strip() else {}
-
-def merge_structured_data(existing, new):
-    try:
-        merged = existing.copy()
-        deleted = False
-        corrected = False
-        target = None
-        old_value = None
-        new_value = None
-
-        for key, value in new.items():
-            if key in ["reset", "undo", "status", "export_pdf"]:
-                continue
-            if isinstance(value, list) and value and isinstance(value[0], dict) and "correct" in value[0]:
-                corrected = True
-                old_value = value[0]["correct"]["old"]
-                new_value = value[0]["correct"]["new"]
-                if key == "roles":
-                    for role in merged["roles"]:
-                        if is_similar(role["name"], old_value):
-                            role["name"] = new_value
-                    if new_value not in merged["people"]:
-                        merged["people"].append(new_value)
-                elif key == "people":
-                    merged["people"] = [new_value if is_similar(p, old_value) else p for p in merged["people"]]
-                    for role in merged["roles"]:
-                        if is_similar(role["name"], old_value):
-                            role["name"] = new_value
-                elif key in ["company", "tools", "service", "issues"]:
-                    field_key = "name" if key == "company" else "item" if key == "tools" else "task" if key == "service" else "description"
-                    for item in merged[key]:
-                        if is_similar(item[field_key], old_value):
-                            item[field_key] = new_value
-                elif key == "activities":
-                    merged["activities"] = [new_value if is_similar(a, old_value) else a for a in merged["activities"]]
-                continue
-            if isinstance(value, dict):
-                if "delete" in value:
-                    deleted = True
-                    if value["delete"] is True:
-                        if key in merged:
-                            if isinstance(merged[key], list):
-                                merged[key] = []
-                                if key == "people":
-                                    merged["roles"] = []
-                            else:
-                                merged[key] = ""
-                    else:
-                        target = value["delete"].lower()
-                        if key == "people":
-                            merged[key] = [item for item in merged[key] if not is_similar(item, target)]
-                            merged["roles"] = [r for r in merged["roles"] if not is_similar(r.get("name", ""), target)]
-                        elif key == "roles":
-                            merged[key] = [item for item in merged[key] if not is_similar(item.get("name", ""), target)]
-                            merged["people"] = [p for p in merged["people"] if any(is_similar(r["name"], p) for r in merged["roles"])]
-                        elif key in ["company", "tools", "service", "issues"]:
-                            field_key = "name" if key == "company" else "item" if key == "tools" else "task" if key == "service" else "description"
-                            merged[key] = [item for item in merged[key] if not is_similar(item.get(field_key, ""), target)]
-                        elif key == "activities":
-                            merged[key] = [item for item in merged[key] if not is_similar(item, target)]
-                        elif key in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
-                            if is_similar(merged[key], target):
-                                merged[key] = ""
-                    logger.info({"event": "delete_processed", "field": key, "target": target})
-                elif "delete_role" in value:
-                    deleted = True
-                    target = value["delete_role"].lower()
-                    merged["roles"] = [r for r in merged["roles"] if r.get("role", "").lower() != target]
-                    merged["people"] = [p for p in merged["people"] if any(r["name"].lower() == p.lower() for r in merged["roles"])]
-                    logger.info({"event": "delete_role_processed", "role": target})
-                    continue
-                elif "update_from_roles" in value:
-                    continue
-            elif key in ["company", "roles", "tools", "service", "activities", "issues", "people"]:
-                if isinstance(value, list):
-                    if key == "people":
-                        new_people = [p for p in value if p not in merged[key]]
-                        merged[key].extend(new_people)
-                    elif key == "roles":
-                        for role in value:
-                            if not any(r.get("name") == role.get("name") for r in merged[key]):
-                                merged[key].append(role)
-                            else:
-                                for i, r in enumerate(merged[key]):
-                                    if r.get("name") == role.get("name"):
-                                        merged[key][i] = role
-                                        break
-                            if role.get("name") not in merged["people"]:
-                                merged["people"].append(role["name"])
-                    else:
-                        merged[key].extend([v for v in value if v not in merged[key]])
-            else:
-                if value:
-                    merged[key] = value
-
-        logger.info({"event": "merged_data", "data": json.dumps(merged, indent=2)})
-        return merged, deleted, corrected, target, old_value, new_value
-    except Exception as e:
-        logger.error({"event": "merge_structured_data_error", "error": str(e)})
-        raise
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -914,7 +845,7 @@ def webhook():
 
         sess["command_history"].append(sess["structured_data"].copy())
         merged_data, deleted, corrected, target, old_value, new_value = merge_structured_data(
-            sess["structured_data"], enrich_with_date(extracted)
+            sess["structured_data"], extracted
         )
         sess["structured_data"] = merged_data
         save_to_sharepoint(chat_id, sess["structured_data"])
@@ -937,8 +868,7 @@ def webhook():
         return "ok", 200
     except Exception as e:
         logger.error({"event": "webhook_error", "error": str(e)})
-        if 'chat_id' in locals():
-            send_telegram_message(chat_id, "⚠️ An error occurred. Please try again later.")
+        send_telegram_message(chat_id, "⚠️ An error occurred. Please try again later.")
         return "error", 500
 
 @app.get("/")
