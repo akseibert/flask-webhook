@@ -107,7 +107,7 @@ FIELD_PATTERNS = {
 def load_session() -> Dict[str, Any]:
     try:
         if os.path.exists(CONFIG["SESSION_FILE"]):
-            with open(CONFIG["SESSION_FILE"], "r") as f:
+            with open(CONFIG["SESSION_FILE"]) as f:
                 data = json.load(f)
             for chat_id, session in data.items():
                 if "command_history" in session:
@@ -1065,40 +1065,4 @@ def webhook() -> tuple[str, int]:
             sess["structured_data"]["roles"] = [r for r in sess["structured_data"].get("roles", []) if r.get("name") != "Supervisor"]
             log_event("cleaned_supervisor_entries", chat_id=chat_id)
 
-        if "voice" in msg:
-            text = transcribe_voice(msg["voice"]["file_id"])
-            if not text:
-                send_message(chat_id, "⚠️ Couldn't understand the audio. Please speak clearly (e.g., 'add site Downtown Project').")
-                return "ok", 200
-            log_event("transcribed_voice", text=text)
-
-        if sess.get("awaiting_reset_confirmation", False):
-            normalized_text = re.sub(r'[.!?]\s*$', '', text.strip()).lower()
-            log_event("reset_confirmation", text=normalized_text, pending_input=sess["pending_input"])
-            if normalized_text in ("yes", "new", "new report"):
-                sess["structured_data"] = blank_report()
-                sess["awaiting_correction"] = False
-                sess["awaiting_reset_confirmation"] = False
-                sess["pending_input"] = None
-                sess["command_history"].clear()
-                save_session(session_data)
-                tpl = summarize_report(sess["structured_data"])
-                send_message(chat_id, f"**Starting a fresh report**\n\n{tpl}\n\nSpeak or type your first field (e.g., 'add site Downtown Project').")
-                return "ok", 200
-            elif normalized_text in ("no", "existing", "continue"):
-                text = sess["pending_input"]
-                sess["awaiting_reset_confirmation"] = False
-                sess["pending_input"] = None
-                sess["last_interaction"] = time()
-            else:
-                send_message(chat_id, "Please clarify: Reset the report? Reply 'yes' or 'no'.")
-                return "ok", 200
-
-        if sess.get("awaiting_spelling_correction"):
-            field, old_value = sess["awaiting_spelling_correction"]
-            new_value = text.strip()
-            log_event("spelling_correction_response", field=field, old_value=old_value, new_value=new_value)
-            if new_value.lower() == old_value.lower():
-                sess["awaiting_spelling_correction"] = None
-                save_session(session_data)
-                send_message(chat_id, f"⚠️ New value '{new_value}' is the same as the old value '{old_value}'. Please provide a different spelling for '{old_value
+        if "voice" in msg
