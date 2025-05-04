@@ -207,7 +207,7 @@ FIELD_PATTERNS = {
     "comments": r'^(?:add\s+|insert\s+)?(?:comment|comments)\s*[:,\s]*\s*(.+?)\s*$',
     "clear": r'^(issues|activities|comments|tools|service|company|people|roles)\s*[:,\s]*\s*none\s*$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": r'^(?:delete|remove)\s+(site|segment|category|company|companies|person|people|role|roles|tool|tools|service|services|activity|activities|issue|issues|time|weather|impression|comments|architect|engineer|supervisor|manager|worker|window\s+installer)(?:\s+(.+?))?\s*$',
+    "delete": r'^(?:delete|remove)\s+(.+?)\s+from\s+(site|segment|category|company|companies|person|people|role|roles|tool|tools|service|services|activity|activities|issue|issues|time|weather|impression|comments)\s*$|^(?:delete|remove)\s+(site|segment|category|company|companies|person|people|role|roles|tool|tools|service|services|activity|activities|issue|issues|time|weather|impression|comments)\s*$',
     "correct": r'^(?:correct\s+|update\s+)(site|segment|category|company|person|people|role|roles|tool|service|activity|issue|time|weather|impression|comments)\s+(.+?)\s+to\s+(.+?)\s*$'
 }
 
@@ -474,32 +474,52 @@ def extract_single_command(text):
         # Handle deletion commands
         delete_match = re.match(FIELD_PATTERNS["delete"], normalized_text, re.IGNORECASE)
         if delete_match:
-            field = delete_match.group(1).lower()
-            value = delete_match.group(2).strip() if delete_match.group(2) else None
-            if field in ["company", "companies"]:
-                field = "company"
-            elif field in ["person", "people"]:
-                field = "people"
-            elif field in ["role", "roles"]:
-                field = "roles"
-            elif field in ["tool", "tools"]:
-                field = "tools"
-            elif field in ["service", "services"]:
-                field = "service"
-            elif field in ["activity", "activities"]:
-                field = "activities"
-            elif field in ["issue", "issues"]:
-                field = "issues"
-            elif field == "site":
-                field = "site_name"
-            elif field in ["architect", "engineer", "supervisor", "manager", "worker", "window installer"]:
-                result["roles"] = {"delete_role": field}
-                result["people"] = {"update_from_roles": True}
-                logger.info({"event": "delete_command", "field": "roles", "value": field})
-                return result
-            else:
-                result[field] = {"delete": value if value else True}
-            logger.info({"event": "delete_command", "field": field, "value": value})
+            if delete_match.group(1) and delete_match.group(2):  # delete <item> from <category>
+                item = delete_match.group(1).strip()
+                category = delete_match.group(2).lower()
+                # Standardize category names
+                if category in ["company", "companies"]:
+                    category = "company"
+                elif category in ["person", "people"]:
+                    category = "people"
+                elif category in ["role", "roles"]:
+                    category = "roles"
+                elif category in ["tool", "tools"]:
+                    category = "tools"
+                elif category in ["service", "services"]:
+                    category = "service"
+                elif category in ["activity", "activities"]:
+                    category = "activities"
+                elif category in ["issue", "issues"]:
+                    category = "issues"
+                elif category == "site":
+                    category = "site_name"
+                result[category] = {"delete": item}
+                logger.info({"event": "delete_item_command", "category": category, "item": item})
+                return result  # Return immediately after handling specific item deletion
+            elif delete_match.group(3):  # delete <category>
+                category = delete_match.group(3).lower()
+                # Standardize category names
+                if category in ["company", "companies"]:
+                    category = "company"
+                elif category in ["person", "people"]:
+                    category = "people"
+                elif category in ["role", "roles"]:
+                    category = "roles"
+                elif category in ["tool", "tools"]:
+                    category = "tools"
+                elif category in ["service", "services"]:
+                    category = "service"
+                elif category in ["activity", "activities"]:
+                    category = "activities"
+                elif category in ["issue", "issues"]:
+                    category = "issues"
+                elif category == "site":
+                    category = "site_name"
+                result[category] = {"delete": True}
+                logger.info({"event": "delete_category_command", "category": category})
+                return result  # Return immediately after handling category deletion
+            # If delete command is incomplete (e.g., "delete fencing"), return empty to trigger suggestion
             return result
 
         # Handle correction commands
@@ -917,11 +937,11 @@ def webhook():
             return "ok", 200
 
         if not extracted:
-            known_commands = ["site", "add site", "add people", "add tools", "delete company", "correct company", "delete architect", "segment", "category", "insert company"]
+            known_commands = ["site", "add site", "add people", "add tools", "delete company", "correct company", "delete architect", "segment", "category", "insert company", "delete fencing from activities", "delete activities"]
             best_match = max(known_commands, key=lambda x: SequenceMatcher(None, text.lower(), x).ratio(), default="")
             similarity = SequenceMatcher(None, text.lower(), best_match).ratio()
             suggestion = f" Did you mean '{best_match}'?" if similarity > 0.6 else ""
-            send_telegram_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Try formats like 'site Downtown Project', 'segment 5', 'category Bestand', 'delete company Acme Corp', or 'correct company Acme to Acme Corp'.{suggestion}")
+            send_telegram_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Use 'delete <category>' to clear a category (e.g., 'delete activities') or 'delete <item> from <category>' to remove an item (e.g., 'delete fencing from activities').{suggestion}")
             return "ok", 200
 
         sess["command_history"].append(sess["structured_data"].copy())
