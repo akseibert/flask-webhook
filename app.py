@@ -361,24 +361,25 @@ def enrich_with_date(d):
     except Exception as e:
         logger.error({"event": "enrich_with_date_error", "error": str(e)})
         raise
-
 def summarize_data(data):
-    lines = [f"📍 Site: {data.get('site_name', '')}",
-             f"📦 Segment: {data.get('segment', '')}",
-             f"📑 Category: {data.get('category', '')}",
-             f"🏢 Company: {', '.join(c['name'] for c in data.get('company', []))}",
-             f"👷 People: {', '.join(data.get('people', []))}",
-             f"🎭 Roles: {', '.join(f'{r['name']} ({r['role']})' for r in data.get('roles', []))}",
-             f"🛠 Tools: {', '.join(t['item'] for t in data.get('tools', []))}",
-             f"🔨 Service: {', '.join(s['task'] for s in data.get('service', []))}",
-             f"🏃 Activities: {', '.join(data.get('activities', []))}",
-             f"⚠ Issues: {', '.join(i['description'] for i in data.get('issues', []))}",
-             f"⏰ Time: {data.get('time', '')}",
-             f"☀ Weather: {data.get('weather', '')}",
-             f"💬 Comments: {data.get('comments', '')}",
-             f"📅 Date: {data.get('date', '')}"]
+    lines = []
+    lines.append(f"📍 Site: {data.get('site_name', '')}")
+    lines.append(f"📦 Segment: {data.get('segment', '')}")
+    lines.append(f"📑 Category: {data.get('category', '')}")
+    lines.append(f"🏢 Company: {', '.join(c['name'] for c in data.get('company', []))}")
+    lines.append(f"👷 People: {', '.join(data.get('people', []))}")
+    roles = [f"{r['name']} ({r['role']})" for r in data.get('roles', [])]
+    lines.append(f"🎭 Roles: {', '.join(roles)}")
+    lines.append(f"🛠 Tools: {', '.join(t['item'] for t in data.get('tools', []))}")
+    lines.append(f"🔨 Service: {', '.join(s['task'] for s in data.get('service', []))}")
+    lines.append(f"🏃 Activities: {', '.join(data.get('activities', []))}")
+    lines.append(f"⚠ Issues: {', '.join(i['description'] for i in data.get('issues', []))}")
+    lines.append(f"⏰ Time: {data.get('time', '')}")
+    lines.append(f"☀ Weather: {data.get('weather', '')}")
+    lines.append(f"💬 Comments: {data.get('comments', '')}")
+    lines.append(f"📅 Date: {data.get('date', '')}")
     return "\n".join(lines)
-
+    
 def merge_structured_data(existing, new):
     merged = existing.copy()
     deleted = False
