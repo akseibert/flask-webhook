@@ -107,7 +107,7 @@ FIELD_PATTERNS = {
 def load_session() -> Dict[str, Any]:
     try:
         if os.path.exists(CONFIG["SESSION_FILE"]):
-            with open(CONFIG["SESSION_FILE"]) as f:
+            with open(CONFIG["SESSION_FILE"], "r") as f:
                 data = json.load(f)
             for chat_id, session in data.items():
                 if "command_history" in session:
@@ -1062,8 +1062,4 @@ def webhook() -> tuple[str, int]:
 
         if "Supervisor" in sess["structured_data"].get("people", []):
             sess["structured_data"]["people"] = [p for p in sess["structured_data"].get("people", []) if p != "Supervisor"]
-            sess["structured_data"]["roles"] = [r for r in sess["structured_data"].get("roles", []) if r.get("name") != "Supervisor"]
-            log_event("cleaned_supervisor_entries", chat_id=chat_id)
-
-        if "voice" in msg:
-            text = transc
+            sess["structured_data"]["roles"] = [r for r in sess["structured_data"].get
