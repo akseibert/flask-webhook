@@ -1065,4 +1065,5 @@ def webhook() -> tuple[str, int]:
             sess["structured_data"]["roles"] = [r for r in sess["structured_data"].get("roles", []) if r.get("name") != "Supervisor"]
             log_event("cleaned_supervisor_entries", chat_id=chat_id)
 
-        if "voice" in msg
+        if "voice" in msg:
+            text = transc
