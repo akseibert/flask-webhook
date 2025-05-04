@@ -111,7 +111,7 @@ Rules:
   - Handle typos like "lake propert" by suggesting "Lake Property" or similar.
 - For people and roles:
   - Recognize "add [name] as [role]" or "[name] [role]" (e.g., "Anna Kasel architect" -> "people": ["Anna Kasel"], "roles": [{"name": "Anna Kasel", "role": "Architect"}]).
-  - Support multi-word roles (e.g., "Michael Rich as window installer" -> "roles": [{"name": "Michael Rich", "role": "Window Installer"}]).
+  - Support multi-word roles (e.g., "Michael Rich as window cleaner" -> "roles": [{"name": "Michael Rich", "role": "Window Cleaner"}]).
   - "Roles supervisor" assigns "Supervisor" to the user.
   - Do not assign "Supervisor" unless explicitly stated.
 - For tools and service:
@@ -128,7 +128,7 @@ Examples:
 - Input: "Segment: groundfloor" -> {"segment": "groundfloor"}
 - Input: "category Bestand" -> {"category": "Bestand"}
 - Input: "Morning! At Mountain View Apartments, section 9C, category Bestand, firms BuildFast AG, time full day..." -> {"site_name": "Mountain View Apartments", "segment": "9C", "category": "Bestand", "company": [{"name": "BuildFast AG"}], "time": "full day", ...}
-- Input: "People Michael Rich as window installer" -> {"people": ["Michael Rich"], "roles": [{"name": "Michael Rich", "role": "Window Installer"}]}
+- Input: "People Michael Rich as window cleaner" -> {"people": ["Michael Rich"], "roles": [{"name": "Michael Rich", "role": "Window Cleaner"}]}
 - Input: "delete companies" -> {"company": {"delete": true}}
 - Input: "insert company WindowCleaner" -> {"company": [{"name": "WindowCleaner"}]}
 """
@@ -192,7 +192,7 @@ FIELD_PATTERNS = {
     "segment": r'^(?:add\s+|insert\s+)?segment\s*[:,\s]*\s*(.+?)\s*$',
     "category": r'^(?:add\s+|insert\s+)?category\s*[:,\s]*\s*(.+?)\s*$',
     "impression": r'^(?:add\s+|insert\s+)?impression\s*[:,\s]*\s*(.+?)\s*$',
-    "people": r'^(?:add\s+|insert\s+)?(?:people|person)\s*[:,\s]*\s*(.+?)(?:\s+as\s+|\s+)(architect|engineer|supervisor|manager|worker|window\s+installer)\s*$|^(?:add\s+|insert\s+)?(?:people|person)\s*[:,\s]*\s*(.+?)\s*$',
+    "people": r'^(?:add\s+|insert\s+)?(?:people|person)\s*[:,\s]*\s*(.+?)(?:\s+as\s+|\s+)(architect|engineer|supervisor|manager|worker|window\s+installer)\s*$|^(?:add\s+|insert\s+)?(?:people|person)\s*[:,\s]*\s*([^:,\s]+(?:\s+[^:,\s]+)*)\s*$',
     "role": r'^(?:add\s+|insert\s+)?(?:people\s+|person\s+)?(.+?)\s*[:,\s]*\s*as\s+(.+?)\s*$|^(?:add\s+|insert\s+)?(?:person|people)\s*[:,\s]*\s*(.+?)\s*,\s*role\s*[:,\s]*\s*(.+?)\s*$',
     "supervisor": r'^(?:add\s+|insert\s+)?(?:supervisors\s*(?:were|are)\s+|i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|roles?\s*[:,\s]*\s*supervisor\s*$)(.+?)?\s*$',
     "company": r'^(?:add\s+|insert\s+)?(?:company|companies)\s*[:,\s]*\s*(.+?)\s*$',
@@ -550,10 +550,10 @@ def extract_single_command(text):
                         role = match.group(2).title()
                         result["people"] = [name]
                         result["roles"] = [{"name": name, "role": role}]
-                    else:
-                        names = [name.strip() for name in match.group(1).split(",") if name.strip()]
+                    elif match.group(3):  # Name without role
+                        names = [name.strip() for name in match.group(3).split(",") if name.strip()]
                         result["people"] = names
-                    logger.info({"event": "extracted_field", "field": "people", "value": result["people"]})
+                    logger.info({"event": "extracted_field", "field": "people", "value": result.get("people", [])})
                 elif field == "role":
                     name = (match.group(1) or match.group(3)).strip()
                     role = (match.group(2) or match.group(4)).strip().title()
