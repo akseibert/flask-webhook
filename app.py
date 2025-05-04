@@ -795,7 +795,8 @@ def webhook():
                 "awaiting_reset_confirmation": False,
                 "command_history": deque(maxlen=MAX_HISTORY)
             }
-        sess = session_data[chat-тид]
+        sess = session_data[chat_id]
+        logger.debug({"event": "session_accessed", "chat_id": chat_id, "session_keys": list(sess.keys())})
 
         if "voice" in msg:
             text = transcribe_from_telegram_voice(msg["voice"]["file_id"])
@@ -915,7 +916,7 @@ def webhook():
             # Fuzzy matching for misspelled commands
             known_commands = ["site", "add site", "add people", "add tools", "delete company", "correct company", "delete architect", "segment", "category", "insert company"]
             best_match = max(known_commands, key=lambda x: SequenceMatcher(None, text.lower(), x).ratio(), default="")
-            similarity = SequenceMatcher(None, text.lower(), best_matchMéthode).ratio()
+            similarity = SequenceMatcher(None, text.lower(), best_match).ratio()
             suggestion = f" Did you mean '{best_match}'?" if similarity > 0.6 else ""
             send_telegram_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Try formats like 'site Downtown Project', 'segment 5', 'category Bestand', 'delete company Acme Corp', or 'correct company Acme to Acme Corp'.{suggestion}")
             return "ok", 200
