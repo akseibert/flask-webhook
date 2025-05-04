@@ -65,6 +65,13 @@ except Exception as e:
     logger.error(f"OpenAI initialization failed: {e}")
     raise
 
+# --- Helper function for fuzzy matching ---
+def is_similar(a, b, threshold=0.7):
+    ratio = SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    if ratio >= threshold:
+        logger.info({"event": "fuzzy_match", "a": a, "b": b, "similarity": ratio})
+    return ratio >= threshold
+
 # --- GPT Prompt for complex input parsing ---
 gpt_prompt = """
 You are an AI assistant extracting a construction site report from user input. Extract all explicitly mentioned fields and return them in JSON format. Process the entire input as a single unit, splitting on commas or periods only when fields are clearly separated by keywords. Map natural language phrases and standardized commands (add, delete, correct, insert) to fields accurately, prioritizing specific fields over comments or site_name. Do not treat reset commands ("new", "new report", "reset", "reset report", "/new") as comments or fields; return {} for these. Handle "none" inputs (e.g., "Tools: none") as clearing the respective field, and vague or misspelled inputs (e.g., "Activities: many", "site lake propert") by adding them and noting clarification needed. Ensure no command words (e.g., "add", "delete", "correct", "insert", "s:") appear in the extracted values. For fields like time, prioritize the last mentioned value (e.g., "morning, full day" -> "time": "full day"). Always attempt to extract the category field when relevant (e.g., "Bestand" for construction context).
@@ -200,14 +207,14 @@ FIELD_PATTERNS = {
     "company": r'^(?:add\s+|insert\s+)?(?:company|companies)\s*[:,\s]*\s*(.+?)\s*$',
     "service": r'^(?:add\s+|insert\s+)?(?:service|services|services\s*(?:were|provided))\s*[:,\s]*\s*(.+?)\s*$',
     "tool": r'^(?:add\s+|insert\s+)?(?:tool|tools|tools\s*used\s*(?:included|were))\s*[:,\s]*\s*(.+?)\s*$',
-    "activity": r'^(?:add\s+|insert\s+)?(?:activity|activities|activities\s*(?:covered|included))\s*[:,\\s]*\s*(.+?)\s*$',
+    "activity": r'^(?:add\s+|insert\s+)?(?:activity|activities|activities\s*(?:covered|included))\s*[:,\s]*\s*(.+?)\s*$',
     "issue": r'^(?:add\s+|insert\s+)?(?:issue|issues|issues\s*(?:encountered|included))\s*[:,\s]*\s*(.+?)\s*$',
     "weather": r'^(?:add\s+|insert\s+)?(?:weather|weather\s+was|good\s+weather|bad\s+weather|sunny|cloudy|rainy)\s*[:,\s]*\s*(.+?)\s*$',
     "time": r'^(?:add\s+|insert\s+)?(?:time|time\s+spent|morning|afternoon|evening|full\s+day)\s*[:,\s]*\s*(.+?)\s*$',
     "comments": r'^(?:add\s+|insert\s+)?(?:comment|comments)\s*[:,\s]*\s*(.+?)\s*$',
     "clear": r'^(issues|activities|comments|tools|service|company|people|roles)\s*[:,\s]*\s*none\s*$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": r'^(?:delete|remove)\s+(.+?)\s+from\s+(site|segment|category|company|companies|person|people|role|roles|tool|tools|service|services|activity|activities|issue|issues|time|weather|impression|comments)\s*$|^(?:delete|remove)\s+(site|segment|category|company|companies|person|people|role|roles|tool|tools|service|services|activity|activities|issue|issues|time|weather|impression|comments)\s*$',
+    "delete": r'^(?:delete|remove)\s+(site|segment|category|company|companies|person|people|role|roles|tool|tools|service|services|activity|activities|issue|issues|time|weather|impression|comments|architect|engineer|supervisor|manager|worker|window\s+installer)(?:\s+(.+?))?\s*$',
     "correct": r'^(?:correct\s+|update\s+)(site|segment|category|company|person|people|role|roles|tool|service|activity|issue|time|weather|impression|comments)\s+(.+?)\s+to\s+(.+?)\s*$'
 }
 
@@ -267,11 +274,8 @@ def transcribe_from_telegram_voice(file_id):
         if not text:
             logger.warning({"event": "transcription_empty", "result": text})
             return ""
-        # Clean transcribed text
-        command_words = ["add", "delete", "remove", "correct", "update", "as", "issue", "issues", "tool", "tools", 
-                        "activity", "activities", "people", "person", "company", "companies", "service", "services", 
-                        "weather", "time", "comments", "category", "site", "segment", "role", "roles", "insert", "s:"]
-        text = re.sub(r'\b(?:%s)\b\s*' % '|'.join(command_words), '', text, flags=re.IGNORECASE).strip()
+        # Keep command words to allow proper command extraction
+        text = text.strip()
         logger.info({"event": "transcription_success", "text": text})
         return text
     except Exception as e:
@@ -474,52 +478,32 @@ def extract_single_command(text):
         # Handle deletion commands
         delete_match = re.match(FIELD_PATTERNS["delete"], normalized_text, re.IGNORECASE)
         if delete_match:
-            if delete_match.group(1) and delete_match.group(2):  # delete <item> from <category>
-                item = delete_match.group(1).strip()
-                category = delete_match.group(2).lower()
-                # Standardize category names
-                if category in ["company", "companies"]:
-                    category = "company"
-                elif category in ["person", "people"]:
-                    category = "people"
-                elif category in ["role", "roles"]:
-                    category = "roles"
-                elif category in ["tool", "tools"]:
-                    category = "tools"
-                elif category in ["service", "services"]:
-                    category = "service"
-                elif category in ["activity", "activities"]:
-                    category = "activities"
-                elif category in ["issue", "issues"]:
-                    category = "issues"
-                elif category == "site":
-                    category = "site_name"
-                result[category] = {"delete": item}
-                logger.info({"event": "delete_item_command", "category": category, "item": item})
-                return result  # Return immediately after handling specific item deletion
-            elif delete_match.group(3):  # delete <category>
-                category = delete_match.group(3).lower()
-                # Standardize category names
-                if category in ["company", "companies"]:
-                    category = "company"
-                elif category in ["person", "people"]:
-                    category = "people"
-                elif category in ["role", "roles"]:
-                    category = "roles"
-                elif category in ["tool", "tools"]:
-                    category = "tools"
-                elif category in ["service", "services"]:
-                    category = "service"
-                elif category in ["activity", "activities"]:
-                    category = "activities"
-                elif category in ["issue", "issues"]:
-                    category = "issues"
-                elif category == "site":
-                    category = "site_name"
-                result[category] = {"delete": True}
-                logger.info({"event": "delete_category_command", "category": category})
-                return result  # Return immediately after handling category deletion
-            # If delete command is incomplete (e.g., "delete fencing"), return empty to trigger suggestion
+            field = delete_match.group(1).lower()
+            value = delete_match.group(2).strip() if delete_match.group(2) else None
+            if field in ["company", "companies"]:
+                field = "company"
+            elif field in ["person", "people"]:
+                field = "people"
+            elif field in ["role", "roles"]:
+                field = "roles"
+            elif field in ["tool", "tools"]:
+                field = "tools"
+            elif field in ["service", "services"]:
+                field = "service"
+            elif field in ["activity", "activities"]:
+                field = "activities"
+            elif field in ["issue", "issues"]:
+                field = "issues"
+            elif field == "site":
+                field = "site_name"
+            elif field in ["architect", "engineer", "supervisor", "manager", "worker", "window installer"]:
+                result["roles"] = {"delete_role": field}
+                result["people"] = {"update_from_roles": True}
+                logger.info({"event": "delete_command", "field": "roles", "value": field})
+                return result
+            else:
+                result[field] = {"delete": value if value else True}
+            logger.info({"event": "delete_command", "field": field, "value": value})
             return result
 
         # Handle correction commands
@@ -713,23 +697,22 @@ def merge_structured_data(existing, new):
                 new_value = value[0]["correct"]["new"]
                 if key == "roles":
                     for role in merged["roles"]:
-                        if role["name"].lower() == old_value.lower():
+                        if is_similar(role["name"], old_value):
                             role["name"] = new_value
-                            break
                     if new_value not in merged["people"]:
                         merged["people"].append(new_value)
                 elif key == "people":
-                    merged["people"] = [new_value if p.lower() == old_value.lower() else p for p in merged["people"]]
+                    merged["people"] = [new_value if is_similar(p, old_value) else p for p in merged["people"]]
                     for role in merged["roles"]:
-                        if role["name"].lower() == old_value.lower():
+                        if is_similar(role["name"], old_value):
                             role["name"] = new_value
                 elif key in ["company", "tools", "service", "issues"]:
                     field_key = "name" if key == "company" else "item" if key == "tools" else "task" if key == "service" else "description"
                     for item in merged[key]:
-                        if item[field_key].lower() == old_value.lower():
+                        if is_similar(item[field_key], old_value):
                             item[field_key] = new_value
                 elif key == "activities":
-                    merged["activities"] = [new_value if a.lower() == old_value.lower() else a for a in merged["activities"]]
+                    merged["activities"] = [new_value if is_similar(a, old_value) else a for a in merged["activities"]]
                 continue
             if isinstance(value, dict):
                 if "delete" in value:
@@ -745,18 +728,18 @@ def merge_structured_data(existing, new):
                     else:
                         target = value["delete"].lower()
                         if key == "people":
-                            merged[key] = [item for item in merged[key] if item.lower() != target]
-                            merged["roles"] = [r for r in merged["roles"] if r.get("name", "").lower() != target]
+                            merged[key] = [item for item in merged[key] if not is_similar(item, target)]
+                            merged["roles"] = [r for r in merged["roles"] if not is_similar(r.get("name", ""), target)]
                         elif key == "roles":
-                            merged[key] = [item for item in merged[key] if item.get("name", "").lower() != target]
-                            merged["people"] = [p for p in merged["people"] if any(r["name"].lower() == p.lower() for r in merged["roles"])]
+                            merged[key] = [item for item in merged[key] if not is_similar(item.get("name", ""), target)]
+                            merged["people"] = [p for p in merged["people"] if any(is_similar(r["name"], p) for r in merged["roles"])]
                         elif key in ["company", "tools", "service", "issues"]:
                             field_key = "name" if key == "company" else "item" if key == "tools" else "task" if key == "service" else "description"
-                            merged[key] = [item for item in merged[key] if item.get(field_key, "").lower() != target]
+                            merged[key] = [item for item in merged[key] if not is_similar(item.get(field_key, ""), target)]
                         elif key == "activities":
-                            merged[key] = [item for item in merged[key] if item.lower() != target]
+                            merged[key] = [item for item in merged[key] if not is_similar(item, target)]
                         elif key in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
-                            if target == merged[key].lower():
+                            if is_similar(merged[key], target):
                                 merged[key] = ""
                     logger.info({"event": "delete_processed", "field": key, "target": target})
                 elif "delete_role" in value:
@@ -937,11 +920,11 @@ def webhook():
             return "ok", 200
 
         if not extracted:
-            known_commands = ["site", "add site", "add people", "add tools", "delete company", "correct company", "delete architect", "segment", "category", "insert company", "delete fencing from activities", "delete activities"]
+            known_commands = ["site", "add site", "add people", "add tools", "delete company", "correct company", "delete architect", "segment", "category", "insert company"]
             best_match = max(known_commands, key=lambda x: SequenceMatcher(None, text.lower(), x).ratio(), default="")
             similarity = SequenceMatcher(None, text.lower(), best_match).ratio()
             suggestion = f" Did you mean '{best_match}'?" if similarity > 0.6 else ""
-            send_telegram_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Use 'delete <category>' to clear a category (e.g., 'delete activities') or 'delete <item> from <category>' to remove an item (e.g., 'delete fencing from activities').{suggestion}")
+            send_telegram_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Try formats like 'site Downtown Project', 'segment 5', 'category Bestand', 'delete company Acme Corp', or 'correct company Acme to Acme Corp'.{suggestion}")
             return "ok", 200
 
         sess["command_history"].append(sess["structured_data"].copy())
