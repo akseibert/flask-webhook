@@ -504,16 +504,16 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                 result.setdefault("delete", []).append({"field": "roles", "value": field})
                 log_event("delete_role_command", field="roles", value=field)
             elif mapped_field == "people":
-                result.setdefault(“delete”, []).append({“field”: mapped_field, “value”: value}) if value else {"delete": True}
+                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
                 log_event("delete_people_command", field=mapped_field, value=value)
             elif mapped_field == "person":
                 result["people"] = {"delete": value}
                 log_event("delete_person_command", field="people", value=value)
             elif mapped_field in ["company", "roles", "tools", "service", "activities", "issues"]:
-                result.setdefault(“delete”, []).append({“field”: mapped_field, “value”: value}) if value else {"delete": True}
+                result.setdefault("delete” []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
                 log_event("delete_list_command", field=mapped_field, value=value)
             elif mapped_field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
-                result.setdefault(“delete”, []).append({“field”: mapped_field, “value”: value}) if value else {"delete": True}
+                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
                 log_event("delete_scalar_command", field=mapped_field, value=value)
             else:
                 log_event("unrecognized_delete_field", field=field)
@@ -1139,4 +1139,3 @@ def webhook() -> tuple[str, int]:
     except Exception as e:
         log_event("webhook_error", error=str(e))
         return "error", 500
-
