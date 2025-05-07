@@ -1,4 +1,3 @@
-you deleted half the code. please use this one as base 
 import os
 import sys
 import io
