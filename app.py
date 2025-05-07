@@ -510,7 +510,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                 result["people"] = {"delete": value}
                 log_event("delete_person_command", field="people", value=value)
             elif mapped_field in ["company", "roles", "tools", "service", "activities", "issues"]:
-                result.setdefault("delete" []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
+                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
                 log_event("delete_list_command", field=mapped_field, value=value)
             elif mapped_field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
                 result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
@@ -976,8 +976,13 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
                 sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
             save_session(session_data)
             tpl = summarize_report(sess["structured_data"])
-            send_message(chat_id, f"Removed {field}" + (f": {value}" if value else "") + f"\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            deleted_fields_summary = "\n".join(
+    f"Removed {cmd['field']}" + (f": {cmd['value']}" if cmd['value'] else "")
+    for cmd in extracted["delete"]
+)
+send_message(chat_id, f"{deleted_fields_summary}\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
             return "ok", 200
+
         if extracted.get("correct"):
             sess["command_history"].append(sess["structured_data"].copy())
             for correct_cmd in extracted["correct"]:
@@ -1139,3 +1144,4 @@ def webhook() -> tuple[str, int]:
     except Exception as e:
         log_event("webhook_error", error=str(e))
         return "error", 500
+
