@@ -98,9 +98,9 @@ FIELD_PATTERNS = {
     "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$|\s*$)',
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*none$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": rf'^(?:delete|remove)\s+({categories_pattern})\s*(.+)?$|^({categories_pattern})\s+(?:delete|remove)\s*(.+)?$',
+    "delete": rf'^(?:delete|remove)\s+({categories_pattern})\s+(.+)$|^({categories_pattern})\s+(?:delete|remove)\s+(.+)$',
     "delete_entire": rf'^delete\s+entire\s+category\s+({list_categories_pattern})$',
-    "correct": r'^(?:correct|adjust|update|spell)(?:\s+spelling)?\s+((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+([^,]+?)(?:\s+to\s+([^,]+?))?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
+    "correct": r'^(?:correct|adjust|update|spell)(?:\s+spelling)?\s+((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+((?:[^,]+?)(?:\s+to\s+([^,]+?))?)\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
 }
 
 # --- Session Management ---
@@ -175,8 +175,9 @@ Fields to extract (omit if not present):
 
 Commands:
 - add|insert <category> <value>: Add a value to the category (e.g., "add site Downtown Project" or "insert issues water leakage").
-- delete|remove <category> [value|from <category> <value>]: Remove a value or clear the category (e.g., "delete activities Laying foundation", "delete Jonas from people", or "delete companies").
-- correct|adjust|spell <category> <old> to <new>|correct spelling <category> <value>|spell <category> <value>: Update a value or correct spelling (e.g., "correct site Downtown to Uptown", "spell companies Orient Corp").
+- delete|remove <category> <value>: Remove a specific value from the category (e.g., "delete people Anna", "delete issues power outage").
+- delete entire category <category>: Clear the entire category (e.g., "delete entire category people").
+- correct|adjust|spell <category> <old> to <new>|correct spelling <category> <value>: Update a value or correct spelling (e.g., "correct site Downtown to Uptown", "spell companies Orient Corp").
 - <category>: <value>: Add a value (e.g., "Services: abc" -> "service": [{"task": "abc"}]).
 - <category>: none: Clear the category (e.g., "Tools: none" -> "tools": []).
 
@@ -193,7 +194,7 @@ Rules:
 - Comments should only include non-field-specific notes.
 - Return {} for reset commands or irrelevant inputs.
 - Case-insensitive matching.
-- Handle natural language inputs flexibly, allowing variations like "Activities: laying foundation", "Add issue power outage", "Delete Jonas from people", or "spell companies Orient Corp".
+- Handle natural language inputs flexibly, allowing variations like "Activities: laying foundation", "Add issue power outage", "Delete people Anna", or "spell companies Orient Corp".
 """
 
 # --- Signal Handlers ---
@@ -583,7 +584,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     log_event("extracted_field", field="roles", value=name)
                 elif field == "company":
                     name = clean_value(match.group(2) if match.group(2) else match.group(1), field)
-                    if re.match(r'^(?:delete|remove|add|insert|correct|adjust|update|spell)\b', name.lower()):
+                    if re.match(r'^(?:delete|remove|correct|adjust|update|spell)\b', name.lower()):
                         log_event("skipped_company", reason="command-like name", value=name)
                         continue
                     result["company"] = [{"name": name}]
@@ -625,6 +626,11 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     result[field] = value
                     log_event("extracted_field", field=field, value=value)
                 return result
+
+        # Skip GPT fallback for delete commands
+        if re.match(r'^(?:delete|remove)\b', normalized_text, re.IGNORECASE):
+            log_event("skipped_gpt_fallback", reason="delete command")
+            return {}
 
         # Fallback to GPT for complex inputs
         messages = [
@@ -721,11 +727,12 @@ def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
                 new_items = value if isinstance(value, list) else [value]
                 for new_item in new_items:
                     if isinstance(new_item, str):
-                        # Convert string issues to dictionary format
                         if key == "issues":
                             new_item = {"description": new_item}
+                        elif key == "tools":
+                            new_item = {"item": new_item}
                         else:
-                            continue  # Skip non-dict items for other fields
+                            continue
                     if not isinstance(new_item, dict):
                         continue
                     if key == "company" and "name" in new_item:
@@ -1140,4 +1147,3 @@ def webhook() -> tuple[str, int]:
     except Exception as e:
         log_event("webhook_error", error=str(e))
         return "error", 500
-
