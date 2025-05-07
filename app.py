@@ -510,7 +510,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                 result["people"] = {"delete": value}
                 log_event("delete_person_command", field="people", value=value)
             elif mapped_field in ["company", "roles", "tools", "service", "activities", "issues"]:
-                result.setdefault("delete” []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
+                result.setdefault("delete" []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
                 log_event("delete_list_command", field=mapped_field, value=value)
             elif mapped_field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
                 result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
