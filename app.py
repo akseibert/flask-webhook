@@ -81,24 +81,24 @@ categories_pattern = '|'.join(re.escape(cat) for cat in categories)
 list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 
 FIELD_PATTERNS = {
-    "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*|at\s+|in\s+|on\s+)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
-    "category": r'^(?:(?:add|insert)\s+categories?\s+|categories?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
+    "category": r'^(?:(?:add|insert)\s+categories?\s+|categories?\s*[:,]?\s*|file\s+under\s+)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
     "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|comments)\s*:)|$|\s*$)',
-    "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*)([^,]+?)(?:\s+as\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?|supervisors?)\s*(?:were)?\s*[:,]?\s*)([^,;\.]+?)(?:\s+as\s+([^,;\.]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:|\s*;\s*|\s*\.\s*(?:$|[A-Z])|$|\s*$))',
     "role": r'^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+|\w+)\s*[:,]?\s*as\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+|\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "supervisor": r'^(?:i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*$)(?:\s+by\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:|\s+issues?\s*:|\s+times?\s*:|$|\s*$))',
-    "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*[:,]?\s*|issues?\s*(?:encountered|included)?\s*|problem\s*:?\s*|delay\s*:?\s*|injury\s*:?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|times?|weather|impression|comments)\s*:|\s+times?\s*:|$|\s*$))',
-    "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|impression|comments)\s*:)|$|\s*$)',
-    "time": r'^(?:(?:add|insert)\s+times?\s+|times?\s*[:,]?\s*|time\s+spent\s+|morning\s+time\s*|afternoon\s+time\s*|evening\s+time\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|weather|impression|comments)\s*:)|$|\s*$)',
-    "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$|\s*$)',
+    "supervisor": r'^(?:i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*$|supervisors?\s*(?:were)?\s*[:,]?\s*)([^,;\.]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:|\s*;\s*|\s*\.\s*(?:$|[A-Z])|$|\s*$))',
+    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*(?:involved\s*(?:were)?)?\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*([^,;\.]+?)(?=(?:\s*,\s*(?:site|segment|category|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:|\s*;\s*|\s*\.\s*(?:$|[A-Z])|$|\s*$))',
+    "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*(?:were\s+|provided\s+)?[:,]?\s*)([^,;\.]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:|\s*;\s*|\s*\.\s*(?:$|[A-Z])|$|\s*$))',
+    "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*(?:used\s*(?:included|were)?)?\s*[:,]?\s*)([^,;\.]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:|\s*;\s*|\s*\.\s*(?:$|[A-Z])|$|\s*$))',
+    "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies|tasks)\s*(?:covered|included)?\s*[:,]?\s*)([^,;\.]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:|\s*;\s*|\s*\.\s*(?:$|[A-Z])|$|\s*$))',
+    "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*(?:encountered)?\s*[:,]?\s*|problem\s*:?\s*|delay\s*:?\s*|injury\s*:?\s*)([^,;\.]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|times?|weather|impression|comments)\s*:|\s*;\s*|\s*\.\s*(?:$|[A-Z])|$|\s*$))',
+    "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,;\.]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|impression|comments)\s*:|\s*;\s*|\s*\.\s*(?:$|[A-Z])|$|\s*$))',
+    "time": r'^(?:(?:add|insert)\s+times?\s+|times?\s*[:,]?\s*|time\s+spent\s+|morning\s+time\s*|afternoon\s+time\s*|evening\s+time\s*)([^,;\.]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|weather|impression|comments)\s*:|\s*;\s*|\s*\.\s*(?:$|[A-Z])|$|\s*$))',
+    "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,;\.]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:|\s*;\s*|\s*\.\s*(?:$|[A-Z])|$|\s*$))',
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*none$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": rf'^(?:delete|remove)\s+({categories_pattern})\s+(.+)$|^({categories_pattern})\s+(?:delete|remove)\s+(.+)$',
+    "delete": rf'^(?:delete|remove)\s+({categories_pattern})\s+(.+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^({categories_pattern})\s+(?:delete|remove)\s+(.+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "delete_entire": rf'^delete\s+entire\s+category\s+({list_categories_pattern})$',
     "correct": r'^(?:correct|adjust|update|spell)(?:\s+spelling)?\s+((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+((?:[^,]+?)(?:\s+to\s+([^,]+?))?)\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
 }
@@ -154,7 +154,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 # --- GPT Prompt ---
 GPT_PROMPT = """
-You are an AI assistant extracting a construction site report from user input. Extract all explicitly mentioned fields and return them in JSON format. Process the entire input as a single unit, splitting on commas or periods only when fields are clearly separated by keywords. Map natural language phrases and standardized commands (add, insert, delete, correct, adjust, spell, remove) to fields accurately, prioritizing specific fields over comments or site_name. Do not treat reset commands ("new", "new report", "reset", "reset report", "/new") as comments or fields; return {} for these. Handle "none" inputs (e.g., "Tools: none") as clearing the respective field, and vague inputs (e.g., "Activities: many") by adding them and noting clarification needed.
+You are an AI assistant extracting a construction site report from user input. Extract all explicitly mentioned fields and return them in JSON format. Process the entire input as a single unit, splitting on commas, semicolons, or periods only when fields are clearly separated by keywords. Map natural language phrases and standardized commands (add, insert, delete, correct, adjust, spell, remove) to fields accurately, prioritizing specific fields over comments or site_name. Do not treat reset commands ("new", "new report", "reset", "reset report", "/new") as comments or fields; return {} for these. Handle "none" inputs (e.g., "Tools: none") as clearing the respective field, and vague inputs (e.g., "Activities: many") by adding them and noting clarification needed. Ignore common greetings like "Good morning", "Hi", "Hello", or "Thanks" unless explicitly part of a comment.
 
 Fields to extract (omit if not present):
 - site_name: string (e.g., "Downtown Project")
@@ -174,7 +174,7 @@ Fields to extract (omit if not present):
 - date: string (format dd-mm-yyyy)
 
 Commands:
-- add|insert <category> <value>: Add a value to the category (e.g., "add site Downtown Project" or "insert issues water leakage").
+- add|insert <category> <value>: Add a value to the category Swansea City Centre Project or "insert issues water leakage").
 - delete|remove <category> <value>: Remove a specific value from the category (e.g., "delete people Anna", "delete issues power outage").
 - delete entire category <category>: Clear the entire category (e.g., "delete entire category people").
 - correct|adjust|spell <category> <old> to <new>|correct spelling <category> <value>: Update a value or correct spelling (e.g., "correct site Downtown to Uptown", "spell companies Orient Corp").
@@ -185,14 +185,15 @@ Rules:
 - Accept both singular and plural category names (e.g., "issue" or "issues", "company" or "companies").
 - Extract fields from colon-separated inputs (e.g., "Services: abc"), natural language (e.g., "weather was cloudy" -> "weather": "cloudy"), or commands (e.g., "add people Anna").
 - For segment and category: Extract only the value (e.g., "Segment: 5" -> "segment": "5").
-- For issues: Recognize keywords: "Issue", "Issues", "Problem", "Delay", "Injury". "Issues: none" clears the issues list.
-- For activities: Recognize keywords: "Activity", "Activities", "Task", "Progress", "Construction", or action-oriented phrases. "Activities: none" clears the activities list. Handle vague inputs like "Activities: many" by adding them and noting clarification needed.
-- For site_name: Recognize location-like phrases following "at", "in", "on" (e.g., "Work was done at East Wing" -> "site_name": "East Wing", "activities": ["Work was done"]).
-- For people and roles: Recognize "add [name] as [role]" (e.g., "add Anna as engineer" -> "people": ["Anna"], "roles": [{"name": "Anna", "role": "Engineer"}]). "Roles supervisor" assigns "Supervisor" to the user.
-- For tools and service: Recognize "Tool: [item]", "Service: [task]", or commands like "add service abc".
-- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Handle "delete company <name>" to remove the company. Handle "correct company <old> to <new>" to update the company name.
-- Comments should only include non-field-specific notes.
-- Return {} for reset commands or irrelevant inputs.
+- For issues: Recognize keywords: "Issue", "Issues", "Problem", "Delay", "Injury", "encountered". "Issues: none" clears the issues list.
+- For activities: General construction tasks (e.g., "laying foundations", "erecting steel frames", "pouring footings"). Recognize keywords like "Tasks", "Activities", "covered", "included".
+- For services: Specialized tasks provided by contractors (e.g., "electrical wiring", "HVAC installation"). Recognize keywords like "Services", "provided", "were".
+- For site_name: Recognize location-like phrases following "at", "in", "on" (e.g., "Work was done at East Wing" -> "site_name": "East Wing").
+- For people and roles: Recognize "add [name] as [role]" (e.g., "add Anna as engineer" -> "people": ["Anna"], "roles": [{"name": "Anna", "role": "Engineer"}]). "Supervisors were [names]" assigns "Supervisor" role.
+- For tools: Recognize "Tools used included [items]" or "add tools [item]".
+- For companies: Recognize "Companies involved were [names]" or "add company [name]". Multiple companies are separated by "and" or commas.
+- Comments should only include non-field-specific notes, excluding greetings unless explicitly stated.
+- Return {} for reset commands, greetings, or irrelevant inputs.
 - Case-insensitive matching.
 - Handle natural language inputs flexibly, allowing variations like "Activities: laying foundation", "Add issue power outage", "Delete people Anna", or "spell companies Orient Corp".
 """
@@ -408,7 +409,10 @@ def extract_fields(text: str) -> Dict[str, Any]:
             log_event("export_pdf_detected")
             return {"export_pdf": True}
 
-        commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)|(?:add|insert)\s+(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments))|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
+        commands = [cmd.strip() for cmd in re.split(
+            r',\s*(?=(?:[^:]*:)|(?:add|insert)\s+(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments))|\.\s*(?=(?:[A-Z][a-z]*\s*(?:[:,]|were\s+|included\s+|provided\s+|covered\s+|encountered\s*:)|add\s+|insert\s+))',
+            text
+        ) if cmd.strip()]
         log_event("commands_split", commands=commands)
         processed_result = {
             "company": [], "roles": [], "tools": [], "service": [],
@@ -491,7 +495,12 @@ def extract_single_command(text: str) -> Dict[str, Any]:
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
         log_event("extract_single_command", input=normalized_text)
 
-        # Handle deletion commands
+        # Ignore greetings
+        if normalized_text.lower() in ("good morning", "hi", "hello", "hey"):
+            log_event("skipped_greeting", input=normalized_text)
+            return {}
+
+        # Handle deletion commands first
         delete_match = re.match(FIELD_PATTERNS["delete"], normalized_text, re.IGNORECASE)
         if delete_match:
             field = delete_match.group(1) if delete_match.group(1) else delete_match.group(2)
@@ -626,11 +635,6 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     result[field] = value
                     log_event("extracted_field", field=field, value=value)
                 return result
-
-        # Skip GPT fallback for delete commands
-        if re.match(r'^(?:delete|remove)\b', normalized_text, re.IGNORECASE):
-            log_event("skipped_gpt_fallback", reason="delete command")
-            return {}
 
         # Fallback to GPT for complex inputs
         messages = [
@@ -831,7 +835,7 @@ def delete_entry(data: Dict[str, Any], field: str, value: Optional[str] = None) 
                 log_event(f"{field}_deleted", value=value)
             else:
                 data[field] = []
-                log_event(f"{field}_cleared")
+                log_event(f"{field}_cleorious")
         elif field == "roles":
             if value:
                 data[field] = [item for item in data[field] if not (isinstance(item, dict) and string_similarity(item.get("name", ""), value) > 0.7)]
@@ -884,6 +888,9 @@ def command(name: str) -> Callable:
 def handle_reset(chat_id: str, session: Dict[str, Any]) -> None:
     session["structured_data"] = blank_report()
     session["command_history"].clear()
+    session["pending_input"] = None
+    session["awaiting_reset_confirmation"] = False
+    session["awaiting_spelling_correction"] = None
     save_session(session_data)
     summary = summarize_report(session["structured_data"])
     send_message(chat_id, f"**Report reset**\n\n{summary}")
@@ -1147,3 +1154,6 @@ def webhook() -> tuple[str, int]:
     except Exception as e:
         log_event("webhook_error", error=str(e))
         return "error", 500
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
