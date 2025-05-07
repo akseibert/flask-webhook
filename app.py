@@ -98,8 +98,7 @@ FIELD_PATTERNS = {
     "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$|\s*$)',
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*none$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": rf'^(?:delete|remove)\s+({categories_pattern})\s*(.+)?$|^({categories_pattern})\s+(?:delete|remove)\s*(.+)?$',
-    "delete_entire": rf'^delete\s+entire\s+category\s+({list_categories_pattern})$',
+    "delete": rf'^(?:delete|remove)\s+({categories_pattern})(?:\s+(.+))?$|^({categories_pattern})\s+(?:delete|remove)(?:\s+(.+))?$',
     "correct": r'^(?:correct|adjust|update|spell)(?:\s+spelling)?\s+((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+([^,]+?)(?:\s+to\s+([^,]+?))?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
 }
 
@@ -175,7 +174,7 @@ Fields to extract (omit if not present):
 
 Commands:
 - add|insert <category> <value>: Add a value to the category (e.g., "add site Downtown Project" or "insert issues water leakage").
-- delete|remove <category> [value|from <category> <value>]: Remove a value or clear the category (e.g., "delete activities Laying foundation", "delete Jonas from people", or "delete companies").
+- delete|remove <category> [value]: Remove a specific value from the category or clear the entire category if no value is provided (e.g., "delete people Anna", "delete companies").
 - correct|adjust|spell <category> <old> to <new>|correct spelling <category> <value>|spell <category> <value>: Update a value or correct spelling (e.g., "correct site Downtown to Uptown", "spell companies Orient Corp").
 - <category>: <value>: Add a value (e.g., "Services: abc" -> "service": [{"task": "abc"}]).
 - <category>: none: Clear the category (e.g., "Tools: none" -> "tools": []).
@@ -490,6 +489,10 @@ def extract_single_command(text: str) -> Dict[str, Any]:
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
         log_event("extract_single_command", input=normalized_text)
 
+        # Skip GPT fallback for explicit delete commands
+        if re.match(r'^(?:delete|remove)\b', normalized_text, re.IGNORECASE):
+            log_event("skipped_gpt_fallback", reason="delete command")
+
         # Handle deletion commands
         delete_match = re.match(FIELD_PATTERNS["delete"], normalized_text, re.IGNORECASE)
         if delete_match:
@@ -519,15 +522,6 @@ def extract_single_command(text: str) -> Dict[str, Any]:
             else:
                 log_event("unrecognized_delete_field", field=field)
                 return {}
-            return result
-
-        # Handle entire category deletion
-        delete_entire_match = re.match(FIELD_PATTERNS["delete_entire"], normalized_text, re.IGNORECASE)
-        if delete_entire_match:
-            field = delete_entire_match.group(1).lower()
-            mapped_field = FIELD_MAPPING.get(field, field)
-            result[mapped_field] = {"delete": True}
-            log_event("delete_entire_category", field=mapped_field)
             return result
 
         # Handle correction commands
@@ -627,6 +621,8 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                 return result
 
         # Fallback to GPT for complex inputs
+        if re.match(r'^(?:delete|remove)\b', normalized_text, re.IGNORECASE):
+            return {}
         messages = [
             {"role": "system", "content": "Extract explicitly stated fields from construction site report input. Return JSON with extracted fields."},
             {"role": "user", "content": GPT_PROMPT + "\nInput text: " + normalized_text}
@@ -721,11 +717,10 @@ def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
                 new_items = value if isinstance(value, list) else [value]
                 for new_item in new_items:
                     if isinstance(new_item, str):
-                        # Convert string issues to dictionary format
                         if key == "issues":
                             new_item = {"description": new_item}
                         else:
-                            continue  # Skip non-dict items for other fields
+                            continue
                     if not isinstance(new_item, dict):
                         continue
                     if key == "company" and "name" in new_item:
@@ -851,13 +846,8 @@ def delete_entry(data: Dict[str, Any], field: str, value: Optional[str] = None) 
                 data[field] = []
                 log_event("activities_cleared")
         elif field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
-            if value:
-                if string_similarity(data.get(field, ""), value) > 0.7:
-                    data[field] = ""
-                    log_event(f"{field}_cleared")
-            else:
-                data[field] = ""
-                log_event(f"{field}_cleared")
+            data[field] = ""
+            log_event(f"{field}_cleared")
         log_event("data_after_deletion", data=json.dumps(data, indent=2))
         return data
     except Exception as e:
@@ -1140,4 +1130,3 @@ def webhook() -> tuple[str, int]:
     except Exception as e:
         log_event("webhook_error", error=str(e))
         return "error", 500
-
