@@ -57,24 +57,24 @@ def log_event(event: str, **kwargs) -> None:
 
 # --- Field Mapping ---
 FIELD_MAPPING = {
-    ‘site’: ‘site_name’, ‘sites’: ‘site_name’,
-    ‘segment’: ‘segment’, ‘segments’: ‘segment’,
-    ‘category’: ‘category’, ‘categories’: ‘category’,
-    ‘company’: ‘companies’, ‘companies’: ‘companies’,
-    ‘person’: ‘people’, ‘people’: ‘people’, ‘persons’: ‘people’, ‘peoples’: ‘people’,
-    ‘role’: ‘roles’, ‘roles’: ‘roles’,
-    ‘tool’: ‘tools’, ‘tools’: ‘tools’,
-    ‘service’: ‘services’, ‘services’: ‘services’,
-    ‘activity’: ‘activities’, ‘activities’: ‘activities’,
-    ‘issue’: ‘issues’, ‘issues’: ‘issues’,
-    ‘time’: ‘time’, ‘times’: ‘time’,
-    ‘weather’: ‘weather’, ‘weathers’: ‘weather’,
-    ‘impression’: ‘impression’, ‘impressions’: ‘impression’,
-    ‘comment’: ‘comments’, ‘comments’: ‘comments’,
-    ‘architect’: ‘roles’, ‘engineer’: ‘roles’, ‘supervisor’: ‘roles’,
-    ‘manager’: ‘roles’, ‘worker’: ‘roles’, ‘window installer’: ‘roles’,
-    ‘contractor’: ‘roles’, ‘inspector’: ‘roles’, ‘electrician’: ‘roles’,
-    ‘plumber’: ‘roles’, ‘foreman’: ‘roles’, ‘designer’: ‘roles’
+    'site': 'site_name', 'sites': 'site_name',
+    'segment': 'segment', 'segments': 'segment',
+    'category': 'category', 'categories': 'category',
+    'company': 'companies', 'companies': 'companies',
+    'person': 'people', 'people': 'people', 'persons': 'people', 'peoples': 'people',
+    'role': 'roles', 'roles': 'roles',
+    'tool': 'tools', 'tools': 'tools',
+    'service': 'services', 'services': 'services',
+    'activity': 'activities', 'activities': 'activities',
+    'issue': 'issues', 'issues': 'issues',
+    'time': 'time', 'times': 'time',
+    'weather': 'weather', 'weathers': 'weather',
+    'impression': 'impression', 'impressions': 'impression',
+    'comment': 'comments', 'comments': 'comments',
+    'architect': 'roles', 'engineer': 'roles', 'supervisor': 'roles',
+    'manager': 'roles', 'worker': 'roles', 'window installer': 'roles',
+    'contractor': 'roles', 'inspector': 'roles', 'electrician': 'roles',
+    'plumber': 'roles', 'foreman': 'roles', 'designer': 'roles'
 }
 
 # Reverse mapping to help with validation and suggestions
@@ -106,43 +106,43 @@ categories = [
 ]
 list_categories = ["people", "companies", "roles", "tools", "services", "activities", "issues"]
 
-categories_pattern = ‘|’.join(re.escape(cat) for cat in categories)
-list_categories_pattern = ‘|’.join(re.escape(cat) for cat in list_categories)
+categories_pattern = '|'.join(re.escape(cat) for cat in categories)
+list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 
 FIELD_PATTERNS = {
-    "site_name": r’^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)’,
-    "segment": r’^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)’,
-    "category": r’^(?:(?:add|insert)\s+categories?\s+|categories?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)’,
-    "impression": r’^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|comments)\s*:)|$|\s*$)’,
-    "people": r’^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*)([^,]+?)(?:\s+as\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)’,
-    "role": r’^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+|\w+)\s*[:,]?\s*as\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+|\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)’,
-    "supervisor": r’^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)([^,]+?)(?=\s*(?:\.|\s+tools?|services?|activit(?:y|ies)|issues?|$))’,
-    "company": r’^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*((?:[^,.]+?(?:\s+and\s+[^,.]+?)*?))(?=\s*(?:\.|\s+supervisors?|tools?|services?|activit(?:y|ies)|issues?|$))’,
-    "service": r’^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)’,
-    "tool": r’^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)’,
-    "activity": r’^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:|\s+issues?\s*:|\s+times?\s*:|$|\s*$))’,
-    "issue": r’^(?:(?:add|insert)\s+issues?\s+|issues?\s*[:,]?\s*|issues?\s*(?:encountered|included)?\s*|problem\s*:?\s*|delay\s*:?\s*|injury\s*:?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|times?|weather|impression|comments)\s*:|\s+times?\s*:|$|\s*$))’,
-    "weather": r’^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|impression|comments)\s*:)|$|\s*$)’,
-    "time": r’^(?:(?:add|insert)\s+times?\s+|times?\s*[:,]?\s*|time\s+spent\s+|morning\s+time\s*|afternoon\s+time\s*|evening\s+time\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|weather|impression|comments)\s*:)|$|\s*$)’,
-    "comments": r’^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$|\s*$)’,
-    "clear": r’^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*(?:none|delete|clear|remove|reset)$’,
-    "reset": r’^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$’,
-    "delete": rf’^(?:delete|remove|none)\s+({categories_pattern})\s*(.+)?$|^(?:delete|remove)\s+(.+)\s+(?:from|in|of|at)\s+({categories_pattern})$|^({categories_pattern})\s+(?:delete|remove|none)\s*(.+)?$’,
-    "delete_entire": rf’^(?:delete|remove|clear)\s+(?:entire|all)\s+(?:category|field|entries|list)?\s*[:]?\s*({list_categories_pattern})\s*[.!]?$’,
-    "correct": r’^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+([^,]+?)(?:\s+to\s+([^,]+?))?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)’,
-    "help": r’^help(?:\s+on\s+([a-z_]+))?$|^\/help(?:\s+([a-z_]+))?$’,
-    "undo_last": r’^undo\s+last\s*[.!]?$|^undo\s+last\s+(?:change|modification|edit)\s*[.!]?$’,
-    "context_add": r’^(?:add|include|include|insert)\s+(?:it|this|that|him|her|them)\s+(?:to|in|into|as)\s+(.+?)\s*[.!]?$’,
-    "summary": r’^(summarize|summary|short report|brief report|overview|compact report)\s*[.!]?$’,
-    "detailed": r’^(detailed|full|complete|comprehensive)\s+report\s*[.!]?$’,
+    "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
+    "category": r'^(?:(?:add|insert)\s+categories?\s+|categories?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
+    "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|comments)\s*:)|$|\s*$)',
+    "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*)([^,]+?)(?:\s+as\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "role": r'^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+|\w+)\s*[:,]?\s*as\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+|\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)([^,]+?)(?=\s*(?:\.|\s+tools?|services?|activit(?:y|ies)|issues?|$))',
+    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*((?:[^,.]+?(?:\s+and\s+[^,.]+?)*?))(?=\s*(?:\.|\s+supervisors?|tools?|services?|activit(?:y|ies)|issues?|$))',
+    "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:|\s+issues?\s*:|\s+times?\s*:|$|\s*$))',
+    "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*[:,]?\s*|issues?\s*(?:encountered|included)?\s*|problem\s*:?\s*|delay\s*:?\s*|injury\s*:?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|times?|weather|impression|comments)\s*:|\s+times?\s*:|$|\s*$))',
+    "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|impression|comments)\s*:)|$|\s*$)',
+    "time": r'^(?:(?:add|insert)\s+times?\s+|times?\s*[:,]?\s*|time\s+spent\s+|morning\s+time\s*|afternoon\s+time\s*|evening\s+time\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|weather|impression|comments)\s*:)|$|\s*$)',
+    "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$|\s*$)',
+    "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*(?:none|delete|clear|remove|reset)$',
+    "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
+    "delete": rf'^(?:delete|remove|none)\s+({categories_pattern})\s*(.+)?$|^(?:delete|remove)\s+(.+)\s+(?:from|in|of|at)\s+({categories_pattern})$|^({categories_pattern})\s+(?:delete|remove|none)\s*(.+)?$',
+    "delete_entire": rf'^(?:delete|remove|clear)\s+(?:entire|all)\s+(?:category|field|entries|list)?\s*[:]?\s*({list_categories_pattern})\s*[.!]?$',
+    "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+([^,]+?)(?:\s+to\s+([^,]+?))?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "help": r'^help(?:\s+on\s+([a-z_]+))?$|^\/help(?:\s+([a-z_]+))?$',
+    "undo_last": r'^undo\s+last\s*[.!]?$|^undo\s+last\s+(?:change|modification|edit)\s*[.!]?$',
+    "context_add": r'^(?:add|include|include|insert)\s+(?:it|this|that|him|her|them)\s+(?:to|in|into|as)\s+(.+?)\s*[.!]?$',
+    "summary": r'^(summarize|summary|short report|brief report|overview|compact report)\s*[.!]?$',
+    "detailed": r'^(detailed|full|complete|comprehensive)\s+report\s*[.!]?$',
 }
 
 # Extended regex patterns for more nuanced commands
 CONTEXTUAL_PATTERNS = {
-    "reference_person": r’(he|she|they|him|her|them)\b’,
-    "reference_thing": r’(it|this|that|these|those)\b’,
-    "similarity_check": r’(similar|like|same as|close to)\s+([^,.]+)’,
-    "last_mentioned": r’(last|previous|earlier|before)\s+(mentioned|added|discussed|noted)’,
+    "reference_person": r'(he|she|they|him|her|them)\b',
+    "reference_thing": r'(it|this|that|these|those)\b',
+    "similarity_check": r'(similar|like|same as|close to)\s+([^,.]+)',
+    "last_mentioned": r'(last|previous|earlier|before)\s+(mentioned|added|discussed|noted)',
 }
 
 # --- Session Management ---
@@ -184,7 +184,7 @@ def load_session() -> Dict[str, Any]:
     except json.JSONDecodeError as e:
         log_event("session_json_error", error=str(e))
         # Try to recover from corrupt JSON
-        backup_file = f"{CONFIG[‘SESSION_FILE’]}.bak"
+        backup_file = f"{CONFIG['SESSION_FILE']}.bak"
         if os.path.exists(backup_file):
             try:
                 with open(backup_file, "r") as f:
@@ -203,7 +203,7 @@ def save_session(session_data: Dict[str, Any]) -> None:
     try:
         # First create a backup of the current file if it exists
         if os.path.exists(CONFIG["SESSION_FILE"]):
-            backup_file = f"{CONFIG[‘SESSION_FILE’]}.bak"
+            backup_file = f"{CONFIG['SESSION_FILE']}.bak"
             try:
                 with open(CONFIG["SESSION_FILE"], "r") as src, open(backup_file, "w") as dst:
                     dst.write(src.read())
@@ -225,7 +225,7 @@ def save_session(session_data: Dict[str, Any]) -> None:
             
             serializable_data[chat_id] = serializable_session
         
-        # Create directory if it doesn’t exist
+        # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(CONFIG["SESSION_FILE"]), exist_ok=True)
         
         # Write data to file
@@ -415,8 +415,8 @@ def send_pdf(chat_id: str, pdf_buffer: io.BytesIO, report_type: str = "standard"
         elif report_type == "detailed":
             caption = "Here is your detailed construction site report."
             
-        files = {‘document’: (‘report.pdf’, pdf_buffer, ‘application/pdf’)}
-        data = {‘chat_id’: chat_id, ‘caption’: caption}
+        files = {'document': ('report.pdf', pdf_buffer, 'application/pdf')}
+        data = {'chat_id': chat_id, 'caption': caption}
         response = requests.post(url, files=files, data=data)
         response.raise_for_status()
         log_event("pdf_sent", chat_id=chat_id, report_type=report_type)
@@ -435,22 +435,22 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed") -> 
         
         # Create custom styles
         title_style = ParagraphStyle(
-            ‘CustomTitle’,
-            parent=styles[‘Title’],
+            'CustomTitle',
+            parent=styles['Title'],
             fontSize=16,
             spaceAfter=12
         )
         
         heading_style = ParagraphStyle(
-            ‘Heading’,
-            parent=styles[‘Heading2’],
+            'Heading',
+            parent=styles['Heading2'],
             fontSize=12,
             spaceAfter=6
         )
         
         normal_style = ParagraphStyle(
-            ‘CustomNormal’,
-            parent=styles[‘Normal’],
+            'CustomNormal',
+            parent=styles['Normal'],
             fontSize=10,
             spaceAfter=3
         )
@@ -459,9 +459,9 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed") -> 
         story = []
         
         # Add title and date
-        title = f"Construction Site Report - {report_data.get(‘site_name’) or ‘Unknown Site’}"
+        title = f"Construction Site Report - {report_data.get('site_name') or 'Unknown Site'}"
         story.append(Paragraph(title, title_style))
-        story.append(Paragraph(f"Date: {report_data.get(‘date’, datetime.now().strftime(‘%d-%m-%Y’))}", normal_style))
+        story.append(Paragraph(f"Date: {report_data.get('date', datetime.now().strftime('%d-%m-%Y'))}", normal_style))
         story.append(Spacer(1, 12))
         
         # Basic site information section
@@ -500,10 +500,10 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed") -> 
                 roles_list = []
                 for r in report_data.get("roles", []):
                     if isinstance(r, dict) and r.get("name") and r.get("role"):
-                        roles_list.append(f"{r[‘name’]} ({r[‘role’]})")
+                        roles_list.append(f"{r['name']} ({r['role']})")
                 
                 if roles_list:
-                    story.append(Paragraph(f"<b>Roles:</b> {‘, ‘.join(roles_list)}", normal_style))
+                    story.append(Paragraph(f"<b>Roles:</b> {', '.join(roles_list)}", normal_style))
             
             story.append(Spacer(1, 6))
         
@@ -566,13 +566,13 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed") -> 
             story.append(Paragraph("Conditions", heading_style))
             
             if report_data.get("time"):
-                story.append(Paragraph(f"<b>Time:</b> {report_data.get(‘time’, ‘‘)}", normal_style))
+                story.append(Paragraph(f"<b>Time:</b> {report_data.get('time', ")}", normal_style))
             
             if report_data.get("weather"):
-                story.append(Paragraph(f"<b>Weather:</b> {report_data.get(‘weather’, ‘‘)}", normal_style))
+                story.append(Paragraph(f"<b>Weather:</b> {report_data.get('weather', ")}", normal_style))
             
             if report_data.get("impression"):
-                story.append(Paragraph(f"<b>Impression:</b> {report_data.get(‘impression’, ‘‘)}", normal_style))
+                story.append(Paragraph(f"<b>Impression:</b> {report_data.get('impression', ")}", normal_style))
             
             story.append(Spacer(1, 6))
         
@@ -597,18 +597,18 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed") -> 
 def summarize_report(data: Dict[str, Any]) -> str:
     """Generate a formatted text summary of the report data"""
     try:
-        roles_str = ", ".join(f"{r.get(‘name’, ‘‘)} ({r.get(‘role’, ‘‘)})" for r in data.get("roles", []) if r.get("role"))
+        roles_str = ", ".join(f"{r.get('name', ")} ({r.get('role', ")})" for r in data.get("roles", []) if r.get("role"))
         
         lines = [
-            f"🏗️ **Site**: {data.get(‘site_name’, ‘‘) or ‘‘}",
-            f"🛠️ **Segment**: {data.get(‘segment’, ‘‘) or ‘‘}",
-            f"📋 **Category**: {data.get(‘category’, ‘‘) or ‘‘}",
-            f"🏢 **Companies**: {‘, ‘.join(c.get(‘name’, ‘‘) for c in data.get(‘companies’, []) if c.get(‘name’)) or ‘‘}",
-            f"👷 **People**: {‘, ‘.join(data.get(‘people’, []) or [])}",
+            f"🏗️ **Site**: {data.get('site_name', ") or "}",
+            f"🛠️ **Segment**: {data.get('segment', ") or "}",
+            f"📋 **Category**: {data.get('category', ") or "}",
+            f"🏢 **Companies**: {', '.join(c.get('name', ") for c in data.get('companies', []) if c.get('name')) or "}",
+            f"👷 **People**: {', '.join(data.get('people', []) or [])}",
             f"🎭 **Roles**: {roles_str}",
-            f"🔧 **Services**: {‘, ‘.join(s.get(‘task’, ‘‘) for s in data.get(‘services’, []) if s.get(‘task’)) or ‘‘}",
-            f"🛠️ **Tools**: {‘, ‘.join(t.get(‘item’, ‘‘) for t in data.get(‘tools’, []) if t.get(‘item’)) or ‘‘}",
-            f"📅 **Activities**: {‘, ‘.join(data.get(‘activities’, []) or [])}",
+            f"🔧 **Services**: {', '.join(s.get('task', ") for s in data.get('services', []) if s.get('task')) or "}",
+            f"🛠️ **Tools**: {', '.join(t.get('item', ") for t in data.get('tools', []) if t.get('item')) or "}",
+            f"📅 **Activities**: {', '.join(data.get('activities', []) or [])}",
             "⚠️ **Issues**:"
         ]
         
@@ -625,11 +625,11 @@ def summarize_report(data: Dict[str, Any]) -> str:
             lines.append("  • None reported")
         
         lines.extend([
-            f"⏰ **Time**: {data.get(‘time’, ‘‘) or ‘‘}",
-            f"🌦️ **Weather**: {data.get(‘weather’, ‘‘) or ‘‘}",
-            f"😊 **Impression**: {data.get(‘impression’, ‘‘) or ‘‘}",
-            f"💬 **Comments**: {data.get(‘comments’, ‘‘) or ‘‘}",
-            f"📆 **Date**: {data.get(‘date’, ‘‘) or ‘‘}"
+            f"⏰ **Time**: {data.get('time', ") or "}",
+            f"🌦️ **Weather**: {data.get('weather', ") or "}",
+            f"😊 **Impression**: {data.get('impression', ") or "}",
+            f"💬 **Comments**: {data.get('comments', ") or "}",
+            f"📆 **Date**: {data.get('date', ") or "}"
         ])
         
         # Filter out empty lines to make the report cleaner
@@ -648,21 +648,21 @@ def clean_value(value: Optional[str], field: str) -> Optional[str]:
         return value
     
     # First remove common command prefixes
-    cleaned = re.sub(r’^(?:add\s+|insert\s+|from\s+|correct\s+spelling\s+|spell\s+|delete\s+|remove\s+|clear\s+)’, ‘‘, value.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r'^(?:add\s+|insert\s+|from\s+|correct\s+spelling\s+|spell\s+|delete\s+|remove\s+|clear\s+)', ", value.strip(), flags=re.IGNORECASE)
     
     # Standardize some common terms
     if field == "activities":
         # Fix common typos and terminology
-        cleaned = cleaned.replace(‘tone’, ‘stone’)
+        cleaned = cleaned.replace('tone', 'stone')
     elif field == "weather":
         # Standardize weather terms
         for term, replacement in [
-            (r’\bsun\b’, ‘sunny’),
-            (r’\brain\b’, ‘rainy’),
-            (r’\bcloud\b’, ‘cloudy’),
-            (r’\bfog\b’, ‘foggy’),
-            (r’\bsnow\b’, ‘snowy’),
-            (r’\bwind\b’, ‘windy’)
+            (r'\bsun\b', 'sunny'),
+            (r'\brain\b', 'rainy'),
+            (r'\bcloud\b', 'cloudy'),
+            (r'\bfog\b', 'foggy'),
+            (r'\bsnow\b', 'snowy'),
+            (r'\bwind\b', 'windy')
         ]:
             cleaned = re.sub(term, replacement, cleaned, flags=re.IGNORECASE)
     
@@ -686,7 +686,7 @@ def enrich_date(data: Dict[str, Any]) -> Dict[str, Any]:
         else:
             # Try to handle various date formats
             try:
-                # Check if it’s already in the right format
+                # Check if it's already in the right format
                 input_date = datetime.strptime(data["date"], "%d-%m-%Y")
                 if input_date > datetime.now():
                     data["date"] = today
@@ -700,7 +700,7 @@ def enrich_date(data: Dict[str, Any]) -> Dict[str, Any]:
                     except ValueError:
                         continue
                 else:
-                    # If no format matched, use today’s date
+                    # If no format matched, use today's date
                     data["date"] = today
         
         log_event("date_enriched", date=data["date"])
@@ -800,7 +800,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
     try:
         log_event("extract_fields", input=text)
         result: Dict[str, Any] = {}
-        normalized_text = re.sub(r’[.!?]\s*$’, ‘‘, text.strip())
+        normalized_text = re.sub(r'[.!?]\s*$', ", text.strip())
 
         # Check for system commands first
         reset_match = re.match(FIELD_PATTERNS["reset"], normalized_text, re.IGNORECASE)
@@ -841,7 +841,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
             return {"detailed": True}
 
         # Split the text into commands
-        commands = [cmd.strip() for cmd in re.split(r’,\s*(?=(?:[^:]*:)|(?:add|insert)\s+(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments))|(?<!\w)\.\s*(?=[A-Z])’, text) if cmd.strip()]
+        commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)|(?:add|insert)\s+(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments))|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
         log_event("commands_split", command_count=len(commands))
         
         processed_result = {
@@ -932,7 +932,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 return {"reset": True}
                 
             for key, value in cmd_result.items():
-                # Skip fields we’ve already seen (except for list fields)
+                # Skip fields we've already seen (except for list fields)
                 if key in seen_fields and key not in LIST_FIELDS:
                     continue
                     
@@ -964,7 +964,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
                     existing_items = [item["item"] for item in result.get(field, []) 
                                      if isinstance(item, dict) and "item" in item]
                 elif field == "roles":
-                    existing_items = [f"{item[‘name’]} ({item[‘role’]})" for item in result.get(field, []) 
+                    existing_items = [f"{item['name']} ({item['role']})" for item in result.get(field, []) 
                                      if isinstance(item, dict) and "name" in item and "role" in item]
                 elif field in ["people", "activities"]:
                     existing_items = result.get(field, [])
@@ -986,8 +986,8 @@ def extract_fields(text: str) -> Dict[str, Any]:
                                                               if isinstance(i, str)]
                 elif field == "roles":
                     result[field] = processed_result[field] + [
-                        {"name": i.split(‘ (‘)[0], "role": i.split(‘ (‘)[1].rstrip(‘)’)} 
-                        for i in existing_items if isinstance(i, str) and ‘ (‘ in i
+                        {"name": i.split(' (')[0], "role": i.split(' (')[1].rstrip(')')} 
+                        for i in existing_items if isinstance(i, str) and ' (' in i
                     ]
                 elif field in ["people", "activities"]:
                     result[field] = processed_result[field] + existing_items
@@ -1014,7 +1014,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
     """Extract a single command with enhanced parsing and error handling"""
     try:
         result: Dict[str, Any] = {}
-        normalized_text = re.sub(r’[.!?]\s*$’, ‘‘, text.strip())
+        normalized_text = re.sub(r'[.!?]\s*$', ", text.strip())
         log_event("extract_single_command", input=normalized_text)
 
         # Handle deletion commands
@@ -1123,7 +1123,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                 log_event("field_matched", raw_field=raw_field, mapped_field=field)
                 
                 # Skip site_name matches that look like commands
-                if field == "site_name" and re.search(r’\b(add|insert|delete|remove|correct|adjust|update|spell|none|as|role|new|reset)\b’, normalized_text.lower()):
+                if field == "site_name" and re.search(r'\b(add|insert|delete|remove|correct|adjust|update|spell|none|as|role|new|reset)\b', normalized_text.lower()):
                     log_event("skipped_site_name", reason="command-like input")
                     continue
                     
@@ -1132,7 +1132,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     name = clean_value(match.group(1), field)
                     role = clean_value(match.group(2), field) if match.group(2) else None
                     
-                    # Skip if it’s just "supervisor"
+                    # Skip if it's just "supervisor"
                     if name.lower() == "supervisor":
                         log_event("skipped_people_supervisor", reason="supervisor is a role")
                         continue
@@ -1151,7 +1151,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     name = clean_value(match.group(1) or match.group(3), field)
                     role = (match.group(2) or match.group(4)).title()
                     
-                    # Skip if it’s just "supervisor"
+                    # Skip if it's just "supervisor"
                     if name.lower() == "supervisor":
                         log_event("skipped_role_supervisor", reason="supervisor is a role")
                         continue
@@ -1163,7 +1163,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                 # Handle supervisor field
                 elif field == "supervisor":
                     value = clean_value(match.group(1), field)
-                    supervisor_names = [name.strip() for name in re.split(r’\s+and\s+|,’, value) if name.strip()]
+                    supervisor_names = [name.strip() for name in re.split(r'\s+and\s+|,', value) if name.strip()]
                     result["roles"] = [{"name": name, "role": "Supervisor"} for name in supervisor_names]
                     result["people"] = supervisor_names
                     log_event("extracted_field", field="roles", value=supervisor_names)
@@ -1171,7 +1171,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                 # Handle company field
                 elif field == "companies":
                     captured = clean_value(match.group(2) if match.group(2) else match.group(1), field)
-                    company_names = [name.strip() for name in re.split(r’\s+and\s+|,’, captured) if name.strip()]
+                    company_names = [name.strip() for name in re.split(r'\s+and\s+|,', captured) if name.strip()]
                     result["companies"] = [{"name": name} for name in company_names]
                     log_event("extracted_field", field="companies", value=company_names)
                 
@@ -1281,18 +1281,18 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                         elif person:
                             data["people"] = [person]
             
-            # If GPT couldn’t extract anything, try some fallbacks
+            # If GPT couldn't extract anything, try some fallbacks
             if not data and normalized_text.strip():
-                issue_keywords = r’\b(issue|issues|problem|problems|delay|fault|error|injury)\b’
-                activity_keywords = r’\b(work\s+was\s+done|activity|activities|task|progress|construction|building|laying|setting|wiring|installation|scaffolding)\b’
-                location_keywords = r’\b(at|in|on)\b’
+                issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
+                activity_keywords = r'\b(work\s+was\s+done|activity|activities|task|progress|construction|building|laying|setting|wiring|installation|scaffolding)\b'
+                location_keywords = r'\b(at|in|on)\b'
                 
                 if re.search(issue_keywords, normalized_text.lower()):
                     cleaned_text = clean_value(normalized_text.strip(), "issues")
                     data = {"issues": [{"description": cleaned_text}]}
                     log_event("fallback_issue", data=data)
                 elif re.search(activity_keywords, normalized_text.lower()) and re.search(location_keywords, normalized_text.lower()):
-                    parts = re.split(r’\b(at|in|on)\b’, normalized_text, flags=re.IGNORECASE)
+                    parts = re.split(r'\b(at|in|on)\b', normalized_text, flags=re.IGNORECASE)
                     location = ", ".join(clean_value(part.strip().title(), "site_name") 
                                        for part in parts[2::2] if part.strip())
                     activity = clean_value(parts[0].strip(), "activities")
@@ -1317,7 +1317,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
             
             # Simple fallback when GPT fails
             if normalized_text.strip():
-                issue_keywords = r’\b(issue|issues|problem|problems|delay|fault|error|injury)\b’
+                issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
                 
                 if re.search(issue_keywords, normalized_text.lower()):
                     cleaned_text = clean_value(normalized_text.strip(), "issues")
@@ -1729,7 +1729,7 @@ def handle_reset(chat_id: str, session: Dict[str, Any]) -> None:
     }
     save_session(session_data)
     summary = summarize_report(session["structured_data"])
-    send_message(chat_id, f"**Report reset**\n\n{summary}\n\nSpeak or type your first field (e.g., ‘add site Downtown Project’).")
+    send_message(chat_id, f"**Report reset**\n\n{summary}\n\nSpeak or type your first field (e.g., 'add site Downtown Project').")
 
 @command("undo")
 def handle_undo(chat_id: str, session: Dict[str, Any]) -> None:
@@ -1795,7 +1795,7 @@ def handle_summary(chat_id: str, session: Dict[str, Any]) -> None:
         if send_pdf(chat_id, pdf_buffer, "summary"):
             send_message(chat_id, "Summary report format set. PDF summary report sent successfully!")
         else:
-            send_message(chat_id, "⚠️ Summary report format set, but failed to send PDF. Type ‘export’ to try again.")
+            send_message(chat_id, "⚠️ Summary report format set, but failed to send PDF. Type 'export' to try again.")
     else:
         send_message(chat_id, "Summary report format set for future exports.")
 
@@ -1811,7 +1811,7 @@ def handle_detailed(chat_id: str, session: Dict[str, Any]) -> None:
         if send_pdf(chat_id, pdf_buffer, "detailed"):
             send_message(chat_id, "Detailed report format set. PDF detailed report sent successfully!")
         else:
-            send_message(chat_id, "⚠️ Detailed report format set, but failed to send PDF. Type ‘export’ to try again.")
+            send_message(chat_id, "⚠️ Detailed report format set, but failed to send PDF. Type 'export' to try again.")
     else:
         send_message(chat_id, "Detailed report format set for future exports.")
 
@@ -1823,23 +1823,23 @@ def handle_help(chat_id: str, session: Dict[str, Any], topic: str = "general") -
             "**Construction Site Report Bot Help**\n\n"
             "This bot helps you create structured construction site reports.\n\n"
             "**Basic Commands:**\n"
-            "• Add information: ‘add site Central Plaza’\n"
-            "• Delete information: ‘delete John from people’ or ‘tools: none’\n"
-            "• Correct information: ‘correct site Central Plaza to Downtown Project’\n"
-            "• Export report: ‘export pdf’\n"
-            "• Reset report: ‘reset’ or ‘new report’\n"
-            "• Undo changes: ‘undo’ or ‘undo last’\n"
-            "• Get status: ‘status’\n\n"
-            "For help on specific topics, type ‘help [topic]’ where topic can be: fields, commands, adding, deleting, examples"
+            "• Add information: 'add site Central Plaza'\n"
+            "• Delete information: 'delete John from people' or 'tools: none'\n"
+            "• Correct information: 'correct site Central Plaza to Downtown Project'\n"
+            "• Export report: 'export pdf'\n"
+            "• Reset report: 'reset' or 'new report'\n"
+            "• Undo changes: 'undo' or 'undo last'\n"
+            "• Get status: 'status'\n\n"
+            "For help on specific topics, type 'help [topic]' where topic can be: fields, commands, adding, deleting, examples"
         ),
         "fields": (
             "**Available Fields**\n\n"
-            "• site_name - Project location (e.g., ‘Downtown Project’)\n"
+            "• site_name - Project location (e.g., 'Downtown Project')\n"
             "• segment - Section number/identifier\n"
             "• category - Project category\n"
             "• companies - Companies involved\n"
             "• people - People on site\n"
-            "• roles - Person’s roles on site\n"
+            "• roles - Person's roles on site\n"
             "• tools - Equipment used\n"
             "• services - Services provided\n"
             "• activities - Work performed\n"
@@ -1864,44 +1864,44 @@ def handle_help(chat_id: str, session: Dict[str, Any], topic: str = "general") -
         "adding": (
             "**Adding Information**\n\n"
             "Add field information using these formats:\n\n"
-            "• ‘add site Downtown Project’\n"
-            "• ‘site: Downtown Project’\n"
-            "• ‘companies: BuildRight AG, ElectricFlow GmbH’\n"
-            "• ‘people: Anna Keller, John Smith’\n"
-            "• ‘Anna Keller as Supervisor’\n"
-            "• ‘tools: mobile crane, welding equipment’\n"
-            "• ‘activities: laying foundations, setting up scaffolding’\n"
-            "• ‘issues: power outage at 10 AM’\n"
-            "• ‘weather: cloudy with intermittent rain’\n"
-            "• ‘comments: ensure safety protocols are reinforced’"
+            "• 'add site Downtown Project'\n"
+            "• 'site: Downtown Project'\n"
+            "• 'companies: BuildRight AG, ElectricFlow GmbH'\n"
+            "• 'people: Anna Keller, John Smith'\n"
+            "• 'Anna Keller as Supervisor'\n"
+            "• 'tools: mobile crane, welding equipment'\n"
+            "• 'activities: laying foundations, setting up scaffolding'\n"
+            "• 'issues: power outage at 10 AM'\n"
+            "• 'weather: cloudy with intermittent rain'\n"
+            "• 'comments: ensure safety protocols are reinforced'"
         ),
         "deleting": (
             "**Deleting Information**\n\n"
             "Delete field information using these formats:\n\n"
-            "• Clear a field entirely: ‘tools: none’\n"
-            "• Delete specific item: ‘delete mobile crane from tools’\n"
-            "• Remove a person: ‘delete Anna from people’\n"
-            "• Alternative syntax: ‘delete tools mobile crane’\n"
-            "• Alternative syntax: ‘tools delete mobile crane’\n"
-            "• Clear entire category: ‘delete entire category tools’\n\n"
+            "• Clear a field entirely: 'tools: none'\n"
+            "• Delete specific item: 'delete mobile crane from tools'\n"
+            "• Remove a person: 'delete Anna from people'\n"
+            "• Alternative syntax: 'delete tools mobile crane'\n"
+            "• Alternative syntax: 'tools delete mobile crane'\n"
+            "• Clear entire category: 'delete entire category tools'\n\n"
             "When removing a person, their role will also be removed automatically."
         ),
         "examples": (
             "**Example Report Creation**\n\n"
-            "1. ‘site: Central Plaza’\n"
-            "2. ‘segment: 5’\n"
-            "3. ‘companies: BuildRight AG, ElectricFlow GmbH’\n"
-            "4. ‘Anna Keller as Supervisor’\n"
-            "5. ‘John Smith as Worker’\n"
-            "6. ‘tools: mobile crane, welding equipment’\n"
-            "7. ‘services: electrical wiring, HVAC installation’\n"
-            "8. ‘activities: laying foundations, setting up scaffolding’\n"
-            "9. ‘issues: power outage at 10 AM caused a 2-hour delay’\n"
-            "10. ‘weather: cloudy with rain’\n"
-            "11. ‘time: full day’\n"
-            "12. ‘impression: productive despite setbacks’\n"
-            "13. ‘comments: ensure safety protocols are reinforced’\n"
-            "14. ‘export pdf’ to generate the report"
+            "1. 'site: Central Plaza'\n"
+            "2. 'segment: 5'\n"
+            "3. 'companies: BuildRight AG, ElectricFlow GmbH'\n"
+            "4. 'Anna Keller as Supervisor'\n"
+            "5. 'John Smith as Worker'\n"
+            "6. 'tools: mobile crane, welding equipment'\n"
+            "7. 'services: electrical wiring, HVAC installation'\n"
+            "8. 'activities: laying foundations, setting up scaffolding'\n"
+            "9. 'issues: power outage at 10 AM caused a 2-hour delay'\n"
+            "10. 'weather: cloudy with rain'\n"
+            "11. 'time: full day'\n"
+            "12. 'impression: productive despite setbacks'\n"
+            "13. 'comments: ensure safety protocols are reinforced'\n"
+            "14. 'export pdf' to generate the report"
         )
     }
     
@@ -1928,26 +1928,26 @@ def suggest_corrections(input_text: str) -> Optional[str]:
     """Suggest corrections for common errors in commands"""
     # Common command suggestions
     command_suggestions = {
-        r’\b(delet|remov|dlt)\b’: "delete",
-        r’\b(statu|stat)\b’: "status",
-        r’\b(undoe|undo last)\b’: "undo",
-        r’\badd (peopl|peole|persons)\b’: "add people",
-        r’\badd (compan|comp)\b’: "add companies",
-        r’\b(rest|rst|clear all)\b’: "reset",
-        r’\b(exprt|export pdf|make pdf|generate pdf)\b’: "export",
-        r’\b(site nam|site name|location)\b’: "site",
+        r'\b(delet|remov|dlt)\b': "delete",
+        r'\b(statu|stat)\b': "status",
+        r'\b(undoe|undo last)\b': "undo",
+        r'\badd (peopl|peole|persons)\b': "add people",
+        r'\badd (compan|comp)\b': "add companies",
+        r'\b(rest|rst|clear all)\b': "reset",
+        r'\b(exprt|export pdf|make pdf|generate pdf)\b': "export",
+        r'\b(site nam|site name|location)\b': "site",
     }
     
     # Check if input closely matches any known command
     for pattern, suggestion in command_suggestions.items():
         if re.search(pattern, input_text, re.IGNORECASE):
-            return f"Did you mean ‘{suggestion}’?"
+            return f"Did you mean '{suggestion}'?"
     
     # Check if this looks like a field command but is malformed
-    field_pattern = r’\b(add|site|segment|category|company|people|role|tool|service|activity|issue|time|weather|impression|comment)\b’
+    field_pattern = r'\b(add|site|segment|category|company|people|role|tool|service|activity|issue|time|weather|impression|comment)\b'
     if re.search(field_pattern, input_text, re.IGNORECASE):
         # Check if the syntax is likely incorrect
-        if ":" not in input_text and not re.search(r’\s+as\s+’, input_text, re.IGNORECASE):
+        if ":" not in input_text and not re.search(r'\s+as\s+', input_text, re.IGNORECASE):
             field_match = re.search(field_pattern, input_text, re.IGNORECASE)
             if field_match:
                 field = field_match.group(1).lower()
@@ -1965,7 +1965,7 @@ def suggest_corrections(input_text: str) -> Optional[str]:
                     field = "issues"
                 
                 example = f"{field}: " if not input_text.startswith("add") else f"add {field} "
-                return f"Try using ‘{example}[value]’ format"
+                return f"Try using '{example}[value]' format"
     
     # If nothing matches, return None
     return None
@@ -2026,7 +2026,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
     try:
         normalized_text = text.strip().lower() if text else ""
         if not normalized_text:
-            send_message(chat_id, "⚠️ Empty input. Please provide a command (e.g., ‘add site Downtown Project’).")
+            send_message(chat_id, "⚠️ Empty input. Please provide a command (e.g., 'add site Downtown Project').")
             return "ok", 200
 
         # Process contextual references
@@ -2043,7 +2043,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             sess["awaiting_reset_confirmation"] = True
             sess["last_interaction"] = current_time
             save_session(session_data)
-            send_message(chat_id, "It’s been a while! Would you like to reset the report or continue with the existing one? Reply ‘yes’ to reset or ‘no’ to continue.")
+            send_message(chat_id, "It's been a while! Would you like to reset the report or continue with the existing one? Reply 'yes' to reset or 'no' to continue.")
             return "ok", 200
 
         sess["last_interaction"] = current_time
@@ -2065,7 +2065,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             sess["awaiting_reset_confirmation"] = True
             sess["pending_input"] = text
             save_session(session_data)
-            send_message(chat_id, "Are you sure you want to reset the report? Reply ‘yes’ or ‘no’.")
+            send_message(chat_id, "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
             return "ok", 200
 
         # Handle clear command (field: none)
@@ -2076,7 +2076,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             
             if not field:
                 log_event("clear_command_error", text=text, error="Invalid field")
-                send_message(chat_id, f"⚠️ Invalid clear command: ‘{text}’. Try ‘tools: none’ or ‘issues: none’.")
+                send_message(chat_id, f"⚠️ Invalid clear command: '{text}'. Try 'tools: none' or 'issues: none'.")
                 return "ok", 200
                 
             # Save the original value for undo last
@@ -2105,7 +2105,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             sess["awaiting_reset_confirmation"] = True
             sess["pending_input"] = text
             save_session(session_data)
-            send_message(chat_id, "Are you sure you want to reset the report? Reply ‘yes’ or ‘no’.")
+            send_message(chat_id, "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
             return "ok", 200
             
         # Handle help command
@@ -2134,7 +2134,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             value = extracted["correct_prompt"]["value"]
             sess["awaiting_spelling_correction"] = (field, value)
             save_session(session_data)
-            send_message(chat_id, f"Please provide the correct spelling for ‘{value}’ in {field}.")
+            send_message(chat_id, f"Please provide the correct spelling for '{value}' in {field}.")
             return "ok", 200
             
         # Handle delete commands
@@ -2200,7 +2200,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
                         field = "services"
                         data_field = "task"
                         
-                    # Make sure we’re working with the services field if needed
+                    # Make sure we're working with the services field if needed
                     if field == "services" and "service" in sess["structured_data"] and "services" not in sess["structured_data"]:
                         sess["structured_data"]["services"] = sess["structured_data"].pop("service")
                     
@@ -2254,7 +2254,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             last_old = extracted["correct"][-1]["old"]
             last_new = extracted["correct"][-1]["new"]
             
-            send_message(chat_id, f"Corrected {last_field} from ‘{last_old}’ to ‘{last_new}’.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            send_message(chat_id, f"Corrected {last_field} from '{last_old}' to '{last_new}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
             return "ok", 200
             
         # Handle contextual add commands
@@ -2299,10 +2299,10 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
                 save_session(session_data)
                 
                 tpl = summarize_report(sess["structured_data"])
-                send_message(chat_id, f"Added ‘{value_to_add}’ to {target_field}.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+                send_message(chat_id, f"Added '{value_to_add}' to {target_field}.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
                 return "ok", 200
             else:
-                send_message(chat_id, f"I couldn’t find a relevant item to add to {target_field}. Please specify what you want to add.")
+                send_message(chat_id, f"I couldn't find a relevant item to add to {target_field}. Please specify what you want to add.")
                 return "ok", 200
                 
         # Check if any fields were extracted
@@ -2312,9 +2312,9 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             # Try to suggest corrections
             suggestion = suggest_corrections(text)
             if suggestion:
-                send_message(chat_id, f"⚠️ Unrecognized input: ‘{text}’. {suggestion}")
+                send_message(chat_id, f"⚠️ Unrecognized input: '{text}'. {suggestion}")
             else:
-                send_message(chat_id, f"⚠️ Unrecognized input: ‘{text}’. Try ‘add site Downtown Project’, ‘add issue power outage’, or ‘help’ for assistance.")
+                send_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Try 'add site Downtown Project', 'add issue power outage', or 'help' for assistance.")
                 
             return "ok", 200
 
@@ -2350,7 +2350,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
         
     except Exception as e:
         log_event("handle_command_error", error=str(e))
-        send_message(chat_id, "⚠️ An error occurred while processing your command. Please try again or type ‘help’ for assistance.")
+        send_message(chat_id, "⚠️ An error occurred while processing your command. Please try again or type 'help' for assistance.")
         return "error", 500
 
 @app.route("/webhook", methods=["POST"])
@@ -2388,7 +2388,7 @@ def webhook() -> tuple[str, int]:
                 "report_format": "detailed"
             }
             log_event("session_created", chat_id=chat_id)
-            send_message(chat_id, "👋 Welcome to the Construction Site Report Bot!\n\nI’ll help you create detailed construction site reports easily. Start by adding information about your site (e.g., ‘add site Downtown Project’).\n\nType ‘help’ for more information on available commands.")
+            send_message(chat_id, "👋 Welcome to the Construction Site Report Bot!\n\nI'll help you create detailed construction site reports easily. Start by adding information about your site (e.g., 'add site Downtown Project').\n\nType 'help' for more information on available commands.")
             
         sess = session_data[chat_id]
 
@@ -2407,7 +2407,7 @@ def webhook() -> tuple[str, int]:
         if "voice" in msg:
             text, confidence = transcribe_voice(msg["voice"]["file_id"])
             if not text:
-                send_message(chat_id, "⚠️ Couldn’t understand the audio. Please speak clearly (e.g., ‘add site Downtown Project’) or type your command.")
+                send_message(chat_id, "⚠️ Couldn't understand the audio. Please speak clearly (e.g., 'add site Downtown Project') or type your command.")
                 return "ok", 200
                 
             log_event("transcribed_voice", text=text, confidence=confidence)
@@ -2418,12 +2418,12 @@ def webhook() -> tuple[str, int]:
                 sess["awaiting_voice_confirmation"] = True
                 sess["last_interaction"] = time()
                 save_session(session_data)
-                send_message(chat_id, f"I heard:\n\n\"{text}\"\n\nIs this correct? Reply ‘yes’ to proceed or ‘no’ to try again.")
+                send_message(chat_id, f"I heard:\n\n\"{text}\"\n\nIs this correct? Reply 'yes' to proceed or 'no' to try again.")
                 return "ok", 200
 
         # Handle reset confirmation
         if sess.get("awaiting_reset_confirmation", False):
-            normalized_text = re.sub(r’[.!?]\s*$’, ‘‘, text.strip()).lower()
+            normalized_text = re.sub(r'[.!?]\s*$', ", text.strip()).lower()
             log_event("reset_confirmation", text=normalized_text)
             
             if normalized_text in ("yes", "new", "new report", "y"):
@@ -2442,7 +2442,7 @@ def webhook() -> tuple[str, int]:
                 save_session(session_data)
                 
                 tpl = summarize_report(sess["structured_data"])
-                send_message(chat_id, f"**Starting a fresh report**\n\n{tpl}\n\nSpeak or type your first field (e.g., ‘add site Downtown Project’).")
+                send_message(chat_id, f"**Starting a fresh report**\n\n{tpl}\n\nSpeak or type your first field (e.g., 'add site Downtown Project').")
                 return "ok", 200
                 
             elif normalized_text in ("no", "existing", "continue", "n"):
@@ -2453,7 +2453,7 @@ def webhook() -> tuple[str, int]:
                 sess["last_interaction"] = time()
                 save_session(session_data)
                 
-                # Only process the preserved input if it’s not a reset command itself
+                # Only process the preserved input if it's not a reset command itself
                 preserved_normalized = preserved_input.strip().lower() if preserved_input else ""
                 if preserved_normalized and preserved_normalized not in ("new", "new report", "reset", "reset report", "/new"):
                     log_event("proceeding_with_existing_input", input=preserved_input)
@@ -2465,12 +2465,12 @@ def webhook() -> tuple[str, int]:
                     return "ok", 200
             else:
                 # Unclear response
-                send_message(chat_id, "Please clearly indicate if you want to reset the report. Reply ‘yes’ to reset or ‘no’ to continue with the existing report.")
+                send_message(chat_id, "Please clearly indicate if you want to reset the report. Reply 'yes' to reset or 'no' to continue with the existing report.")
                 return "ok", 200
 
         # Handle voice transcription confirmation
         if sess.get("awaiting_voice_confirmation", False):
-            normalized_text = re.sub(r’[.!?]\s*$’, ‘‘, text.strip()).lower()
+            normalized_text = re.sub(r'[.!?]\s*$', ", text.strip()).lower()
             
             if normalized_text in ("yes", "y", "correct", "proceed"):
                 # Transcription is correct, process the command
@@ -2493,7 +2493,7 @@ def webhook() -> tuple[str, int]:
                 
             else:
                 # Unclear response
-                send_message(chat_id, "Please clearly indicate if the transcription is correct. Reply ‘yes’ to proceed or ‘no’ to try again.")
+                send_message(chat_id, "Please clearly indicate if the transcription is correct. Reply 'yes' to proceed or 'no' to try again.")
                 return "ok", 200
 
         # Handle spelling correction
@@ -2507,7 +2507,7 @@ def webhook() -> tuple[str, int]:
             if string_similarity(new_value.lower(), old_value.lower()) > 0.95:
                 sess["awaiting_spelling_correction"] = None
                 save_session(session_data)
-                send_message(chat_id, f"⚠️ New value ‘{new_value}’ is too similar to the old value ‘{old_value}’. Please provide a different spelling or type ‘cancel’ to abort the correction.")
+                send_message(chat_id, f"⚠️ New value '{new_value}' is too similar to the old value '{old_value}'. Please provide a different spelling or type 'cancel' to abort the correction.")
                 return "ok", 200
                 
             # Cancel the correction if requested
@@ -2532,7 +2532,7 @@ def webhook() -> tuple[str, int]:
                 field = "services"
                 data_field = "task"
                 
-                # Make sure we’re working with the services field
+                # Make sure we're working with the services field
                 if "service" in sess["structured_data"] and "services" not in sess["structured_data"]:
                     sess["structured_data"]["services"] = sess["structured_data"].pop("service")
                     
@@ -2557,7 +2557,7 @@ def webhook() -> tuple[str, int]:
                     if isinstance(item, dict)
                 ]
                 
-                # Add to people list if it’s a role
+                # Add to people list if it's a role
                 if field == "roles" and new_value not in sess["structured_data"].get("people", []):
                     sess["structured_data"].setdefault("people", []).append(new_value)
                     
@@ -2592,7 +2592,7 @@ def webhook() -> tuple[str, int]:
                 
             save_session(session_data)
             tpl = summarize_report(sess["structured_data"])
-            send_message(chat_id, f"Corrected {field} from ‘{old_value}’ to ‘{new_value}’.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
             return "ok", 200
 
         # Process regular command
@@ -2602,7 +2602,7 @@ def webhook() -> tuple[str, int]:
         log_event("webhook_error", error=str(e))
         try:
             chat_id = str(data["message"]["chat"]["id"]) if data and "message" in data and "chat" in data["message"] else "unknown"
-            send_message(chat_id, "⚠️ An unexpected error occurred. Please try again or type ‘help’ for assistance.")
+            send_message(chat_id, "⚠️ An unexpected error occurred. Please try again or type 'help' for assistance.")
         except Exception:
             pass
         return "error", 500
