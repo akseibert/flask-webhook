@@ -88,7 +88,7 @@ FIELD_PATTERNS = {
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*)([^,]+?)(?:\s+as\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "role": r'^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+|\w+)\s*[:,]?\s*as\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+|\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "supervisor": r'^(?:i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*$)(?:\s+by\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*([^,]+?)(?=\s*(?:,|\.|$|\s+(?:and|with|followed|supervisor|tool|service|activity|issue|people|role|time|weather|impression|comment)\b))',
+    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:|\s+issues?\s*:|\s+times?\s*:|$|\s*$))',
@@ -152,7 +152,7 @@ def blank_report() -> Dict[str, Any]:
 # --- OpenAI Initialization ---
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- Updated GPT Prompt ---
+# --- GPT Prompt ---
 GPT_PROMPT = """
 You are an AI assistant extracting a construction site report from user input. Extract all explicitly mentioned fields and return them in JSON format. Process the entire input as a single unit, splitting on commas or periods only when fields are clearly separated by keywords. Map natural language phrases and standardized commands (add, insert, delete, correct, adjust, spell, remove) to fields accurately, prioritizing specific fields over comments or site_name. Do not treat reset commands ("new", "new report", "reset", "reset report", "/new") as comments or fields; return {} for these. Handle "none" inputs (e.g., "Tools: none") as clearing the respective field, and vague inputs (e.g., "Activities: many") by adding them and noting clarification needed.
 
@@ -160,7 +160,7 @@ Fields to extract (omit if not present):
 - site_name: string (e.g., "Downtown Project")
 - segment: string (e.g., "5")
 - category: string (e.g., "Bestand")
-- company: list of objects with "name" (e.g., [{"name": "Acme Corp"}]). Company names are typically proper nouns (e.g., "BuildRight AG", "ElectricFlow GmbH"), often ending with "Corp", "Inc", "LLC", "AG", "GmbH", etc., and should not include full sentences, verbs, or descriptions like "involved were" or "supervisors were". Stop extracting at conjunctions (e.g., "and", "with") or other field keywords unless clearly part of the company name.
+- company: list of objects with "name" (e.g., [{"name": "Acme Corp"}])
 - people: list of strings (e.g., ["Anna", "Tobias"])
 - roles: list of objects with "name" and "role" (e.g., [{"name": "Anna", "role": "Supervisor"}])
 - tools: list of objects with "item" (e.g., [{"item": "Crane"}])
@@ -189,9 +189,7 @@ Rules:
 - For site_name: Recognize location-like phrases following "at", "in", "on" (e.g., "Work was done at East Wing" -> "site_name": "East Wing", "activities": ["Work was done"]).
 - For people and roles: Recognize "add [name] as [role]" (e.g., "add Anna as engineer" -> "people": ["Anna"], "roles": [{"name": "Anna", "role": "Engineer"}]). "Roles supervisor" assigns "Supervisor" to the user.
 - For tools and service: Recognize "Tool: [item]", "Service: [task]", or commands like "add service abc".
-- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Extract only the company name (e.g., "BuildRight AG") and not subsequent text unless it’s explicitly part of the name. Handle "delete company <name>" to remove, and "correct company <old> to <new>" to update. Examples:
-  - "Companies: BuildRight AG and ElectricFlow GmbH" -> "company": [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}]
-  - "Company involved was BuildRight AG, supervisors were Anna" -> "company": [{"name": "BuildRight AG"}], "roles": [{"name": "Anna", "role": "Supervisor"}]
+- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Handle "delete company <name>" to remove the company. Handle "correct company <old> to <new>" to update the company name.
 - Comments should only include non-field-specific notes.
 - Return {} for reset commands or irrelevant inputs.
 - Case-insensitive matching.
@@ -506,16 +504,16 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                 result.setdefault("delete", []).append({"field": "roles", "value": field})
                 log_event("delete_role_command", field="roles", value=field)
             elif mapped_field == "people":
-                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
+                result.setdefault(“delete”, []).append({“field”: mapped_field, “value”: value}) if value else {"delete": True}
                 log_event("delete_people_command", field=mapped_field, value=value)
             elif mapped_field == "person":
                 result["people"] = {"delete": value}
                 log_event("delete_person_command", field="people", value=value)
             elif mapped_field in ["company", "roles", "tools", "service", "activities", "issues"]:
-                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
+                result.setdefault(“delete”, []).append({“field”: mapped_field, “value”: value}) if value else {"delete": True}
                 log_event("delete_list_command", field=mapped_field, value=value)
             elif mapped_field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
-                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
+                result.setdefault(“delete”, []).append({“field”: mapped_field, “value”: value}) if value else {"delete": True}
                 log_event("delete_scalar_command", field=mapped_field, value=value)
             else:
                 log_event("unrecognized_delete_field", field=field)
@@ -587,15 +585,8 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     if re.match(r'^(?:delete|remove|add|insert|correct|adjust|update|spell)\b', name.lower()):
                         log_event("skipped_company", reason="command-like name", value=name)
                         continue
-                    # Validate company name
-                    if len(name.split()) > 3 or any(word in name.lower() for word in ["was", "were", "involved", "supervisor", "tool", "service", "activity", "issue"]):
-                        log_event("skipped_company", reason="invalid company name (too long or descriptive)", value=name)
-                        # Fallback to GPT for complex input
-                        gpt_result = extract_single_command(text)  # Retry with GPT
-                        result.update(gpt_result)
-                    else:
-                        result["company"] = [{"name": name}]
-                        log_event("extracted_field", field="company", value=name)
+                    result["company"] = [{"name": name}]
+                    log_event("extracted_field", field="company", value=name)
                 elif field == "clear":
                     field_name = FIELD_MAPPING.get(match.group(1).lower(), match.group(1).lower())
                     result[field_name] = [] if field_name in ["issues", "activities", "tools", "service", "company", "people", "roles"] else ""
@@ -977,7 +968,6 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             save_session(session_data)
             send_message(chat_id, f"Please provide the correct spelling for '{value}' in {field}.")
             return "ok", 200
-
         if extracted.get("delete"):
             sess["command_history"].append(sess["structured_data"].copy())
             for delete_cmd in extracted["delete"]:
@@ -986,13 +976,8 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
                 sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
             save_session(session_data)
             tpl = summarize_report(sess["structured_data"])
-            deleted_fields_summary = "\n".join(
-                f"Removed {cmd['field']}" + (f": {cmd['value']}" if cmd['value'] else "")
-                for cmd in extracted["delete"]
-            )
-            send_message(chat_id, f"{deleted_fields_summary}\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            send_message(chat_id, f"Removed {field}" + (f": {value}" if value else "") + f"\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
             return "ok", 200
-
         if extracted.get("correct"):
             sess["command_history"].append(sess["structured_data"].copy())
             for correct_cmd in extracted["correct"]:
@@ -1154,3 +1139,4 @@ def webhook() -> tuple[str, int]:
     except Exception as e:
         log_event("webhook_error", error=str(e))
         return "error", 500
+
