@@ -88,7 +88,7 @@ FIELD_PATTERNS = {
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*)([^,]+?)(?:\s+as\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "role": r'^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+|\w+)\s*[:,]?\s*as\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+|\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "supervisor": r'^(?:i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*$)(?:\s+by\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*([^,]+?)(?=\s*(?:,|\.|$|\s+(?:and|with|followed|supervisor|tool|service|activity|issue|people|role|time|weather|impression|comment)\b))',
     "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:|\s+issues?\s*:|\s+times?\s*:|$|\s*$))',
@@ -102,6 +102,11 @@ FIELD_PATTERNS = {
     "delete_entire": rf'^delete\s+entire\s+category\s+({list_categories_pattern})$',
     "correct": r'^(?:correct|adjust|update|spell)(?:\s+spelling)?\s+((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+([^,]+?)(?:\s+to\s+([^,]+?))?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
 }
+
+# --- Validation Functions ---
+def is_invalid_company(name: str) -> bool:
+    invalid_words = ["was", "were", "involved", "and", "supervisor", "tool", "service", "activity", "issue"]
+    return len(name.split()) > 3 or any(word in name.lower() for word in invalid_words)
 
 # --- Session Management ---
 def load_session() -> Dict[str, Any]:
@@ -160,7 +165,7 @@ Fields to extract (omit if not present):
 - site_name: string (e.g., "Downtown Project")
 - segment: string (e.g., "5")
 - category: string (e.g., "Bestand")
-- company: list of objects with "name" (e.g., [{"name": "Acme Corp"}])
+- company: list of objects with "name" (e.g., [{"name": "Acme Corp"}]). Company names are typically proper nouns (e.g., "BuildRight AG", "ElectricFlow GmbH"), often ending with "Corp", "Inc", "LLC", "AG", "GmbH", etc., and should not include full sentences, verbs, or descriptions like "involved were" or "supervisors were". Stop extracting at conjunctions (e.g., "and", "with") or other field keywords unless clearly part of the company name.
 - people: list of strings (e.g., ["Anna", "Tobias"])
 - roles: list of objects with "name" and "role" (e.g., [{"name": "Anna", "role": "Supervisor"}])
 - tools: list of objects with "item" (e.g., [{"item": "Crane"}])
@@ -189,7 +194,9 @@ Rules:
 - For site_name: Recognize location-like phrases following "at", "in", "on" (e.g., "Work was done at East Wing" -> "site_name": "East Wing", "activities": ["Work was done"]).
 - For people and roles: Recognize "add [name] as [role]" (e.g., "add Anna as engineer" -> "people": ["Anna"], "roles": [{"name": "Anna", "role": "Engineer"}]). "Roles supervisor" assigns "Supervisor" to the user.
 - For tools and service: Recognize "Tool: [item]", "Service: [task]", or commands like "add service abc".
-- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Handle "delete company <name>" to remove the company. Handle "correct company <old> to <new>" to update the company name.
+- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Extract only the company name (e.g., "BuildRight AG") and not subsequent text unless it’s explicitly part of the name. Handle "delete company <name>" to remove, and "correct company <old> to <new>" to update. Examples:
+  - "Companies: BuildRight AG and ElectricFlow GmbH" -> "company": [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}]
+  - "Company involved was BuildRight AG, supervisors were Anna" -> "company": [{"name": "BuildRight AG"}], "roles": [{"name": "Anna", "role": "Supervisor"}]
 - Comments should only include non-field-specific notes.
 - Return {} for reset commands or irrelevant inputs.
 - Case-insensitive matching.
@@ -566,31 +573,37 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                         result["roles"] = [{"name": name, "role": role.title()}]
                         log_event("extracted_field", field="roles", name=name, role=role)
                     log_event("extracted_field", field="people", value=name)
+                    return result
                 elif field == "role":
                     name = clean_value(match.group(1) or match.group(3), field)
                     role = (match.group(2) or match.group(4)).title()
                     if name.lower() == "supervisor":
-                        log_event("skipped_role_supervisor", reason="supervisor is a role")
+                        log_event("skipped_role_supervisor", reason(AVigator is a role")
                         continue
                     result["people"] = [name.strip()]
                     result["roles"] = [{"name": name.strip(), "role": role}]
                     log_event("extracted_field", field="roles", name=name, role=role)
+                    return result
                 elif field == "supervisor":
                     name = clean_value(match.group(1), field) if match.group(1) else "User"
                     result["people"] = [name]
                     result["roles"] = [{"name": name, "role": "Supervisor"}]
                     log_event("extracted_field", field="roles", value=name)
+                    return result
                 elif field == "company":
                     name = clean_value(match.group(2) if match.group(2) else match.group(1), field)
-                    if re.match(r'^(?:delete|remove|add|insert|correct|adjust|update|spell)\b', name.lower()):
-                        log_event("skipped_company", reason="command-like name", value=name)
-                        continue
-                    result["company"] = [{"name": name}]
-                    log_event("extracted_field", field="company", value=name)
+                    if not is_invalid_company(name):
+                        result["company"] = [{"name": name}]
+                        log_event("extracted_field", field="company", value=name)
+                        return result
+                    else:
+                        log_event("skipped_company", reason="invalid company name", value=name)
+                        # Do not return, proceed to GPT fallback
                 elif field == "clear":
                     field_name = FIELD_MAPPING.get(match.group(1).lower(), match.group(1).lower())
                     result[field_name] = [] if field_name in ["issues", "activities", "tools", "service", "company", "people", "roles"] else ""
                     log_event("extracted_field", field=field_name, value="none")
+                    return result
                 elif field in ["service"]:
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
@@ -598,6 +611,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     else:
                         result[field] = [{"task": value.strip()}]
                     log_event("extracted_field", field=field, value=value)
+                    return result
                 elif field in ["tool"]:
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
@@ -605,6 +619,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     else:
                         result[field] = [{"item": value.strip()}]
                     log_event("extracted_field", field=field, value=value)
+                    return result
                 elif field == "issue":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
@@ -612,6 +627,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     else:
                         result[field] = [{"description": value.strip()}]
                     log_event("extracted_field", field=field, value=value)
+                    return result
                 elif field == "activity":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
@@ -619,11 +635,12 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     else:
                         result[field] = [value.strip()]
                     log_event("extracted_field", field=field, value=value)
+                    return result
                 else:
                     value = clean_value(match.group(1), field)
                     result[field] = value
                     log_event("extracted_field", field=field, value=value)
-                return result
+                    return result
 
         # Fallback to GPT for complex inputs
         messages = [
@@ -968,6 +985,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             save_session(session_data)
             send_message(chat_id, f"Please provide the correct spelling for '{value}' in {field}.")
             return "ok", 200
+
         if extracted.get("delete"):
             sess["command_history"].append(sess["structured_data"].copy())
             for delete_cmd in extracted["delete"]:
@@ -976,8 +994,13 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
                 sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
             save_session(session_data)
             tpl = summarize_report(sess["structured_data"])
-            send_message(chat_id, f"Removed {field}" + (f": {value}" if value else "") + f"\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            deleted_fields_summary = "\n".join(
+                f"Removed {cmd['field']}" + (f": {cmd['value']}" if cmd['value'] else "")
+                for cmd in extracted["delete"]
+            )
+            send_message(chat_id, f"{deleted_fields_summary}\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
             return "ok", 200
+
         if extracted.get("correct"):
             sess["command_history"].append(sess["structured_data"].copy())
             for correct_cmd in extracted["correct"]:
@@ -1139,4 +1162,3 @@ def webhook() -> tuple[str, int]:
     except Exception as e:
         log_event("webhook_error", error=str(e))
         return "error", 500
-
