@@ -968,22 +968,20 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             save_session(session_data)
             send_message(chat_id, f"Please provide the correct spelling for '{value}' in {field}.")
             return "ok", 200
-        if extracted.get("delete"):
-            sess["command_history"].append(sess["structured_data"].copy())
-            for delete_cmd in extracted["delete"]:
-                field = delete_cmd["field"]
-                value = delete_cmd["value"]
-                sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
-            save_session(session_data)
-            tpl = summarize_report(sess["structured_data"])
-            deleted_fields_summary = "\n".join(
-    f"Removed {cmd['field']}" + (f": {cmd['value']}" if cmd['value'] else "")
-    for cmd in extracted["delete"]
-)
-try:
+
+if extracted.get("delete"):
+    sess["command_history"].append(sess["structured_data"].copy())
+    for delete_cmd in extracted["delete"]:
+        field = delete_cmd["field"]
+        value = delete_cmd["value"]
+        sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
+    save_session(session_data)
+    tpl = summarize_report(sess["structured_data"])
+    deleted_fields_summary = "\n".join(
+        f"Removed {cmd['field']}" + (f": {cmd['value']}" if cmd['value'] else "")
+        for cmd in extracted["delete"]
+    )
     send_message(chat_id, f"{deleted_fields_summary}\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
-except Exception as e:
-    print(f"An error occurred: {e}")
     return "ok", 200
 
         if extracted.get("correct"):
@@ -1147,3 +1145,4 @@ def webhook() -> tuple[str, int]:
     except Exception as e:
         log_event("webhook_error", error=str(e))
         return "error", 500
+
