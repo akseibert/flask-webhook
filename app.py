@@ -260,7 +260,7 @@ def send_pdf(chat_id: str, pdf_buffer: io.BytesIO) -> bool:
         data = {'chat_id': chat_id, 'caption': 'Here is your construction site report.'}
         response = requests.post(url, files=files, data=data)
         response.raise_for_status()
-        log - Construction Site Report Bot
+        log_event("Construction Site Report Bot")
         log_event("pdf_sent", chat_id=chat_id)
         return True
     except requests.RequestException as e:
