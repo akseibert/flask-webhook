@@ -21,11 +21,11 @@ from decouple import config
 
 # --- Configuration ---
 CONFIG = {
-    "SESSION_FILE": config("SESSION_FILE", default="/opt/render/project/src/session_data.json"),
-    "PAUSE_THRESHOLD": config("PAUSE_THRESHOLD", default=300, cast=int),
-    "MAX_HISTORY": config("MAX_HISTORY", default=10, cast=int),
-    "OPENAI_MODEL": config("OPENAI_MODEL", default="gpt-3.5-turbo"),
-    "OPENAI_TEMPERATURE": config("OPENAI_TEMPERATURE", default=0.2, cast=float),
+    "session_file": config("SESSION_FILE", default="/opt/render/project/src/session_data.json"),
+    "pause_threshold": config("PAUSE_THRESHOLD", default=300, cast=int),
+    "max_history": config("MAX_HISTORY", default=10, cast=int),
+    "openai_model": config("OPENAI_MODEL", default="gpt-3.5-turbo"),
+    "openai_temperature": config("OPENAI_TEMPERATURE", default=0.2, cast=float),
 }
 
 REQUIRED_ENV_VARS = ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"]
@@ -46,6 +46,7 @@ logging.basicConfig(
 logger = logging.getLogger("ConstructionBot")
 
 def log_event(event: str, **kwargs) -> None:
+    """Log an event with additional details."""
     logger.info({"event": event, **kwargs})
 
 # --- Field Mapping ---
@@ -69,16 +70,16 @@ FIELD_MAPPING = {
 }
 
 # --- Regex Patterns ---
-categories = [
+CATEGORIES = [
     "site", "segment", "category", "company", "companies", "person", "people",
     "role", "roles", "tool", "tools", "service", "services", "activity",
     "activities", "issue", "issues", "time", "weather", "impression", "comments",
     "architect", "engineer", "supervisor", "manager", "worker", "window installer"
 ]
-list_categories = ["people", "company", "roles", "tools", "service", "activities", "issues"]
+LIST_CATEGORIES = ["people", "company", "roles", "tools", "service", "activities", "issues"]
 
-categories_pattern = '|'.join(re.escape(cat) for cat in categories)
-list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
+CATEGORIES_PATTERN = '|'.join(re.escape(cat) for cat in CATEGORIES)
+LIST_CATEGORIES_PATTERN = '|'.join(re.escape(cat) for cat in LIST_CATEGORIES)
 
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
@@ -98,31 +99,33 @@ FIELD_PATTERNS = {
     "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$|\s*$)',
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*none$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": rf'^(?:delete|remove)\s+({categories_pattern})\s*(.+)?$|^({categories_pattern})\s+(?:delete|remove)\s*(.+)?$',
-    "delete_entire": rf'^delete\s+entire\s+category\s+({list_categories_pattern})$',
-    "correct": r'^(?:correct|adjust|update|spell)(?:\s+spelling)?\s+((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+([^,]+?)(?:\s+to\s+([^,]+?))?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
+    "delete": rf'^(?:delete|remove)\s+({CATEGORIES_PATTERN})\s*(.+)?$|^({CATEGORIES_PATTERN})\s+(?:delete|remove)\s*(.+)?$',
+    "delete_entire": rf'^delete\s+entire\s+category\s+({LIST_CATEGORIES_PATTERN})$',
+    "correct": r'^(?:correct|adjust|update|spell)(?:\s+spelling)?\s+((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+([^,]+?)(?:\s+to\s+([^,]+?))?(?:\s*,\s*([^,]+?)(?:\s+to\s+([^,]+?))?)?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)'
 }
 
 # --- Session Management ---
 def load_session() -> Dict[str, Any]:
+    """Load session data from file."""
     try:
-        if os.path.exists(CONFIG["SESSION_FILE"]):
-            with open(CONFIG["SESSION_FILE"], "r") as f:
+        if os.path.exists(CONFIG["session_file"]):
+            with open(CONFIG["session_file"], "r") as f:
                 data = json.load(f)
             for chat_id, session in data.items():
                 if "command_history" in session:
                     session["command_history"] = deque(
-                        session["command_history"], maxlen=CONFIG["MAX_HISTORY"]
+                        session["command_history"], maxlen=CONFIG["max_history"]
                     )
-            log_event("session_loaded", file=CONFIG["SESSION_FILE"])
+            log_event("session_loaded", file=CONFIG["session_file"])
             return data
-        log_event("session_file_not_found", file=CONFIG["SESSION_FILE"])
+        log_event("session_file_not_found", file=CONFIG["session_file"])
         return {}
     except Exception as e:
         log_event("load_session_error", error=str(e))
         return {}
 
 def save_session(session_data: Dict[str, Any]) -> None:
+    """Save session data to file."""
     try:
         serializable_data = {}
         for chat_id, session in session_data.items():
@@ -132,16 +135,17 @@ def save_session(session_data: Dict[str, Any]) -> None:
                     serializable_session["command_history"]
                 )
             serializable_data[chat_id] = serializable_session
-        os.makedirs(os.path.dirname(CONFIG["SESSION_FILE"]), exist_ok=True)
-        with open(CONFIG["SESSION_FILE"], "w") as f:
+        os.makedirs(os.path.dirname(CONFIG["session_file"]), exist_ok=True)
+        with open(CONFIG["session_file"], "w") as f:
             json.dump(serializable_data, f)
-        log_event("session_saved", file=CONFIG["SESSION_FILE"])
+        log_event("session_saved", file=CONFIG["session_file"])
     except Exception as e:
         log_event("save_session_error", error=str(e))
 
 session_data = load_session()
 
 def blank_report() -> Dict[str, Any]:
+    """Create a blank report structure."""
     return {
         "site_name": "", "segment": "", "category": "",
         "company": [], "people": [], "roles": [], "tools": [], "service": [],
@@ -154,50 +158,62 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 # --- GPT Prompt ---
 GPT_PROMPT = """
-You are an AI assistant extracting a construction site report from user input. Extract all explicitly mentioned fields and return them in JSON format. Process the entire input as a single unit, splitting on commas or periods only when fields are clearly separated by keywords. Map natural language phrases and standardized commands (add, insert, delete, correct, adjust, spell, remove) to fields accurately, prioritizing specific fields over comments or site_name. Do not treat reset commands ("new", "new report", "reset", "reset report", "/new") as comments or fields; return {} for these. Handle "none" inputs (e.g., "Tools: none") as clearing the respective field, and vague inputs (e.g., "Activities: many") by adding them and noting clarification needed.
+You are an AI assistant extracting a construction site report from user input, which may include non-English characters or multilingual terms (e.g., German, French). Extract all explicitly mentioned fields and return them in JSON format. Process the entire input as a single unit, splitting on commas, semicolons, or periods only when fields are clearly separated by keywords. Map natural language phrases and standardized commands (add, insert, delete, correct, adjust, spell, remove) to fields accurately, prioritizing specific fields over comments or site_name. Do not treat reset commands ("new", "new report", "reset", "reset report", "/new") as comments or fields; return {} for these. Handle "none" inputs (e.g., "Tools: none") as clearing the respective field, and vague inputs (e.g., "Activities: many") by adding them and noting clarification needed. Ignore common greetings like "Good morning", "Hi", "Hello", or "Thanks" unless explicitly part of a comment.
 
 Fields to extract (omit if not present):
 - site_name: string (e.g., "Downtown Project")
 - segment: string (e.g., "5")
-- category: string (e.g., "Bestand")
-- company: list of objects with "name" (e.g., [{"name": "Acme Corp"}])
+- category: string (e.g., "Bestand", "Mängelerfassung", "Abnahme"). Recognize terms like 'category', 'kategorie', 'cat', 'file under', etc.
+- company: list of objects with "name" (e.g., [{"name": "Acme Corp"}]). Split multiple companies separated by "and" or commas.
 - people: list of strings (e.g., ["Anna", "Tobias"])
 - roles: list of objects with "name" and "role" (e.g., [{"name": "Anna", "role": "Supervisor"}])
 - tools: list of objects with "item" (e.g., [{"item": "Crane"}])
-- service: list of objects with "task" (e.g., [{"task": "Excavation"}])
+- service: list of objects with "task" (e.g., [{"task": "Electrical Wiring"}])
 - activities: list of strings (e.g., ["Concrete pouring"])
 - issues: list of objects with "description" (required), "caused_by" (optional), "has_photo" (optional, default false)
 - time: string (e.g., "morning", "full day")
-- weather: string (e.g., "cloudy")
+- weather: string (e.g., "cloudy"). Standardize to common terms (e.g., "sunny", "cloudy", "rainy", "windy").
 - impression: string (e.g., "productive")
 - comments: string (e.g., "Ensure safety protocols")
 - date: string (format dd-mm-yyyy)
 
 Commands:
 - add|insert <category> <value>: Add a value to the category (e.g., "add site Downtown Project" or "insert issues water leakage").
-- delete|remove <category> [value|from <category> <value>]: Remove a value or clear the category (e.g., "delete activities Laying foundation", "delete Jonas from people", or "delete companies").
-- correct|adjust|spell <category> <old> to <new>|correct spelling <category> <value>|spell <category> <value>: Update a value or correct spelling (e.g., "correct site Downtown to Uptown", "spell companies Orient Corp").
+- delete|remove <category> [value]: Remove a specific value or clear the category (e.g., "delete tools cherry picker", "delete companies").
+- correct|adjust|spell <category> <old> to <new>|correct spelling <category> <value>|spell <category> <value>: Update a value or correct spelling (e.g., "correct company FastBuild to Fast Build", "spell companies Elektro Systems").
 - <category>: <value>: Add a value (e.g., "Services: abc" -> "service": [{"task": "abc"}]).
 - <category>: none: Clear the category (e.g., "Tools: none" -> "tools": []).
 
 Rules:
 - Accept both singular and plural category names (e.g., "issue" or "issues", "company" or "companies").
 - Extract fields from colon-separated inputs (e.g., "Services: abc"), natural language (e.g., "weather was cloudy" -> "weather": "cloudy"), or commands (e.g., "add people Anna").
-- For segment and category: Extract only the value (e.g., "Segment: 5" -> "segment": "5").
-- For issues: Recognize keywords: "Issue", "Issues", "Problem", "Delay", "Injury". "Issues: none" clears the issues list.
-- For activities: Recognize keywords: "Activity", "Activities", "Task", "Progress", "Construction", or action-oriented phrases. "Activities: none" clears the activities list. Handle vague inputs like "Activities: many" by adding them and noting clarification needed.
-- For site_name: Recognize location-like phrases following "at", "in", "on" (e.g., "Work was done at East Wing" -> "site_name": "East Wing", "activities": ["Work was done"]).
-- For people and roles: Recognize "add [name] as [role]" (e.g., "add Anna as engineer" -> "people": ["Anna"], "roles": [{"name": "Anna", "role": "Engineer"}]). "Roles supervisor" assigns "Supervisor" to the user.
-- For tools and service: Recognize "Tool: [item]", "Service: [task]", or commands like "add service abc".
-- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Handle "delete company <name>" to remove the company. Handle "correct company <old> to <new>" to update the company name.
-- Comments should only include non-field-specific notes.
-- Return {} for reset commands or irrelevant inputs.
+- For category: Prioritize inputs containing 'category', 'kategorie', 'cat', 'file under', etc., over comments (e.g., "Category Abnahme" -> "category": "Abnahme").
+- For company: Split names separated by "and" or commas (e.g., "Companies: Fast Build and Elektro Systems" -> "company": [{"name": "Fast Build"}, {"name": "Elektro Systems"}]).
+- For issues: Recognize keywords: "Issue", "Issues", "Problem", "Delay", "Injury", "encountered". "Issues: none" or "delete issues" clears the issues list.
+- For activities: Specific actions like "installing radiators", "removing old tiles". Recognize keywords like "Tasks", "Activities", "covered", "included".
+- For services: Broad tasks provided by contractors (e.g., "electrical wiring", "HVAC installation"). Recognize keywords like "Services", "provided", "were".
+- For site_name: Recognize location-like phrases following "at", "in", "on" (e.g., "Work was done at East Wing" -> "site_name": "East Wing").
+- For people and roles: Recognize "add [name] as [role]" (e.g., "add Anna Keller as Technical Engineer" -> "people": ["Anna Keller"], "roles": [{"name": "Anna Keller", "role": "Technical Engineer"}]).
+- For tools: Recognize "Tools used included [items]" or "add tools [item]". Handle deletions like "delete tools cherry picker".
+- Comments should only include non-field-specific notes, excluding greetings unless explicitly stated.
+- Return {} for reset commands, greetings, or irrelevant inputs.
 - Case-insensitive matching.
-- Handle natural language inputs flexibly, allowing variations like "Activities: laying foundation", "Add issue power outage", "Delete Jonas from people", or "spell companies Orient Corp".
+- Handle natural language inputs flexibly, allowing variations like "Activities: laying foundation", "Delete tools cherry picker", or "Category Abnahme".
+- For weather, standardize descriptions to common terms (e.g., "windy and cool" -> "windy").
+- Handle non-English inputs by transliterating or translating appropriately.
+
+Examples:
+- "Delete cherry picker" -> {"delete": [{"field": "tools", "value": "cherry picker"}]}
+- "Category Abnahme" -> {"category": "Abnahme"}
+- "Add tools hammer" -> {"tools": [{"item": "hammer"}]}
+- "Delete companies" -> {"delete": [{"field": "company", "value": null}]}
+- "Companies: Fast Build and Elektro Systems" -> {"company": [{"name": "Fast Build"}, {"name": "Elektro Systems"}]}
+- "Correct company FastBuild to Fast Build" -> {"correct": [{"field": "company", "old": "FastBuild", "new": "Fast Build"}]}
 """
 
 # --- Signal Handlers ---
 def handle_shutdown(signum: int, frame: Any) -> None:
+    """Handle shutdown signals and save session data."""
     log_event("shutdown_signal", signal=signum)
     save_session(session_data)
     sys.exit(0)
@@ -208,6 +224,7 @@ signal.signal(signal.SIGINT, handle_shutdown)
 # --- Telegram API ---
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def send_message(chat_id: str, text: str) -> None:
+    """Send a message to a Telegram chat."""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         response = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
@@ -219,6 +236,7 @@ def send_message(chat_id: str, text: str) -> None:
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def get_telegram_file_path(file_id: str) -> str:
+    """Retrieve the file path for a Telegram file."""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
         response = requests.get(url)
@@ -232,6 +250,7 @@ def get_telegram_file_path(file_id: str) -> str:
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def transcribe_voice(file_id: str) -> str:
+    """Transcribe a voice message using OpenAI Whisper."""
     try:
         audio_url = get_telegram_file_path(file_id)
         audio_response = requests.get(audio_url)
@@ -254,6 +273,7 @@ def transcribe_voice(file_id: str) -> str:
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def send_pdf(chat_id: str, pdf_buffer: io.BytesIO) -> bool:
+    """Send a PDF document to a Telegram chat."""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument"
         files = {'document': ('report.pdf', pdf_buffer, 'application/pdf')}
@@ -268,6 +288,7 @@ def send_pdf(chat_id: str, pdf_buffer: io.BytesIO) -> bool:
 
 # --- Report Generation ---
 def generate_pdf(report_data: Dict[str, Any]) -> Optional[io.BytesIO]:
+    """Generate a PDF report from structured data."""
     try:
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter)
@@ -306,6 +327,7 @@ def generate_pdf(report_data: Dict[str, Any]) -> Optional[io.BytesIO]:
         return None
 
 def summarize_report(data: Dict[str, Any]) -> str:
+    """Summarize report data into a formatted string."""
     try:
         roles_str = ", ".join(f"{r.get('name', '')} ({r.get('role', '')})" for r in data.get("roles", []) if r.get("role"))
         lines = [
@@ -346,14 +368,22 @@ def summarize_report(data: Dict[str, Any]) -> str:
 
 # --- Data Processing ---
 def clean_value(value: Optional[str], field: str) -> Optional[str]:
+    """Clean input value by removing command prefixes and correcting common errors."""
     if value is None:
         return value
     cleaned = re.sub(r'^(?:add\s+|insert\s+|from\s+|correct\s+spelling\s+|spell\s+|delete\s+|remove\s+)', '', value.strip(), flags=re.IGNORECASE)
     cleaned = cleaned.replace('tone', 'stone') if 'tone' in cleaned.lower() and field == 'activities' else cleaned
+    if field == "weather":
+        weather_map = {
+            "windy and cool": "windy", "sunny": "sunny", "cloudy": "cloudy", "rainy": "rainy",
+            "good weather": "sunny", "bad weather": "cloudy", "clear": "sunny"
+        }
+        cleaned = weather_map.get(cleaned.lower(), cleaned)
     log_event("cleaned_value", field=field, raw=value, cleaned=cleaned)
     return cleaned
 
 def enrich_date(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure valid date in report data, defaulting to today if invalid or future."""
     try:
         today = datetime.now().strftime("%d-%m-%Y")
         if not data.get("date"):
@@ -373,6 +403,7 @@ def enrich_date(data: Dict[str, Any]) -> Dict[str, Any]:
 
 # --- Field Extraction ---
 def validate_patterns() -> None:
+    """Validate regex patterns for field extraction."""
     try:
         for field, pattern in FIELD_PATTERNS.items():
             re.compile(pattern, re.IGNORECASE)
@@ -385,6 +416,7 @@ validate_patterns()
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def extract_fields(text: str) -> Dict[str, Any]:
+    """Extract fields from user input text."""
     try:
         log_event("extract_fields", input=text)
         result: Dict[str, Any] = {}
@@ -433,13 +465,17 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 raw_field = correct_match.group(1).lower() if correct_match.group(1) else None
                 old_value = correct_match.group(2).strip() if correct_match.group(2) else None
                 new_value = correct_match.group(3).strip() if correct_match.group(3) else None
+                old_value2 = correct_match.group(4).strip() if correct_match.group(4) else None
+                new_value2 = correct_match.group(5).strip() if correct_match.group(5) else None
                 field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
-                log_event("correct_command", field=field, old=old_value, new=new_value)
+                log_event("correct_command", field=field, old=old_value, new=new_value, old2=old_value2, new2=new_value2)
                 if field and old_value:
                     if new_value:
                         result.setdefault("correct", []).append({"field": field, "old": clean_value(old_value, field), "new": clean_value(new_value, field)})
                     else:
                         result["correct_prompt"] = {"field": field, "value": clean_value(old_value, field)}
+                    if old_value2 and new_value2:
+                        result.setdefault("correct", []).append({"field": field, "old": clean_value(old_value2, field), "new": clean_value(new_value2, field)})
                 continue
 
             cmd_result = extract_single_command(cmd)
@@ -485,6 +521,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def extract_single_command(text: str) -> Dict[str, Any]:
+    """Extract fields from a single command."""
     try:
         result: Dict[str, Any] = {}
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
@@ -499,22 +536,10 @@ def extract_single_command(text: str) -> Dict[str, Any]:
             value = value.strip() if value else None
             mapped_field = FIELD_MAPPING.get(field, field)
             log_event("delete_command", raw_field=field, mapped_field=mapped_field, value=value)
-
-            if field in ["architect", "engineer", "supervisor", "manager", "worker", "window installer"]:
-                result.setdefault("delete", []).append({"field": "roles", "value": field})
-                log_event("delete_role_command", field="roles", value=field)
-            elif mapped_field == "people":
-                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
-                log_event("delete_people_command", field=mapped_field, value=value)
-            elif mapped_field == "person":
-                result["people"] = {"delete": value}
-                log_event("delete_person_command", field="people", value=value)
-            elif mapped_field in ["company", "roles", "tools", "service", "activities", "issues"]:
-                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
-                log_event("delete_list_command", field=mapped_field, value=value)
+            if mapped_field in ["company", "tools", "service", "issues", "activities", "people", "roles"]:
+                result.setdefault("delete", []).append({"field": mapped_field, "value": value})
             elif mapped_field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
-                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
-                log_event("delete_scalar_command", field=mapped_field, value=value)
+                result.setdefault("delete", []).append({"field": mapped_field, "value": value})
             else:
                 log_event("unrecognized_delete_field", field=field)
                 return {}
@@ -525,7 +550,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
         if delete_entire_match:
             field = delete_entire_match.group(1).lower()
             mapped_field = FIELD_MAPPING.get(field, field)
-            result[mapped_field] = {"delete": True}
+            result["delete"] = [{"field": mapped_field, "value": None}]
             log_event("delete_entire_category", field=mapped_field)
             return result
 
@@ -535,13 +560,17 @@ def extract_single_command(text: str) -> Dict[str, Any]:
             raw_field = correct_match.group(1).lower() if correct_match.group(1) else None
             old_value = correct_match.group(2).strip() if correct_match.group(2) else None
             new_value = correct_match.group(3).strip() if correct_match.group(3) else None
+            old_value2 = correct_match.group(4).strip() if correct_match.group(4) else None
+            new_value2 = correct_match.group(5).strip() if correct_match.group(5) else None
             field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
-            log_event("correct_command", field=field, old=old_value, new=new_value)
+            log_event("correct_command", field=field, old=old_value, new=new_value, old2=old_value2, new2=new_value2)
             if field and old_value:
                 if new_value:
                     result.setdefault("correct", []).append({"field": field, "old": clean_value(old_value, field), "new": clean_value(new_value, field)})
                 else:
                     result["correct_prompt"] = {"field": field, "value": clean_value(old_value, field)}
+                if old_value2 and new_value2:
+                    result.setdefault("correct", []).append({"field": field, "old": clean_value(old_value2, field), "new": clean_value(new_value2, field)})
             return result
 
         # Handle other field extractions
@@ -581,24 +610,27 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     result["roles"] = [{"name": name, "role": "Supervisor"}]
                     log_event("extracted_field", field="roles", value=name)
                 elif field == "company":
-                    name = clean_value(match.group(2) if match.group(2) else match.group(1), field)
-                    if re.match(r'^(?:delete|remove|add|insert|correct|adjust|update|spell)\b', name.lower()):
-                        log_event("skipped_company", reason="command-like name", value=name)
+                    name1 = clean_value(match.group(2) if match.group(2) else match.group(1), field)
+                    name2 = clean_value(match.group(3), field) if match.group(3) else None
+                    if re.match(r'^(?:delete|remove|add|insert|correct|adjust|update|spell)\b', name1.lower()):
+                        log_event("skipped_company", reason="command-like name", value=name1)
                         continue
-                    result["company"] = [{"name": name}]
-                    log_event("extracted_field", field="company", value=name)
+                    result["company"] = [{"name": name1}]
+                    if name2:
+                        result["company"].append({"name": name2})
+                    log_event("extracted_field", field="company", value=[name1, name2] if name2 else name1)
                 elif field == "clear":
                     field_name = FIELD_MAPPING.get(match.group(1).lower(), match.group(1).lower())
                     result[field_name] = [] if field_name in ["issues", "activities", "tools", "service", "company", "people", "roles"] else ""
                     log_event("extracted_field", field=field_name, value="none")
-                elif field in ["service"]:
+                elif field == "service":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result[field] = []
                     else:
                         result[field] = [{"task": value.strip()}]
                     log_event("extracted_field", field=field, value=value)
-                elif field in ["tool"]:
+                elif field == "tool":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result[field] = []
@@ -632,7 +664,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
         ]
         try:
             response = client.chat.completions.create(
-                model=CONFIG["OPENAI_MODEL"], messages=messages, temperature=CONFIG["OPENAI_TEMPERATURE"]
+                model=CONFIG["openai_model"], messages=messages, temperature=CONFIG["openai_temperature"]
             )
             raw_response = response.choices[0].message.content
             log_event("gpt_response", raw_response=raw_response)
@@ -662,6 +694,8 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                 for role in data["roles"]:
                     if isinstance(role, dict) and "name" in role and role["name"] not in data.get("people", []):
                         data.setdefault("people", []).append(clean_value(role["name"], "people"))
+            if "companies" in data:
+                data["company"] = data.pop("companies")
             if not data and normalized_text.strip():
                 issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
                 activity_keywords = r'\b(work\s+was\s+done|activity|activities|task|progress|construction|building|laying|setting|wiring|installation|scaffolding)\b'
@@ -677,7 +711,8 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     data = {"site_name": location, "activities": [activity]}
                     log_event("fallback_activity_site", data=data)
                 else:
-                    data = {"comments": clean_value(normalized_text.strip(), "comments")}
+                    cleaned_text = clean_value(normalized_text.strip(), "comments")
+                    data = {"comments": cleaned_text}
                     log_event("fallback_comments", data=data)
             return data
         except (json.JSONDecodeError, Exception) as e:
@@ -697,6 +732,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
         raise
 
 def string_similarity(a: str, b: str) -> float:
+    """Calculate similarity ratio between two strings."""
     try:
         similarity = SequenceMatcher(None, a.lower(), b.lower()).ratio()
         log_event("string_similarity", a=a, b=b, similarity=similarity)
@@ -706,6 +742,7 @@ def string_similarity(a: str, b: str) -> float:
         raise
 
 def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge new data into existing report data."""
     try:
         merged = existing.copy()
         for key, value in new.items():
@@ -720,11 +757,16 @@ def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
                 new_items = value if isinstance(value, list) else [value]
                 for new_item in new_items:
                     if isinstance(new_item, str):
-                        # Convert string issues to dictionary format
                         if key == "issues":
                             new_item = {"description": new_item}
+                        elif key == "tools":
+                            new_item = {"item": new_item}
+                        elif key == "service":
+                            new_item = {"task": new_item}
+                        elif key == "company":
+                            new_item = {"name": new_item}
                         else:
-                            continue  # Skip non-dict items for other fields
+                            continue
                     if not isinstance(new_item, dict):
                         continue
                     if key == "company" and "name" in new_item:
@@ -814,6 +856,7 @@ def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
         raise
 
 def delete_entry(data: Dict[str, Any], field: str, value: Optional[str] = None) -> Dict[str, Any]:
+    """Delete an entry from the report data."""
     try:
         log_event("delete_entry", field=field, value=value)
         if field in ["company", "tools", "service", "issues"]:
@@ -867,6 +910,7 @@ def delete_entry(data: Dict[str, Any], field: str, value: Optional[str] = None) 
 COMMAND_HANDLERS: Dict[str, Callable[[str, Dict[str, Any]], None]] = {}
 
 def command(name: str) -> Callable:
+    """Decorator to register command handlers."""
     def decorator(func: Callable) -> Callable:
         COMMAND_HANDLERS[name] = func
         return func
@@ -874,6 +918,7 @@ def command(name: str) -> Callable:
 
 @command("reset")
 def handle_reset(chat_id: str, session: Dict[str, Any]) -> None:
+    """Reset the report to a blank state."""
     session["structured_data"] = blank_report()
     session["command_history"].clear()
     save_session(session_data)
@@ -882,6 +927,7 @@ def handle_reset(chat_id: str, session: Dict[str, Any]) -> None:
 
 @command("undo")
 def handle_undo(chat_id: str, session: Dict[str, Any]) -> None:
+    """Undo the last action."""
     if session["command_history"]:
         session["structured_data"] = session["command_history"].pop()
         save_session(session_data)
@@ -892,11 +938,13 @@ def handle_undo(chat_id: str, session: Dict[str, Any]) -> None:
 
 @command("status")
 def handle_status(chat_id: str, session: Dict[str, Any]) -> None:
+    """Display the current report status."""
     summary = summarize_report(session["structured_data"])
     send_message(chat_id, f"**Current report status**\n\n{summary}")
 
 @command("export")
 def handle_export(chat_id: str, session: Dict[str, Any]) -> None:
+    """Export the report as a PDF."""
     pdf_buffer = generate_pdf(session["structured_data"])
     if pdf_buffer:
         if send_pdf(chat_id, pdf_buffer):
@@ -910,6 +958,7 @@ def handle_export(chat_id: str, session: Dict[str, Any]) -> None:
 app = Flask(__name__)
 
 def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, int]:
+    """Handle user commands and update session data."""
     try:
         normalized_text = text.strip().lower() if text else ""
         if not normalized_text:
@@ -917,7 +966,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             return "ok", 200
 
         current_time = time()
-        if (current_time - sess.get("last_interaction", 0) > CONFIG["PAUSE_THRESHOLD"] and
+        if (current_time - sess.get("last_interaction", 0) > CONFIG["pause_threshold"] and
                 normalized_text not in ("yes", "no", "new", "new report", "reset", "reset report", "/new", "existing", "continue")):
             sess["pending_input"] = text
             sess["awaiting_reset_confirmation"] = True
@@ -970,50 +1019,67 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
             return "ok", 200
         if extracted.get("delete"):
             sess["command_history"].append(sess["structured_data"].copy())
+            feedback_messages = []
             for delete_cmd in extracted["delete"]:
                 field = delete_cmd["field"]
                 value = delete_cmd["value"]
                 sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
+                feedback = f"Removed {field}" + (f": {value}" if value else "")
+                feedback_messages.append(feedback)
             save_session(session_data)
             tpl = summarize_report(sess["structured_data"])
-            send_message(chat_id, f"Removed {field}" + (f": {value}" if value else "") + f"\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            deleted_fields_summary = "\n".join(feedback_messages)
+            send_message(chat_id, f"{deleted_fields_summary}\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
             return "ok", 200
         if extracted.get("correct"):
             sess["command_history"].append(sess["structured_data"].copy())
+            feedback_messages = []
             for correct_cmd in extracted["correct"]:
-                field = correct_cmd["field"]
-                old_value = correct_cmd["old"]
-                new_value = correct_cmd["new"]
-                if field in ["company", "roles", "tools", "service", "issues"]:
-                    data_field = (
-                        "name" if field == "company" else
-                        "description" if field == "issues" else
-                        "item" if field == "tools" else
-                        "task" if field == "service" else
-                        "name" if field == "roles" else None
-                    )
-                    sess["structured_data"][field] = [
-                        {data_field: new_value if string_similarity(item.get(data_field, ""), old_value) > 0.7 else item[data_field],
-                         **({} if field != "roles" else {"role": item["role"]})}
-                        for item in sess["structured_data"].get(field, [])
-                        if isinstance(item, dict)
-                    ]
-                    if field == "roles" and new_value not in sess["structured_data"].get("people", []):
-                        sess["structured_data"]["people"].append(new_value)
-                elif field in ["people"]:
-                    sess["structured_data"]["people"] = [new_value if string_similarity(item, old_value) > 0.7 else item for item in sess["structured_data"].get("people", [])]
-                    sess["structured_data"]["roles"] = [
-                        {"name": new_value, "role": role["role"]} if string_similarity(role.get("name", ""), old_value) > 0.7 else role
-                        for role in sess["structured_data"].get("roles", [])
-                    ]
-                elif field in ["activities"]:
-                    sess["structured_data"]["activities"] = [new_value if string_similarity(item, old_value) > 0.7 else item for item in sess["structured_data"].get("activities", [])]
-                else:
-                    sess["structured_data"][field] = new_value
-                log_event(f"{field}_corrected", old=old_value, new=new_value)
+                try:
+                    field = correct_cmd.get("field") or correct_cmd.get("category")
+                    old_value = correct_cmd.get("old") or correct_cmd.get("old_value")
+                    new_value = correct_cmd.get("new") or correct_cmd.get("new_value")
+                    if not all([field, old_value, new_value]):
+                        log_event("invalid_correct_entry", correct_cmd=correct_cmd)
+                        feedback_messages.append(f"Invalid correction for {field}: {old_value} to {new_value}")
+                        continue
+                    field = FIELD_MAPPING.get(field.lower(), field.lower())
+                    if field in ["company", "roles", "tools", "service", "issues"]:
+                        data_field = (
+                            "name" if field == "company" else
+                            "description" if field == "issues" else
+                            "item" if field == "tools" else
+                            "task" if field == "service" else
+                            "name" if field == "roles" else None
+                        )
+                        sess["structured_data"][field] = [
+                            {data_field: new_value if string_similarity(item.get(data_field, ""), old_value) > 0.7 else item[data_field],
+                             **({} if field != "roles" else {"role": item["role"]})}
+                            for item in sess["structured_data"].get(field, [])
+                            if isinstance(item, dict)
+                        ]
+                        if field == "roles" and new_value not in sess["structured_data"].get("people", []):
+                            sess["structured_data"]["people"].append(new_value)
+                    elif field in ["people"]:
+                        sess["structured_data"]["people"] = [new_value if string_similarity(item, old_value) > 0.7 else item for item in sess["structured_data"].get("people", [])]
+                        sess["structured_data"]["roles"] = [
+                            {"name": new_value, "role": role["role"]} if string_similarity(role.get("name", ""), old_value) > 0.7 else role
+                            for role in sess["structured_data"].get("roles", [])
+                        ]
+                    elif field in ["activities"]:
+                        sess["structured_data"]["activities"] = [new_value if string_similarity(item, old_value) > 0.7 else item for item in sess["structured_data"].get("activities", [])]
+                    else:
+                        sess["structured_data"][field] = new_value
+                    log_event(f"{field}_corrected", old=old_value, new=new_value)
+                    feedback_messages.append(f"Corrected {field} from '{old_value}' to '{new_value}'")
+                except Exception as e:
+                    log_event("correct_command_error", correct_cmd=correct_cmd, error=str(e))
+                    feedback_messages.append(f"Failed to correct {field}: {str(e)}")
+                    continue
             save_session(session_data)
             tpl = summarize_report(sess["structured_data"])
-            send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            correction_summary = "\n".join(feedback_messages)
+            send_message(chat_id, f"{correction_summary}\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
             return "ok", 200
         if not any(k in extracted for k in ["company", "people", "roles", "tools", "service", "activities", "issues", "time", "weather", "impression", "comments", "segment", "category", "site_name"]):
             log_event("unrecognized_input", input=text)
@@ -1033,6 +1099,7 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
 
 @app.route("/webhook", methods=["POST"])
 def webhook() -> tuple[str, int]:
+    """Handle incoming Telegram webhook requests."""
     try:
         data = request.get_json(force=True)
         log_event("webhook_received", data=data)
@@ -1043,6 +1110,7 @@ def webhook() -> tuple[str, int]:
         msg = data["message"]
         chat_id = str(msg["chat"]["id"])
         text = msg.get("text", "").strip()
+        message_id = msg.get("message_id")
         log_event("message_received", chat_id=chat_id, text=text)
 
         if chat_id not in session_data:
@@ -1052,12 +1120,19 @@ def webhook() -> tuple[str, int]:
                 "last_interaction": time(),
                 "pending_input": None,
                 "awaiting_reset_confirmation": False,
-                "command_history": deque(maxlen=CONFIG["MAX_HISTORY"]),
-                "awaiting_spelling_correction": None
+                "command_history": deque(maxlen=CONFIG["max_history"]),
+                "awaiting_spelling_correction": None,
+                "processed_message_ids": deque(maxlen=100)  # Store last 100 message IDs
             }
             log_event("session_created", chat_id=chat_id)
 
         sess = session_data[chat_id]
+
+        # Deduplicate messages
+        if message_id in sess.get("processed_message_ids", []):
+            log_event("duplicate_message", message_id=message_id)
+            return "ok", 200
+        sess["processed_message_ids"].append(message_id)
 
         if "Supervisor" in sess["structured_data"].get("people", []):
             sess["structured_data"]["people"] = [p for p in sess["structured_data"].get("people", []) if p != "Supervisor"]
@@ -1082,7 +1157,7 @@ def webhook() -> tuple[str, int]:
                 sess["command_history"].clear()
                 save_session(session_data)
                 tpl = summarize_report(sess["structured_data"])
-                send_message(chat_id, f"**Starting a fresh report**\n\n{tpl}\n\nSpeak or type your first field (e.g., 'add site Downtown Project').")
+                send_message(chat_id, f"⚠️ New value '{new_value}' is the same as the old value '{old_value}'. Please provide a different spelling for '{old_value}' in {field}.")
                 return "ok", 200
             elif normalized_text in ("no", "existing", "continue"):
                 text = sess["pending_input"]
@@ -1093,15 +1168,6 @@ def webhook() -> tuple[str, int]:
                 send_message(chat_id, "Please clarify: Reset the report? Reply 'yes' or 'no'.")
                 return "ok", 200
 
-        if sess.get("awaiting_spelling_correction"):
-            field, old_value = sess["awaiting_spelling_correction"]
-            new_value = text.strip()
-            log_event("spelling_correction_response", field=field, old_value=old_value, new_value=new_value)
-            if new_value.lower() == old_value.lower():
-                sess["awaiting_spelling_correction"] = None
-                save_session(session_data)
-                send_message(chat_id, f"⚠️ New value '{new_value}' is the same as the old value '{old_value}'. Please provide a different spelling for '{old_value}' in {field}.")
-                return "ok", 200
             sess["awaiting_spelling_correction"] = None
             sess["command_history"].append(sess["structured_data"].copy())
             if field in ["company", "roles", "tools", "service", "issues"]:
