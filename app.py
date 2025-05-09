@@ -88,7 +88,7 @@ FIELD_PATTERNS = {
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*)([^,]+?)(?:\s+as\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "role": r'^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+|\w+)\s*[:,]?\s*as\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+|\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "supervisor": r'^(?:i\s+was\s+supervising|i\s+am\s+supervising|i\s+supervised|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*$)(?:\s+by\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*([^,]+?)(?=\s*(?:,|\.|$|\s+(?:and|with|followed|supervisor|tool|service|activity|issue|people|role|time|weather|impression|comment)\b))',
     "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:|\s+issues?\s*:|\s+times?\s*:|$|\s*$))',
@@ -152,7 +152,7 @@ def blank_report() -> Dict[str, Any]:
 # --- OpenAI Initialization ---
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- GPT Prompt ---
+# --- Updated GPT Prompt ---
 GPT_PROMPT = """
 You are an AI assistant extracting a construction site report from user input. Extract all explicitly mentioned fields and return them in JSON format. Process the entire input as a single unit, splitting on commas or periods only when fields are clearly separated by keywords. Map natural language phrases and standardized commands (add, insert, delete, correct, adjust, spell, remove) to fields accurately, prioritizing specific fields over comments or site_name. Do not treat reset commands ("new", "new report", "reset", "reset report", "/new") as comments or fields; return {} for these. Handle "none" inputs (e.g., "Tools: none") as clearing the respective field, and vague inputs (e.g., "Activities: many") by adding them and noting clarification needed.
 
@@ -160,7 +160,7 @@ Fields to extract (omit if not present):
 - site_name: string (e.g., "Downtown Project")
 - segment: string (e.g., "5")
 - category: string (e.g., "Bestand")
-- company: list of objects with "name" (e.g., [{"name": "Acme Corp"}])
+- company: list of objects with "name" (e.g., [{"name": "Acme Corp"}]). Company names are typically proper nouns (e.g., "BuildRight AG", "ElectricFlow GmbH"), often ending with "Corp", "Inc", "LLC", "AG", "GmbH", etc., and should not include full sentences, verbs, or descriptions like "involved were" or "supervisors were". Stop extracting at conjunctions (e.g., "and", "with") or other field keywords unless clearly part of the company name.
 - people: list of strings (e.g., ["Anna", "Tobias"])
 - roles: list of objects with "name" and "role" (e.g., [{"name": "Anna", "role": "Supervisor"}])
 - tools: list of objects with "item" (e.g., [{"item": "Crane"}])
@@ -189,7 +189,9 @@ Rules:
 - For site_name: Recognize location-like phrases following "at", "in", "on" (e.g., "Work was done at East Wing" -> "site_name": "East Wing", "activities": ["Work was done"]).
 - For people and roles: Recognize "add [name] as [role]" (e.g., "add Anna as engineer" -> "people": ["Anna"], "roles": [{"name": "Anna", "role": "Engineer"}]). "Roles supervisor" assigns "Supervisor" to the user.
 - For tools and service: Recognize "Tool: [item]", "Service: [task]", or commands like "add service abc".
-- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Handle "delete company <name>" to remove the company. Handle "correct company <old> to <new>" to update the company name.
+- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Extract only the company name (e.g., "BuildRight AG") and not subsequent text unless it’s explicitly part of the name. Handle "delete company <name>" to remove, and "correct company <old> to <new>" to update. Examples:
+  - "Companies: BuildRight AG and ElectricFlow GmbH" -> "company": [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}]
+  - "Company involved was BuildRight AG, supervisors were Anna" -> "company": [{"name": "BuildRight AG"}], "roles": [{"name": "Anna", "role": "Supervisor"}]
 - Comments should only include non-field-specific notes.
 - Return {} for reset commands or irrelevant inputs.
 - Case-insensitive matching.
@@ -585,8 +587,15 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     if re.match(r'^(?:delete|remove|add|insert|correct|adjust|update|spell)\b', name.lower()):
                         log_event("skipped_company", reason="command-like name", value=name)
                         continue
-                    result["company"] = [{"name": name}]
-                    log_event("extracted_field", field="company", value=name)
+                    # Validate company name
+                    if len(name.split()) > 3 or any(word in name.lower() for word in ["was", "were", "involved", "supervisor", "tool", "service", "activity", "issue"]):
+                        log_event("skipped_company", reason="invalid company name (too long or descriptive)", value=name)
+                        # Fallback to GPT for complex input
+                        gpt_result = extract_single_command(text)  # Retry with GPT
+                        result.update(gpt_result)
+                    else:
+                        result["company"] = [{"name": name}]
+                        log_event("extracted_field", field="company", value=name)
                 elif field == "clear":
                     field_name = FIELD_MAPPING.get(match.group(1).lower(), match.group(1).lower())
                     result[field_name] = [] if field_name in ["issues", "activities", "tools", "service", "company", "people", "roles"] else ""
@@ -1145,4 +1154,3 @@ def webhook() -> tuple[str, int]:
     except Exception as e:
         log_event("webhook_error", error=str(e))
         return "error", 500
-
