@@ -980,8 +980,11 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
     f"Removed {cmd['field']}" + (f": {cmd['value']}" if cmd['value'] else "")
     for cmd in extracted["delete"]
 )
-send_message(chat_id, f"{deleted_fields_summary}\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
-            return "ok", 200
+try:
+    send_message(chat_id, f"{deleted_fields_summary}\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+except Exception as e:
+    print(f"An error occurred: {e}")
+    return "ok", 200
 
         if extracted.get("correct"):
             sess["command_history"].append(sess["structured_data"].copy())
