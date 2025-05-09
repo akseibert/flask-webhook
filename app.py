@@ -566,7 +566,7 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed") -> 
             story.append(Paragraph("Conditions", heading_style))
             
             if report_data.get("time"):
-                story.append(Paragraph(f"<b>Time:</b> {report_data.get('time', ")}", normal_style))
+                story.append(Paragraph(f"<b>Time:</b> {report_data.get('time', '')}", normal_style))
             
             if report_data.get("weather"):
                 story.append(Paragraph(f"<b>Weather:</b> {report_data.get('weather', ")}", normal_style))
