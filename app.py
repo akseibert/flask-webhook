@@ -173,27 +173,27 @@ Fields to extract (omit if not present):
 - comments: string (e.g., "Ensure safety protocols")
 - date: string (format dd-mm-yyyy)
 
-Example Input:
-"Goodmorning, at the Central Plaza site, segment 5, companies involved were BuildRight AG and ElectricFlow GmbH. Supervisors were Anna Keller and MarkusSchmidt. Tools used included a mobile crane and welding equipment. Services provided were electrical wiring and HVAC installation. Activities covered laying foundations and setting up scaffolding. Issues encountered: a power outage at 10 AM caused a 2-hour delay, and a minor injury occurred when a worker slipped—no photo taken. Weather was cloudy with intermittent rain. Time spent: full day. Impression: productive despite setbacks. Comments: ensure safety protocols are reinforced"
+Commands:
+- add|insert <category> <value>: Add a value to the category (e.g., "add site Downtown Project" or "insert issues water leakage").
+- delete|remove <category> [value|from <category> <value>]: Remove a value or clear the category (e.g., "delete activities Laying foundation", "delete Jonas from people", or "delete companies").
+- correct|adjust|spell <category> <old> to <new>|correct spelling <category> <value>|spell <category> <value>: Update a value or correct spelling (e.g., "correct site Downtown to Uptown", "spell companies Orient Corp").
+- <category>: <value>: Add a value (e.g., "Services: abc" -> "service": [{"task": "abc"}]).
+- <category>: none: Clear the category (e.g., "Tools: none" -> "tools": []).
 
-Expected Output:
-{
-  "site_name": "Central Plaza",
-  "segment": "5",
-  "company": [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}],
-  "roles": [{"name": "Anna Keller", "role": "Supervisor"}, {"name": "MarkusSchmidt", "role": "Supervisor"}],
-  "tools": [{"item": "mobile crane"}, {"item": "welding equipment"}],
-  "service": [{"task": "electrical wiring"}, {"task": "HVAC installation"}],
-  "activities": ["laying foundations", "setting up scaffolding"],
-  "issues": [
-    {"description": "power outage at 10 AM caused a 2-hour delay"},
-    {"description": "minor injury occurred when a worker slipped", "has_photo": false}
-  ],
-  "weather": "cloudy with intermittent rain",
-  "time": "full day",
-  "impression": "productive despite setbacks",
-  "comments": "ensure safety protocols are reinforced"
-}
+Rules:
+- Accept both singular and plural category names (e.g., "issue" or "issues", "company" or "companies").
+- Extract fields from colon-separated inputs (e.g., "Services: abc"), natural language (e.g., "weather was cloudy" -> "weather": "cloudy"), or commands (e.g., "add people Anna").
+- For segment and category: Extract only the value (e.g., "Segment: 5" -> "segment": "5").
+- For issues: Recognize keywords: "Issue", "Issues", "Problem", "Delay", "Injury". "Issues: none" clears the issues list.
+- For activities: Recognize keywords: "Activity", "Activities", "Task", "Progress", "Construction", or action-oriented phrases. "Activities: none" clears the activities list. Handle vague inputs like "Activities: many" by adding them and noting clarification needed.
+- For site_name: Recognize location-like phrases following "at", "in", "on" (e.g., "Work was done at East Wing" -> "site_name": "East Wing", "activities": ["Work was done"]).
+- For people and roles: Recognize "add [name] as [role]" (e.g., "add Anna as engineer" -> "people": ["Anna"], "roles": [{"name": "Anna", "role": "Engineer"}]). "Roles supervisor" assigns "Supervisor" to the user.
+- For tools and service: Recognize "Tool: [item]", "Service: [task]", or commands like "add service abc".
+- For companies: Recognize "add company <name>", "company: <name>", or "add <name> as company". Handle "delete company <name>" to remove the company. Handle "correct company <old> to <new>" to update the company name.
+- Comments should only include non-field-specific notes.
+- Return {} for reset commands or irrelevant inputs.
+- Case-insensitive matching.
+- Handle natural language inputs flexibly, allowing variations like "Activities: laying foundation", "Add issue power outage", "Delete Jonas from people", or "spell companies Orient Corp".
 """
 
 # --- Signal Handlers ---
@@ -260,6 +260,7 @@ def send_pdf(chat_id: str, pdf_buffer: io.BytesIO) -> bool:
         data = {'chat_id': chat_id, 'caption': 'Here is your construction site report.'}
         response = requests.post(url, files=files, data=data)
         response.raise_for_status()
+        log - Construction Site Report Bot
         log_event("pdf_sent", chat_id=chat_id)
         return True
     except requests.RequestException as e:
@@ -353,6 +354,9 @@ def clean_value(value: Optional[str], field: str) -> Optional[str]:
     log_event("cleaned_value", field=field, raw=value, cleaned=cleaned)
     return cleaned
 
+def split_list_value(value: str) -> List[str]:
+    return [item.strip() for item in re.split(r'\s+and\s+|,', value) if item.strip()]
+
 def enrich_date(data: Dict[str, Any]) -> Dict[str, Any]:
     try:
         today = datetime.now().strftime("%d-%m-%Y")
@@ -387,98 +391,83 @@ validate_patterns()
 def extract_fields(text: str) -> Dict[str, Any]:
     try:
         log_event("extract_fields", input=text)
-        result: Dict[str, Any] = {}
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
 
+        # Check for reset commands
         reset_match = re.match(FIELD_PATTERNS["reset"], normalized_text, re.IGNORECASE)
         if reset_match:
             log_event("reset_detected")
             return {"reset": True}
 
+        # Check for undo, status, export pdf
         if normalized_text.lower() in ("undo", "/undo"):
             log_event("undo_detected")
             return {"undo": True}
-
         if normalized_text.lower() in ("status", "/status"):
             log_event("status_detected")
             return {"status": True}
-
         if normalized_text.lower() in ("export pdf", "/export pdf"):
             log_event("export_pdf_detected")
             return {"export_pdf": True}
 
-        commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)|(?:add|insert)\s+(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments))|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
-        log_event("commands_split", commands=commands)
-        processed_result = {
-            "company": [], "roles": [], "tools": [], "service": [],
-            "activities": [], "issues": [], "people": []
-        }
-        seen_fields = set()
-
-        for cmd in commands:
-            delete_match = re.match(FIELD_PATTERNS["delete"], cmd, re.IGNORECASE)
-            if delete_match:
-                raw_field = delete_match.group(1) if delete_match.group(1) else delete_match.group(2)
-                value = delete_match.group(3) if delete_match.group(3) else delete_match.group(4)
-                raw_field = raw_field.lower() if raw_field else None
-                value = value.strip() if value else None
-                field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
-                log_event("delete_command", field=field, value=value)
-                if field:
-                    result.setdefault("delete", []).append({"field": field, "value": value})
-                continue
-
-            correct_match = re.match(FIELD_PATTERNS["correct"], cmd, re.IGNORECASE)
-            if correct_match:
-                raw_field = correct_match.group(1).lower() if correct_match.group(1) else None
-                old_value = correct_match.group(2).strip() if correct_match.group(2) else None
-                new_value = correct_match.group(3).strip() if correct_match.group(3) else None
-                field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
-                log_event("correct_command", field=field, old=old_value, new=new_value)
-                if field and old_value:
-                    if new_value:
-                        result.setdefault("correct", []).append({"field": field, "old": clean_value(old_value, field), "new": clean_value(new_value, field)})
+        # Detect if multiple field keywords are present
+        keywords_in_text = set(re.findall(r'\b(' + categories_pattern + r')\b', normalized_text.lower()))
+        if len(keywords_in_text) > 1:
+            log_event("multiple_keywords_detected", keywords=keywords_in_text)
+            # Use GPT for complex inputs
+            messages = [
+                {"role": "system", "content": "Extract explicitly stated fields from construction site report input. Return JSON with extracted fields."},
+                {"role": "user", "content": GPT_PROMPT + "\nInput text: " + normalized_text}
+            ]
+            response = client.chat.completions.create(
+                model=CONFIG["OPENAI_MODEL"], messages=messages, temperature=CONFIG["OPENAI_TEMPERATURE"]
+            )
+            raw_response = response.choices[0].message.content
+            log_event("gpt_response", raw_response=raw_response)
+            data = json.loads(raw_response)
+            # Clean and process data
+            for field in ["category", "segment", "site_name", "time", "weather", "impression", "comments"]:
+                if field in data and isinstance(data[field], str):
+                    data[field] = clean_value(data[field], field)
+            for field in ["tools", "service", "issues", "company", "roles"]:
+                if field in data:
+                    for item in data[field]:
+                        if isinstance(item, dict):
+                            if field == "tools" and "item" in item:
+                                item["item"] = clean_value(item["item"], field)
+                            elif field == "service" and "task" in item:
+                                item["task"] = clean_value(item["task"], field)
+                            elif field == "issues" and "description" in item:
+                                item["description"] = clean_value(item["description"], field)
+                            elif field == "company" and "name" in item:
+                                item["name"] = clean_value(item["name"], field)
+                            elif field == "roles" and "name" in item:
+                                item["name"] = clean_value(item["name"], field)
+                                if "role" in item:
+                                    item["role"] = clean_value(item["role"], field)
+            if "activities" in data:
+                data["activities"] = [clean_value(item, "activities") for item in data["activities"] if isinstance(item, str)]
+            if "roles" in data:
+                for role in data["roles"]:
+                    if isinstance(role, dict) and "name" in role and role["name"] not in data.get("people", []):
+                        data.setdefault("people", []).append(clean_value(role["name"], "people"))
+            return data
+        else:
+            # Use regex for simple commands
+            commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)|(?:add|insert)\s+(?:' + categories_pattern + r'))|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
+            log_event("commands_split", commands=commands)
+            result = {}
+            for cmd in commands:
+                cmd_result = extract_single_command(cmd)
+                for key, value in cmd_result.items():
+                    if key in result:
+                        if isinstance(result[key], list):
+                            result[key].extend(value)
+                        else:
+                            result[key] = value
                     else:
-                        result["correct_prompt"] = {"field": field, "value": clean_value(old_value, field)}
-                continue
-
-            cmd_result = extract_single_command(cmd)
-            if cmd_result.get("reset"):
-                return {"reset": True}
-            for key, value in cmd_result.items():
-                if key in seen_fields and key not in ["people", "company", "roles", "tools", "service", "activities", "issues"]:
-                    continue
-                seen_fields.add(key)
-                if key in processed_result:
-                    if isinstance(value, list):
-                        processed_result[key].extend(value)
-                    else:
-                        processed_result[key].append(value)
-                else:
-                    result[key] = value
-
-        for field in processed_result:
-            if processed_result[field]:
-                existing_items = (
-                    [item["name"] for item in result.get(field, []) if isinstance(item, dict) and "name" in item] if field == "company" else
-                    [item["description"] for item in result.get(field, []) if isinstance(item, dict) and "description" in item] if field == "issues" else
-                    [item["task"] for item in result.get(field, []) if isinstance(item, dict) and "task" in item] if field == "service" else
-                    [item["item"] for item in result.get(field, []) if isinstance(item, dict) and "item" in item] if field == "tools" else
-                    [f"{item['name']} ({item['role']})" for item in result.get(field, []) if isinstance(item, dict) and "name" in item and "role" in item] if field == "roles" else
-                    result.get(field, []) if field in ["people", "activities"] else
-                    []
-                )
-                result[field] = processed_result[field] + (
-                    [{"name": i} for i in existing_items if isinstance(i, str)] if field == "company" else
-                    [{"description": i} for i in existing_items if isinstance(i, str)] if field == "issues" else
-                    [{"task": i} for i in existing_items if isinstance(i, str)] if field == "service" else
-                    [{"item": i} for i in existing_items if isinstance(i, str)] if field == "tools" else
-                    [{"name": i.split(' (')[0], "role": i.split(' (')[1].rstrip(')')} for i in existing_items if isinstance(i, str) and ' (' in i] if field == "roles" else
-                    existing_items if field in ["people", "activities"] else []
-                )
-
-        log_event("fields_extracted", result=result)
-        return result
+                        result[key] = value
+            return result
     except Exception as e:
         log_event("extract_fields_error", input=text, error=str(e))
         raise
@@ -503,17 +492,11 @@ def extract_single_command(text: str) -> Dict[str, Any]:
             if field in ["architect", "engineer", "supervisor", "manager", "worker", "window installer"]:
                 result.setdefault("delete", []).append({"field": "roles", "value": field})
                 log_event("delete_role_command", field="roles", value=field)
-            elif mapped_field == "people":
-                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
-                log_event("delete_people_command", field=mapped_field, value=value)
-            elif mapped_field == "person":
-                result["people"] = {"delete": value}
-                log_event("delete_person_command", field="people", value=value)
-            elif mapped_field in ["company", "roles", "tools", "service", "activities", "issues"]:
-                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
+            elif mapped_field in ["company", "roles", "tools", "service", "activities", "issues", "people"]:
+                result.setdefault("delete", []).append({"field": mapped_field, "value": value})
                 log_event("delete_list_command", field=mapped_field, value=value)
             elif mapped_field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
-                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else {"delete": True}
+                result.setdefault("delete", []).append({"field": mapped_field, "value": value})
                 log_event("delete_scalar_command", field=mapped_field, value=value)
             else:
                 log_event("unrecognized_delete_field", field=field)
@@ -525,7 +508,7 @@ def extract_single_command(text: str) -> Dict[str, Any]:
         if delete_entire_match:
             field = delete_entire_match.group(1).lower()
             mapped_field = FIELD_MAPPING.get(field, field)
-            result[mapped_field] = {"delete": True}
+            result.setdefault("delete", []).append({"field": mapped_field, "value": None})
             log_event("delete_entire_category", field=mapped_field)
             return result
 
@@ -561,70 +544,74 @@ def extract_single_command(text: str) -> Dict[str, Any]:
                     if name.lower() == "supervisor":
                         log_event("skipped_people_supervisor", reason="supervisor is a role")
                         continue
-                    result["people"] = [name]
+                    result["people"] = split_list_value(name)
                     if role:
-                        result["roles"] = [{"name": name, "role": role.title()}]
-                        log_event("extracted_field", field="roles", name=name, role=role)
-                    log_event("extracted_field", field="people", value=name)
+                        result["roles"] = [{"name": n, "role": role.title()} for n in result["people"]]
+                        log_event("extracted_field", field="roles", names=result["people"], role=role)
+                    log_event("extracted_field", field="people", value=result["people"])
                 elif field == "role":
                     name = clean_value(match.group(1) or match.group(3), field)
                     role = (match.group(2) or match.group(4)).title()
                     if name.lower() == "supervisor":
                         log_event("skipped_role_supervisor", reason="supervisor is a role")
                         continue
-                    result["people"] = [name.strip()]
-                    result["roles"] = [{"name": name.strip(), "role": role}]
-                    log_event("extracted_field", field="roles", name=name, role=role)
+                    names = split_list_value(name)
+                    result["people"] = names
+                    result["roles"] = [{"name": n, "role": role} for n in names]
+                    log_event("extracted_field", field="roles", names=names, role=role)
                 elif field == "supervisor":
                     value = clean_value(match.group(1), field)
-                    supervisor_names = [name.strip() for name in re.split(r'\s+and\s+|,', value) if name.strip()]
+                    supervisor_names = split_list_value(value)
                     result["roles"] = [{"name": name, "role": "Supervisor"} for name in supervisor_names]
                     result["people"] = supervisor_names
                     log_event("extracted_field", field="roles", value=supervisor_names)
                 elif field == "company":
                     captured = clean_value(match.group(2) if match.group(2) else match.group(1), field)
-                    company_names = [name.strip() for name in re.split(r'\s+and\s+|,', captured) if name.strip()]
+                    company_names = split_list_value(captured)
                     result["company"] = [{"name": name} for name in company_names]
                     log_event("extracted_field", field="company", value=company_names)
                 elif field == "clear":
                     field_name = FIELD_MAPPING.get(match.group(1).lower(), match.group(1).lower())
                     result[field_name] = [] if field_name in ["issues", "activities", "tools", "service", "company", "people", "roles"] else ""
                     log_event("extracted_field", field=field_name, value="none")
-                elif field in ["service"]:
+                elif field == "service":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
-                        result[field] = []
+                        result["service"] = []
                     else:
-                        result[field] = [{"task": value.strip()}]
-                    log_event("extracted_field", field=field, value=value)
-                elif field in ["tool"]:
+                        services = split_list_value(value)
+                        result["service"] = [{"task": task} for task in services]
+                    log_event("extracted_field", field="service", value=services)
+                elif field == "tool":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
-                        result[field] = []
+                        result["tools"] = []
                     else:
-                        result[field] = [{"item": value.strip()}]
-                    log_event("extracted_field", field=field, value=value)
+                        tools = split_list_value(value)
+                        result["tools"] = [{"item": tool} for tool in tools]
+                    log_event("extracted_field", field="tools", value=tools)
                 elif field == "issue":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
-                        result[field] = []
+                        result["issues"] = []
                     else:
-                        result[field] = [{"description": value.strip()}]
-                    log_event("extracted_field", field=field, value=value)
+                        result["issues"] = [{"description": value.strip()}]
+                    log_event("extracted_field", field="issues", value=value)
                 elif field == "activity":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
-                        result[field] = []
+                        result["activities"] = []
                     else:
-                        result[field] = [value.strip()]
-                    log_event("extracted_field", field=field, value=value)
+                        activities = split_list_value(value)
+                        result["activities"] = activities
+                    log_event("extracted_field", field="activities", value=activities)
                 else:
                     value = clean_value(match.group(1), field)
                     result[field] = value
                     log_event("extracted_field", field=field, value=value)
                 return result
 
-        # Fallback to GPT for complex inputs
+        # Fallback to GPT for unrecognized inputs
         messages = [
             {"role": "system", "content": "Extract explicitly stated fields from construction site report input. Return JSON with extracted fields."},
             {"role": "user", "content": GPT_PROMPT + "\nInput text: " + normalized_text}
@@ -636,61 +623,10 @@ def extract_single_command(text: str) -> Dict[str, Any]:
             raw_response = response.choices[0].message.content
             log_event("gpt_response", raw_response=raw_response)
             data = json.loads(raw_response)
-            log_event("gpt_extracted", data=data)
-            for field in ["category", "segment", "site_name", "time", "weather", "impression", "comments"]:
-                if field in data and isinstance(data[field], str):
-                    data[field] = clean_value(data[field], field)
-            for field in ["tools", "service", "issues", "company", "roles"]:
-                if field in data:
-                    for item in data[field]:
-                        if isinstance(item, dict):
-                            if field == "tools" and "item" in item:
-                                item["item"] = clean_value(item["item"], field)
-                            elif field == "service" and "task" in item:
-                                item["task"] = clean_value(item["task"], field)
-                            elif field == "issues" and "description" in item:
-                                item["description"] = clean_value(item["description"], field)
-                            elif field == "company" and "name" in item:
-                                item["name"] = clean_value(item["name"], field)
-                            elif field == "roles" and "name" in item:
-                                item["name"] = clean_value(item["name"], field)
-                                item["role"] = clean_value(item["role"], field) if item.get("role") else item["role"]
-            if "activities" in data:
-                data["activities"] = [clean_value(item, "activities") for item in data["activities"] if isinstance(item, str)]
-            if "roles" in data:
-                for role in data["roles"]:
-                    if isinstance(role, dict) and "name" in role and role["name"] not in data.get("people", []):
-                        data.setdefault("people", []).append(clean_value(role["name"], "people"))
-            if not data and normalized_text.strip():
-                issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
-                activity_keywords = r'\b(work\s+was\s+done|activity|activities|task|progress|construction|building|laying|setting|wiring|installation|scaffolding)\b'
-                location_keywords = r'\b(at|in|on)\b'
-                if re.search(issue_keywords, normalized_text.lower()):
-                    cleaned_text = clean_value(normalized_text.strip(), "issues")
-                    data = {"issues": [{"description": cleaned_text}]}
-                    log_event("fallback_issue", data=data)
-                elif re.search(activity_keywords, normalized_text.lower()) and re.search(location_keywords, normalized_text.lower()):
-                    parts = re.split(r'\b(at|in|on)\b', normalized_text, flags=re.IGNORECASE)
-                    location = ", ".join(clean_value(part.strip().title(), "site_name") for part in parts[2::2] if part.strip())
-                    activity = clean_value(parts[0].strip(), "activities")
-                    data = {"site_name": location, "activities": [activity]}
-                    log_event("fallback_activity_site", data=data)
-                else:
-                    data = {"comments": clean_value(normalized_text.strip(), "comments")}
-                    log_event("fallback_comments", data=data)
             return data
         except (json.JSONDecodeError, Exception) as e:
             log_event("gpt_extract_error", input=normalized_text, error=str(e))
-            if normalized_text.strip():
-                issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
-                if re.search(issue_keywords, normalized_text.lower()):
-                    cleaned_text = clean_value(normalized_text.strip(), "issues")
-                    data = {"issues": [{"description": cleaned_text}]}
-                    log_event("fallback_issue_error", data=data)
-                    return data
-                log_event("fallback_comments_error", input=normalized_text)
-                return {"comments": clean_value(normalized_text.strip(), "comments")}
-            return {}
+            return {"comments": clean_value(normalized_text.strip(), "comments")}
     except Exception as e:
         log_event("extract_single_command_error", input=text, error=str(e))
         raise
@@ -1087,6 +1023,7 @@ def webhook() -> tuple[str, int]:
                 sess["awaiting_reset_confirmation"] = False
                 sess["pending_input"] = None
                 sess["last_interaction"] = time()
+                return handle_command(chat_id, text, sess)
             else:
                 send_message(chat_id, "Please clarify: Reset the report? Reply 'yes' or 'no'.")
                 return "ok", 200
