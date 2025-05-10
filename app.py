@@ -2423,7 +2423,7 @@ def webhook() -> tuple[str, int]:
 
         # Handle reset confirmation
         if sess.get("awaiting_reset_confirmation", False):
-            normalized_text = re.sub(r'[.!?]\s*$', ", text.strip()).lower()
+            normalized_text = re.sub(r'[.!?]\s*$', '', text.strip()).lower()
             log_event("reset_confirmation", text=normalized_text)
             
             if normalized_text in ("yes", "new", "new report", "y"):
