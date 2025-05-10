@@ -2470,7 +2470,7 @@ def webhook() -> tuple[str, int]:
 
         # Handle voice transcription confirmation
         if sess.get("awaiting_voice_confirmation", False):
-            normalized_text = re.sub(r'[.!?]\s*$', ", text.strip()).lower()
+            normalized_text = re.sub(r'[.!?]\s*$', '', text.strip()).lower()
             
             if normalized_text in ("yes", "y", "correct", "proceed"):
                 # Transcription is correct, process the command
