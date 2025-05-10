@@ -21,6 +21,8 @@ from reportlab.lib.units import inch, cm
 from reportlab.lib import colors
 from decouple import config
 
+app = Flask(__name__)
+
 # --- Configuration ---
 CONFIG = {
     "SESSION_FILE": config("SESSION_FILE", default="/opt/render/project/src/session_data.json"),
@@ -416,11 +418,18 @@ def send_pdf(chat_id: str, pdf_buffer: io.BytesIO, report_type: str = "standard"
         elif report_type == "detailed":
             caption = "Here is your detailed construction site report."
             
-        files = {'document': ('report.pdf', pdf_buffer, 'application/pdf')}
+        # Get the site name and current date/time for the filename
+        report_data = session_data.get(chat_id, {}).get("structured_data", {})
+        site_name = report_data.get("site_name", "site").lower().replace(" ", "_")
+        # Format current datetime as DDMMYYYY_HHMM
+        current_time = datetime.now().strftime("%d%m%Y_%H%M%S")
+        filename = f"{current_time}_{site_name}.pdf"
+            
+        files = {'document': (filename, pdf_buffer, 'application/pdf')}
         data = {'chat_id': chat_id, 'caption': caption}
         response = requests.post(url, files=files, data=data)
         response.raise_for_status()
-        log_event("pdf_sent", chat_id=chat_id, report_type=report_type)
+        log_event("pdf_sent", chat_id=chat_id, report_type=report_type, filename=filename)
         return True
     except requests.RequestException as e:
         log_event("send_pdf_error", chat_id=chat_id, error=str(e))
@@ -2062,6 +2071,7 @@ COMMAND_HANDLERS["/reset"] = handle_reset
 COMMAND_HANDLERS["/status"] = handle_status
 COMMAND_HANDLERS["/undo"] = handle_undo
 COMMAND_HANDLERS["/export"] = handle_export
+COMMAND_HANDLERS["export report"] = handle_export
 COMMAND_HANDLERS["/help"] = handle_help
 COMMAND_HANDLERS["undo last change"] = handle_undo_last
 COMMAND_HANDLERS["summarize"] = handle_summary
