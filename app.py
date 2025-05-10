@@ -2072,4 +2072,546 @@ def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, 
         clear_match = re.match(FIELD_PATTERNS["clear"], text, re.IGNORECASE)
         if clear_match:
             raw_field = clear_match.group(1).lower() if clear_match.group(1) else None
-            field = FIELD_
+            field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
+            
+            if not field:
+                log_event("clear_command_error", text=text, error="Invalid field")
+                send_message(chat_id, f"⚠️ Invalid clear command: '{text}'. Try 'tools: none' or 'issues: none'.")
+                return "ok", 200
+                
+            # Save the original value for undo last
+            if field in sess["structured_data"]:
+                sess["last_change_history"].append((field, sess["structured_data"][field]))
+                
+            # Save current state for undo
+            sess["command_history"].append(sess["structured_data"].copy())
+            
+            # Clear the field
+            sess["structured_data"] = delete_entry(sess["structured_data"], field)
+            save_session(session_data)
+            
+            # Update context
+            update_context(sess, field, "none")
+            
+            tpl = summarize_report(sess["structured_data"])
+            send_message(chat_id, f"Cleared {field}\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+
+        # Extract fields from the input
+        extracted = extract_fields(text)
+        
+        # Handle reset command
+        if extracted.get("reset"):
+            sess["awaiting_reset_confirmation"] = True
+            sess["pending_input"] = text
+            save_session(session_data)
+            send_message(chat_id, "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
+            return "ok", 200
+            
+        # Handle help command
+        if "help" in extracted:
+            topic = extracted["help"]
+            handle_help(chat_id, sess, topic)
+            return "ok", 200
+            
+        # Handle special report commands
+        if extracted.get("summary"):
+            handle_summary(chat_id, sess)
+            return "ok", 200
+            
+        if extracted.get("detailed"):
+            handle_detailed(chat_id, sess)
+            return "ok", 200
+            
+        # Handle undo last command
+        if extracted.get("undo_last"):
+            handle_undo_last(chat_id, sess)
+            return "ok", 200
+            
+        # Handle spelling correction prompts
+        if extracted.get("correct_prompt"):
+            field = extracted["correct_prompt"]["field"]
+            value = extracted["correct_prompt"]["value"]
+            sess["awaiting_spelling_correction"] = (field, value)
+            save_session(session_data)
+            send_message(chat_id, f"Please provide the correct spelling for '{value}' in {field}.")
+            return "ok", 200
+            
+        # Handle delete commands
+        if extracted.get("delete"):
+            sess["command_history"].append(sess["structured_data"].copy())
+            
+            for delete_cmd in extracted["delete"]:
+                field = delete_cmd["field"]
+                value = delete_cmd["value"]
+                
+                # Save the original value for undo last
+                if field in sess["structured_data"]:
+                    sess["last_change_history"].append((field, sess["structured_data"][field]))
+                
+                # Fix service/services mapping
+                if field == "service":
+                    field = "services"
+                    
+                # Delete the entry
+                sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
+                
+                # Update context
+                if value:
+                    update_context(sess, field, f"deleted {value}")
+                else:
+                    update_context(sess, field, "deleted")
+            
+            save_session(session_data)
+            tpl = summarize_report(sess["structured_data"])
+            
+            # Use the last delete command for the confirmation message
+            last_field = extracted["delete"][-1]["field"]
+            last_value = extracted["delete"][-1]["value"]
+            
+            send_message(chat_id, f"Removed {last_field}" + (f": {last_value}" if last_value else "") + f"\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+            
+        # Handle correction commands
+        if extracted.get("correct"):
+            sess["command_history"].append(sess["structured_data"].copy())
+            
+            for correct_cmd in extracted["correct"]:
+                field = correct_cmd["field"]
+                old_value = correct_cmd["old"]
+                new_value = correct_cmd["new"]
+                
+                # Save the original value for undo last
+                if field in sess["structured_data"]:
+                    sess["last_change_history"].append((field, sess["structured_data"][field]))
+                
+                # Handle different field types
+                if field in ["companies", "roles", "tools", "services", "issues"]:
+                    data_field = (
+                        "name" if field == "companies" else
+                        "description" if field == "issues" else
+                        "item" if field == "tools" else
+                        "task" if field == "services" else
+                        "name" if field == "roles" else None
+                    )
+                    
+                    # Handle service/services correctly
+                    if field == "service":
+                        field = "services"
+                        data_field = "task"
+                        
+                    # Make sure we're working with the services field if needed
+                    if field == "services" and "service" in sess["structured_data"] and "services" not in sess["structured_data"]:
+                        sess["structured_data"]["services"] = sess["structured_data"].pop("service")
+                    
+                    sess["structured_data"][field] = [
+                        {data_field: new_value if string_similarity(item.get(data_field, ""), old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item[data_field],
+                         **({} if field != "roles" else {"role": item["role"]})}
+                        for item in sess["structured_data"].get(field, [])
+                        if isinstance(item, dict)
+                    ]
+                    
+                    # Ensure people list includes roles
+                    if field == "roles" and new_value not in sess["structured_data"].get("people", []):
+                        sess["structured_data"].setdefault("people", []).append(new_value)
+                        
+                elif field in ["people"]:
+                    # Update people and associated roles
+                    sess["structured_data"]["people"] = [
+                        new_value if string_similarity(item, old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item 
+                        for item in sess["structured_data"].get("people", [])
+                    ]
+                    
+                    # Also update roles to maintain consistency
+                    sess["structured_data"]["roles"] = [
+                        {"name": new_value, "role": role["role"]} 
+                        if string_similarity(role.get("name", ""), old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] 
+                        else role
+                        for role in sess["structured_data"].get("roles", [])
+                    ]
+                    
+                elif field in ["activities"]:
+                    # Update activities
+                    sess["structured_data"]["activities"] = [
+                        new_value if string_similarity(item, old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item 
+                        for item in sess["structured_data"].get("activities", [])
+                    ]
+                    
+                else:
+                    # Update scalar field
+                    sess["structured_data"][field] = new_value
+                    
+                # Update context
+                update_context(sess, field, new_value)
+                    
+                log_event(f"{field}_corrected", old=old_value, new=new_value)
+                
+            save_session(session_data)
+            tpl = summarize_report(sess["structured_data"])
+            
+            # Use the last correction for the confirmation message
+            last_field = extracted["correct"][-1]["field"]
+            last_old = extracted["correct"][-1]["old"]
+            last_new = extracted["correct"][-1]["new"]
+            
+            send_message(chat_id, f"Corrected {last_field} from '{last_old}' to '{last_new}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+            
+        # Handle contextual add commands
+        if extracted.get("context_add"):
+            target_field = extracted["context_add"]["field"]
+            
+            # Try to extract the relevant context item
+            context = sess.get("context", {})
+            value_to_add = None
+            
+            if target_field in ["people", "roles"] and context.get("last_mentioned_person"):
+                value_to_add = context["last_mentioned_person"]
+            elif target_field in ["tools", "services", "activities", "issues"] and context.get("last_mentioned_item"):
+                value_to_add = context["last_mentioned_item"]
+                
+            if value_to_add:
+                # Save current state for undo
+                sess["command_history"].append(sess["structured_data"].copy())
+                
+                # Create a new data dictionary with just this field
+                field_data = {}
+                
+                if target_field == "people":
+                    field_data["people"] = [value_to_add]
+                elif target_field == "roles" and context.get("last_mentioned_person"):
+                    # Default role is "Worker" if not specified
+                    field_data["roles"] = [{"name": context["last_mentioned_person"], "role": "Worker"}]
+                    field_data["people"] = [context["last_mentioned_person"]]
+                elif target_field == "activities":
+                    field_data["activities"] = [value_to_add]
+                elif target_field == "tools":
+                    field_data["tools"] = [{"item": value_to_add}]
+                elif target_field == "services":
+                    field_data["services"] = [{"task": value_to_add}]
+                elif target_field == "issues":
+                    field_data["issues"] = [{"description": value_to_add}]
+                elif target_field in SCALAR_FIELDS:
+                    field_data[target_field] = value_to_add
+                
+                # Merge the new data
+                sess["structured_data"] = merge_data(sess["structured_data"], field_data)
+                save_session(session_data)
+                
+                tpl = summarize_report(sess["structured_data"])
+                send_message(chat_id, f"Added '{value_to_add}' to {target_field}.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+                return "ok", 200
+            else:
+                send_message(chat_id, f"I couldn't find a relevant item to add to {target_field}. Please specify what you want to add.")
+                return "ok", 200
+                
+        # Check if any fields were extracted
+        if not any(k in extracted for k in LIST_FIELDS + SCALAR_FIELDS + ["export_pdf"]):
+            log_event("unrecognized_input", input=text)
+            
+            # Try to suggest corrections
+            suggestion = suggest_corrections(text)
+            if suggestion:
+                send_message(chat_id, f"⚠️ Unrecognized input: '{text}'. {suggestion}")
+            else:
+                send_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Try 'add site Downtown Project', 'add issue power outage', or 'help' for assistance.")
+                
+            return "ok", 200
+
+        # Handle normal field updates
+        sess["command_history"].append(sess["structured_data"].copy())
+        
+        # Save original values for all fields that will be modified
+        for field in (set(extracted.keys()) & set(LIST_FIELDS + SCALAR_FIELDS)):
+            if field in sess["structured_data"]:
+                sess["last_change_history"].append((field, sess["structured_data"][field]))
+                
+        # Update context from extracted fields
+        for field in extracted:
+            if field in LIST_FIELDS + SCALAR_FIELDS:
+                value = extracted[field]
+                if isinstance(value, list) and value:
+                    update_context(sess, field, str(value[0]))
+                elif not isinstance(value, list) and value:
+                    update_context(sess, field, str(value))
+        
+        # Merge the extracted data
+        sess["structured_data"] = merge_data(sess["structured_data"], enrich_date(extracted))
+        save_session(session_data)
+        
+        # Handle export_pdf command
+        if extracted.get("export_pdf"):
+            handle_export(chat_id, sess)
+            return "ok", 200
+        
+        tpl = summarize_report(sess["structured_data"])
+        send_message(chat_id, f"✅ Updated report:\n\n{tpl}\n\nAnything else to add or correct?")
+        return "ok", 200
+        
+    except Exception as e:
+        log_event("handle_command_error", error=str(e))
+        send_message(chat_id, "⚠️ An error occurred while processing your command. Please try again or type 'help' for assistance.")
+        return "error", 500
+
+@app.route("/webhook", methods=["POST"])
+def webhook() -> tuple[str, int]:
+    """Handle Telegram webhook requests"""
+    try:
+        data = request.get_json(force=True)
+        log_event("webhook_received")
+        
+        if not data or "message" not in data:
+            log_event("no_message")
+            return "ok", 200
+
+        msg = data["message"]
+        chat_id = str(msg["chat"]["id"])
+        text = msg.get("text", "").strip()
+        log_event("message_received", chat_id=chat_id, text_length=len(text))
+
+        # Initialize session for new users
+        if chat_id not in session_data:
+            session_data[chat_id] = {
+                "structured_data": blank_report(),
+                "awaiting_correction": False,
+                "last_interaction": time(),
+                "pending_input": None,
+                "awaiting_reset_confirmation": False,
+                "command_history": deque(maxlen=CONFIG["MAX_HISTORY"]),
+                "awaiting_spelling_correction": None,
+                "last_change_history": [],
+                "context": {
+                    "last_mentioned_person": None,
+                    "last_mentioned_item": None,
+                    "last_field": None,
+                },
+                "report_format": "detailed"
+            }
+            log_event("session_created", chat_id=chat_id)
+            send_message(chat_id, "👋 Welcome to the Construction Site Report Bot!\n\nI'll help you create detailed construction site reports easily. Start by adding information about your site (e.g., 'add site Downtown Project').\n\nType 'help' for more information on available commands.")
+            
+        sess = session_data[chat_id]
+
+        # Clean up invalid entries from structured data
+        if "Supervisor" in sess["structured_data"].get("people", []):
+            sess["structured_data"]["people"] = [p for p in sess["structured_data"].get("people", []) if p != "Supervisor"]
+            log_event("removed_supervisor_entry", chat_id=chat_id)
+            
+        if "roles" in sess["structured_data"]:
+            sess["structured_data"]["roles"] = [r for r in sess["structured_data"].get("roles", []) if r.get("name") != "Supervisor"]
+            
+        # Normalize field names
+        _normalize_field_names(sess["structured_data"])
+
+        # Handle voice messages
+        if "voice" in msg:
+            text, confidence = transcribe_voice(msg["voice"]["file_id"])
+            if not text:
+                send_message(chat_id, "⚠️ Couldn't understand the audio. Please speak clearly (e.g., 'add site Downtown Project') or type your command.")
+                return "ok", 200
+                
+            log_event("transcribed_voice", text=text, confidence=confidence)
+            
+            # Ask for confirmation if confidence is low
+            if confidence < 0.7:
+                sess["pending_input"] = text
+                sess["awaiting_voice_confirmation"] = True
+                sess["last_interaction"] = time()
+                save_session(session_data)
+                send_message(chat_id, f"I heard:\n\n\"{text}\"\n\nIs this correct? Reply 'yes' to proceed or 'no' to try again.")
+                return "ok", 200
+
+        # Handle reset confirmation
+        if sess.get("awaiting_reset_confirmation", False):
+            normalized_text = re.sub(r'[.!?]\s*$', ", text.strip()).lower()
+            log_event("reset_confirmation", text=normalized_text)
+            
+            if normalized_text in ("yes", "new", "new report", "y"):
+                # User confirmed reset
+                sess["structured_data"] = blank_report()
+                sess["awaiting_correction"] = False
+                sess["awaiting_reset_confirmation"] = False
+                sess["pending_input"] = None
+                sess["command_history"].clear()
+                sess["last_change_history"].clear()
+                sess["context"] = {
+                    "last_mentioned_person": None,
+                    "last_mentioned_item": None,
+                    "last_field": None,
+                }
+                save_session(session_data)
+                
+                tpl = summarize_report(sess["structured_data"])
+                send_message(chat_id, f"**Starting a fresh report**\n\n{tpl}\n\nSpeak or type your first field (e.g., 'add site Downtown Project').")
+                return "ok", 200
+                
+            elif normalized_text in ("no", "existing", "continue", "n"):
+                # User wants to continue with existing report
+                preserved_input = sess["pending_input"]
+                sess["awaiting_reset_confirmation"] = False
+                sess["pending_input"] = None
+                sess["last_interaction"] = time()
+                save_session(session_data)
+                
+                # Only process the preserved input if it's not a reset command itself
+                preserved_normalized = preserved_input.strip().lower() if preserved_input else ""
+                if preserved_normalized and preserved_normalized not in ("new", "new report", "reset", "reset report", "/new"):
+                    log_event("proceeding_with_existing_input", input=preserved_input)
+                    return handle_command(chat_id, preserved_input, sess)
+                else:
+                    # Just show the current status if no valid preserved input
+                    summary = summarize_report(sess["structured_data"])
+                    send_message(chat_id, f"**Continuing with existing report**\n\n{summary}")
+                    return "ok", 200
+            else:
+                # Unclear response
+                send_message(chat_id, "Please clearly indicate if you want to reset the report. Reply 'yes' to reset or 'no' to continue with the existing report.")
+                return "ok", 200
+
+        # Handle voice transcription confirmation
+        if sess.get("awaiting_voice_confirmation", False):
+            normalized_text = re.sub(r'[.!?]\s*$', ", text.strip()).lower()
+            
+            if normalized_text in ("yes", "y", "correct", "proceed"):
+                # Transcription is correct, process the command
+                preserved_input = sess["pending_input"]
+                sess["awaiting_voice_confirmation"] = False
+                sess["pending_input"] = None
+                save_session(session_data)
+                
+                log_event("voice_transcription_confirmed", input=preserved_input)
+                return handle_command(chat_id, preserved_input, sess)
+                
+            elif normalized_text in ("no", "n", "incorrect", "wrong"):
+                # Transcription is incorrect
+                sess["awaiting_voice_confirmation"] = False
+                sess["pending_input"] = None
+                save_session(session_data)
+                
+                send_message(chat_id, "Please try speaking again more clearly, or type your command instead.")
+                return "ok", 200
+                
+            else:
+                # Unclear response
+                send_message(chat_id, "Please clearly indicate if the transcription is correct. Reply 'yes' to proceed or 'no' to try again.")
+                return "ok", 200
+
+        # Handle spelling correction
+        if sess.get("awaiting_spelling_correction"):
+            field, old_value = sess["awaiting_spelling_correction"]
+            new_value = text.strip()
+            
+            log_event("spelling_correction", field=field, old=old_value, new=new_value)
+            
+            # Check if the new value is too similar to the old one
+            if string_similarity(new_value.lower(), old_value.lower()) > 0.95:
+                sess["awaiting_spelling_correction"] = None
+                save_session(session_data)
+                send_message(chat_id, f"⚠️ New value '{new_value}' is too similar to the old value '{old_value}'. Please provide a different spelling or type 'cancel' to abort the correction.")
+                return "ok", 200
+                
+            # Cancel the correction if requested
+            if new_value.lower() in ("cancel", "abort", "stop", "nevermind", "never mind"):
+                sess["awaiting_spelling_correction"] = None
+                save_session(session_data)
+                send_message(chat_id, "Spelling correction cancelled.")
+                return "ok", 200
+                
+            # Save original value for undo last
+            if field in sess["structured_data"]:
+                sess["last_change_history"].append((field, sess["structured_data"][field]))
+                
+            # Save current state for undo
+            sess["command_history"].append(sess["structured_data"].copy())
+            
+            # Apply the correction based on field type
+            sess["awaiting_spelling_correction"] = None
+            
+            if field in ["service", "services"]:
+                # Handle service/services mapping
+                field = "services"
+                data_field = "task"
+                
+                # Make sure we're working with the services field
+                if "service" in sess["structured_data"] and "services" not in sess["structured_data"]:
+                    sess["structured_data"]["services"] = sess["structured_data"].pop("service")
+                    
+                sess["structured_data"][field] = [
+                    {data_field: new_value if string_similarity(item.get(data_field, ""), old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item[data_field]}
+                    for item in sess["structured_data"].get(field, [])
+                    if isinstance(item, dict)
+                ]
+                
+            elif field in ["companies", "roles", "tools", "issues"]:
+                data_field = (
+                    "name" if field == "companies" else
+                    "description" if field == "issues" else
+                    "item" if field == "tools" else
+                    "name" if field == "roles" else None
+                )
+                
+                sess["structured_data"][field] = [
+                    {data_field: new_value if string_similarity(item.get(data_field, ""), old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item[data_field],
+                     **({} if field != "roles" else {"role": item["role"]})}
+                    for item in sess["structured_data"].get(field, [])
+                    if isinstance(item, dict)
+                ]
+                
+                # Add to people list if it's a role
+                if field == "roles" and new_value not in sess["structured_data"].get("people", []):
+                    sess["structured_data"].setdefault("people", []).append(new_value)
+                    
+            elif field in ["people"]:
+                # Update people list
+                sess["structured_data"]["people"] = [
+                    new_value if string_similarity(item, old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item 
+                    for item in sess["structured_data"].get("people", [])
+                ]
+                
+                # Also update roles with the same person
+                sess["structured_data"]["roles"] = [
+                    {"name": new_value, "role": role["role"]} 
+                    if string_similarity(role.get("name", ""), old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] 
+                    else role
+                    for role in sess["structured_data"].get("roles", [])
+                ]
+                
+            elif field in ["activities"]:
+                # Update activities list
+                sess["structured_data"]["activities"] = [
+                    new_value if string_similarity(item, old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item 
+                    for item in sess["structured_data"].get("activities", [])
+                ]
+                
+            else:
+                # Update scalar field
+                sess["structured_data"][field] = new_value
+                
+            # Update context
+            update_context(sess, field, new_value)
+                
+            save_session(session_data)
+            tpl = summarize_report(sess["structured_data"])
+            send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
+            return "ok", 200
+
+        # Process regular command
+        return handle_command(chat_id, text, sess)
+        
+    except Exception as e:
+        log_event("webhook_error", error=str(e))
+        try:
+            chat_id = str(data["message"]["chat"]["id"]) if data and "message" in data and "chat" in data["message"] else "unknown"
+            send_message(chat_id, "⚠️ An unexpected error occurred. Please try again or type 'help' for assistance.")
+        except Exception:
+            pass
+        return "error", 500
+
+if __name__ == "__main__":
+    # Use production server when in production environment
+    if os.environ.get("ENVIRONMENT") == "production":
+        from waitress import serve
+        serve(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    else:
+        # Use development server for local testing
+        app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
