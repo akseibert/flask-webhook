@@ -127,7 +127,7 @@ FIELD_PATTERNS = {
     "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression)\s*:)|$|\s*$)',
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*(?:none|delete|clear|remove|reset)$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": rf'^(?:delete|remove|none)\s+({categories_pattern})\s*(.+)?$|^(?:delete|remove)\s+(.+)\s+(?:from|in|of|at)\s+({categories_pattern})$|^({categories_pattern})\s+(?:delete|remove|none)\s*(.+)?$',
+    "delete": rf'^(?:delete|remove|none)\s+({categories_pattern})\s*(.+)?$|^(?:delete|remove)\s+(.+)\s+(?:from|in|of|at)\s+({categories_pattern})$|^({categories_pattern})\s+(?:delete|remove|none)\s*(.+)?$|^(?:delete|remove|none)\s+(.+)$',
     "delete_entire": rf'^(?:delete|remove|clear)\s+(?:entire|all)\s+(?:category|field|entries|list)?\s*[:]?\s*({list_categories_pattern})\s*[.!]?$',
     "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+([^,]+?)(?:\s+to\s+([^,]+?))?\s*(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "help": r'^help(?:\s+on\s+([a-z_]+))?$|^\/help(?:\s+([a-z_]+))?$',
@@ -135,6 +135,7 @@ FIELD_PATTERNS = {
     "context_add": r'^(?:add|include|include|insert)\s+(?:it|this|that|him|her|them)\s+(?:to|in|into|as)\s+(.+?)\s*[.!]?$',
     "summary": r'^(summarize|summary|short report|brief report|overview|compact report)\s*[.!]?$',
     "detailed": r'^(detailed|full|complete|comprehensive)\s+report\s*[.!]?$',
+    "export_pdf": r'^(export|export pdf|export report|generate pdf|generate report)\s*[.!]?$',
 }
 
 # Extended regex patterns for more nuanced commands
@@ -459,7 +460,7 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed") -> 
         story = []
         
         # Add title and date
-        title = f"Construction Site Report - {report_data.get('site_name') or 'Unknown Site'}"
+        title = f"Construction Site Report - {report_data.get('site_name', '') or 'Unknown Site'}"
         story.append(Paragraph(title, title_style))
         story.append(Paragraph(f"Date: {report_data.get('date', datetime.now().strftime('%d-%m-%Y'))}", normal_style))
         story.append(Spacer(1, 12))
@@ -599,16 +600,17 @@ def summarize_report(data: Dict[str, Any]) -> str:
     try:
         roles_str = ", ".join(f"{r.get('name', '')} ({r.get('role', '')})" for r in data.get("roles", []) if r.get("role"))
         
+        # Always include all fields, even empty ones
         lines = [
-            f"🏗️ **Site**: {data.get('site_name', '') or ''}",
-            f"🛠️ **Segment**: {data.get('segment', '') or ''}",
-            f"📋 **Category**: {data.get('category', '') or ''}",
-            f"🏢 **Companies**: {', '.join(c.get('name', '') for c in data.get('companies', []) if c.get('name')) or ''}",
-            f"👷 **People**: {', '.join(data.get('people', []) or [])}",
+            f"🏗️ **Site**: {data.get('site_name', '')}",
+            f"🛠️ **Segment**: {data.get('segment', '')}",
+            f"📋 **Category**: {data.get('category', '')}",
+            f"🏢 **Companies**: {', '.join(c.get('name', '') for c in data.get('companies', []) if c.get('name'))}",
+            f"👷 **People**: {', '.join(data.get('people', []))}",
             f"🎭 **Roles**: {roles_str}",
-            f"🔧 **Services**: {', '.join(s.get('task', '') for s in data.get('services', []) if s.get('task')) or ''}",
-            f"🛠️ **Tools**: {', '.join(t.get('item', '') for t in data.get('tools', []) if t.get('item')) or ''}",
-            f"📅 **Activities**: {', '.join(data.get('activities', []) or [])}",
+            f"🔧 **Services**: {', '.join(s.get('task', '') for s in data.get('services', []) if s.get('task'))}",
+            f"🛠️ **Tools**: {', '.join(t.get('item', '') for t in data.get('tools', []) if t.get('item'))}",
+            f"📅 **Activities**: {', '.join(data.get('activities', []))}",
             "⚠️ **Issues**:"
         ]
         
@@ -625,15 +627,15 @@ def summarize_report(data: Dict[str, Any]) -> str:
             lines.append("  • None reported")
         
         lines.extend([
-            f"⏰ **Time**: {data.get('time', '') or ''}",
-            f"🌦️ **Weather**: {data.get('weather', '') or ''}",
-            f"😊 **Impression**: {data.get('impression', '') or ''}",
-            f"💬 **Comments**: {data.get('comments', '') or ''}",
-            f"📆 **Date**: {data.get('date', '') or ''}"
+            f"⏰ **Time**: {data.get('time', '')}",
+            f"🌦️ **Weather**: {data.get('weather', '')}",
+            f"😊 **Impression**: {data.get('impression', '')}",
+            f"💬 **Comments**: {data.get('comments', '')}",
+            f"📆 **Date**: {data.get('date', '')}"
         ])
         
-        # Filter out empty lines to make the report cleaner
-        summary = "\n".join(line for line in lines if line.strip() and not line.endswith(": "))
+        # Include all lines regardless of emptiness
+        summary = "\n".join(lines)
         log_event("summarize_report", summary_length=len(summary))
         return summary
     except Exception as e:
@@ -793,7 +795,145 @@ def find_name_match(name: str, name_list: List[str]) -> Optional[str]:
         log_event("name_match_found", search=name, match=best_match, score=best_score)
         
     return best_match
-
+def extract_single_command(cmd: str) -> Dict[str, Any]:
+    """Extract structured data from a single command with enhanced error handling"""
+    try:
+        log_event("extract_single_command", input=cmd)
+        result = {}
+        
+        # Check for reset/new commands
+        reset_match = re.match(FIELD_PATTERNS["reset"], cmd, re.IGNORECASE)
+        if reset_match:
+            return {"reset": True}
+            
+        # Check for field-specific patterns
+        for raw_field, pattern in FIELD_PATTERNS.items():
+            # Skip non-field patterns
+            if raw_field in ["reset", "delete", "correct", "clear", "help", 
+                           "undo_last", "context_add", "summary", "detailed", 
+                           "delete_entire", "export_pdf"]:
+                continue
+                
+            match = re.match(pattern, cmd, re.IGNORECASE)
+            if match:
+                field = FIELD_MAPPING.get(raw_field, raw_field)
+                log_event("field_matched", raw_field=raw_field, mapped_field=field)
+                
+                # Skip site_name matches that look like commands
+                if field == "site_name" and re.search(r'\b(add|insert|delete|remove|correct|adjust|update|spell|none|as|role|new|reset)\b', cmd.lower()):
+                    log_event("skipped_site_name", reason="command-like input")
+                    continue
+                
+                # Handle people field
+                if field == "people":
+                    name = clean_value(match.group(1), field)
+                    role = clean_value(match.group(2), field) if len(match.groups()) > 1 and match.group(2) else None
+                    
+                    # Skip if it's just "supervisor"
+                    if name.lower() == "supervisor":
+                        continue
+                    
+                    result["people"] = [name]
+                    
+                    # If a role is specified, add it to roles as well
+                    if role:
+                        result["roles"] = [{"name": name, "role": role.title()}]
+                        
+                # Handle role field
+                elif field == "roles":
+                    # Groups vary depending on which pattern matched
+                    name = None
+                    role = None
+                    
+                    # Extract the name and role from the correct match groups
+                    for i in range(1, len(match.groups()) + 1):
+                        if match.group(i):
+                            if not name:
+                                name = clean_value(match.group(i), field)
+                            elif not role:
+                                role = clean_value(match.group(i), field).title()
+                    
+                    if not name or not role or name.lower() == "supervisor":
+                        continue
+                    
+                    result["people"] = [name]
+                    result["roles"] = [{"name": name, "role": role}]
+                
+                # Handle supervisor field
+                elif field == "roles" and raw_field == "supervisor":
+                    value = clean_value(match.group(1), "roles")
+                    supervisor_names = [name.strip() for name in re.split(r'\s+and\s+|,', value) if name.strip()]
+                    result["roles"] = [{"name": name, "role": "Supervisor"} for name in supervisor_names]
+                    result["people"] = supervisor_names
+                
+                # Handle company field
+                elif field == "companies":
+                    captured = clean_value(match.group(1) if len(match.groups()) >= 1 and match.group(1) else "", field)
+                    # If the first group is empty, try the second group
+                    if not captured and len(match.groups()) >= 2:
+                        captured = clean_value(match.group(2), field)
+                    
+                    company_names = [name.strip() for name in re.split(r'\s+and\s+|,', captured) if name.strip()]
+                    result["companies"] = [{"name": name} for name in company_names]
+                
+                # Handle service/services field
+                elif field in ["services", "service"]:
+                    value = clean_value(match.group(1), field)
+                    if value.lower() == "none":
+                        result["services"] = []
+                    else:
+                        services = [service.strip() for service in re.split(r',|\band\b', value) if service.strip()]
+                        result["services"] = [{"task": service} for service in services]
+                
+                # Handle tool/tools field
+                elif field in ["tools", "tool"]:
+                    value = clean_value(match.group(1), field)
+                    if value.lower() == "none":
+                        result["tools"] = []
+                    else:
+                        tools = [tool.strip() for tool in re.split(r',|\band\b', value) if tool.strip()]
+                        result["tools"] = [{"item": tool} for tool in tools]
+                
+                # Handle issue field
+                elif field == "issues":
+                    value = clean_value(match.group(1), field)
+                    if value.lower() == "none":
+                        result["issues"] = []
+                    else:
+                        issues = [issue.strip() for issue in re.split(r';', value) if issue.strip()]
+                        result["issues"] = [{"description": issue} for issue in issues]
+                
+                # Handle activity field
+                elif field == "activities":
+                    value = clean_value(match.group(1), field)
+                    if value.lower() == "none":
+                        result["activities"] = []
+                    else:
+                        activities = [activity.strip() for activity in re.split(r',|\band\b', value) if activity.strip()]
+                        result["activities"] = activities
+                
+                # Handle clear command
+                elif raw_field == "clear":
+                    field_name = match.group(1).lower() 
+                    field_name = FIELD_MAPPING.get(field_name, field_name)
+                    result[field_name] = [] if field_name in LIST_FIELDS else ""
+                
+                # Handle other fields (scalar fields)
+                else:
+                    value = clean_value(match.group(1), field)
+                    if value.lower() == "none":
+                        result[field] = "" if field in SCALAR_FIELDS else []
+                    else:
+                        result[field] = value
+                
+                return result
+        
+        # If we get here, no pattern matched for this command
+        return {}
+    except Exception as e:
+        log_event("extract_single_command_error", input=cmd, error=str(e))
+        return {}
+    
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def extract_fields(text: str) -> Dict[str, Any]:
     """Extract fields from text input with enhanced error handling and field validation"""
@@ -820,7 +960,8 @@ def extract_fields(text: str) -> Dict[str, Any]:
             log_event("status_detected")
             return {"status": True}
 
-        if normalized_text.lower() in ("export pdf", "/export pdf", "export", "/export"):
+        # Check for export command
+        if re.match(FIELD_PATTERNS["export_pdf"], normalized_text, re.IGNORECASE):
             log_event("export_pdf_detected")
             return {"export_pdf": True}
             
@@ -864,9 +1005,12 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 elif groups[2] and groups[3]:  # Second pattern: "delete value from category"
                     raw_field = groups[3]
                     value = groups[2]
-                else:  # Third pattern: "category delete value"
+                elif groups[4] and groups[5]:  # Third pattern: "category delete value"
                     raw_field = groups[4]
                     value = groups[5]
+                else:  # Fourth pattern: "delete value" (single word delete)
+                    raw_field = None
+                    value = groups[6]
                 
                 raw_field = raw_field.lower() if raw_field else None
                 value = value.strip() if value else None
@@ -874,7 +1018,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 
                 log_event("delete_command", field=field, value=value)
                 
-                if field:
+                if field or value:  # Allow deletions with just a value for fuzzy matching
                     result.setdefault("delete", []).append({"field": field, "value": value})
                 continue
 
@@ -913,7 +1057,6 @@ def extract_fields(text: str) -> Dict[str, Any]:
                             "value": clean_value(old_value, field)
                         }
                 continue
-
             # Handle contextual references
             context_add_match = re.match(FIELD_PATTERNS["context_add"], cmd, re.IGNORECASE)
             if context_add_match:
@@ -953,19 +1096,19 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 # Get existing items (if any) from the result
                 if field == "companies":
                     existing_items = [item["name"] for item in result.get(field, []) 
-                                     if isinstance(item, dict) and "name" in item]
+                                    if isinstance(item, dict) and "name" in item]
                 elif field == "issues":
                     existing_items = [item["description"] for item in result.get(field, []) 
-                                     if isinstance(item, dict) and "description" in item]
+                                    if isinstance(item, dict) and "description" in item]
                 elif field == "services":
                     existing_items = [item["task"] for item in result.get(field, []) 
-                                     if isinstance(item, dict) and "task" in item]
+                                    if isinstance(item, dict) and "task" in item]
                 elif field == "tools":
                     existing_items = [item["item"] for item in result.get(field, []) 
-                                     if isinstance(item, dict) and "item" in item]
+                                    if isinstance(item, dict) and "item" in item]
                 elif field == "roles":
                     existing_items = [f"{item['name']} ({item['role']})" for item in result.get(field, []) 
-                                     if isinstance(item, dict) and "name" in item and "role" in item]
+                                    if isinstance(item, dict) and "name" in item and "role" in item]
                 elif field in ["people", "activities"]:
                     existing_items = result.get(field, [])
                 else:
@@ -974,16 +1117,16 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 # Combine processed items with existing items
                 if field == "companies":
                     result[field] = processed_result[field] + [{"name": i} for i in existing_items 
-                                                             if isinstance(i, str)]
+                                                            if isinstance(i, str)]
                 elif field == "issues":
                     result[field] = processed_result[field] + [{"description": i} for i in existing_items 
-                                                              if isinstance(i, str)]
+                                                            if isinstance(i, str)]
                 elif field == "services":
                     result[field] = processed_result[field] + [{"task": i} for i in existing_items 
-                                                              if isinstance(i, str)]
+                                                            if isinstance(i, str)]
                 elif field == "tools":
                     result[field] = processed_result[field] + [{"item": i} for i in existing_items 
-                                                              if isinstance(i, str)]
+                                                            if isinstance(i, str)]
                 elif field == "roles":
                     result[field] = processed_result[field] + [
                         {"name": i.split(' (')[0], "role": i.split(' (')[1].rstrip(')')} 
@@ -1008,344 +1151,224 @@ def extract_fields(text: str) -> Dict[str, Any]:
         log_event("extract_fields_error", input=text, error=str(e))
         # Return a minimal result to avoid breaking the app
         return {"error": str(e)}
+    
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
-def extract_single_command(text: str) -> Dict[str, Any]:
-    """Extract a single command with enhanced parsing and error handling"""
+def merge_data(existing: Dict[str, Any], new: Dict[str, Any], chat_id: str) -> Dict[str, Any]:
+    """Merge new data into existing report data with field validation and history tracking"""
     try:
-        result: Dict[str, Any] = {}
-        normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
-        log_event("extract_single_command", input=normalized_text)
-
-        # Handle deletion commands
-        delete_match = re.match(FIELD_PATTERNS["delete"], normalized_text, re.IGNORECASE)
-        if delete_match:
-            groups = delete_match.groups()
-            
-            # Different patterns for different delete syntaxes
-            if groups[0]:  # First pattern: "delete category value"
-                raw_field = groups[0]
-                value = groups[1]
-            elif groups[2] and groups[3]:  # Second pattern: "delete value from category"
-                raw_field = groups[3]
-                value = groups[2]
-            else:  # Third pattern: "category delete value"
-                raw_field = groups[4]
-                value = groups[5]
-                
-            field = raw_field.lower() if raw_field else ""
-            value = value.strip() if value else None
-            mapped_field = FIELD_MAPPING.get(field, field)
-            
-            log_event("delete_command", raw_field=field, mapped_field=mapped_field, value=value)
-
-            if field in ["architect", "engineer", "supervisor", "manager", "worker", 
-                        "window installer", "contractor", "inspector", "electrician", 
-                        "plumber", "foreman", "designer"]:
-                # Handle deleting by role
-                result.setdefault("delete", []).append({"field": "roles", "value": field})
-                log_event("delete_role_command", field="roles", value=field)
-            elif mapped_field == "people":
-                # Handle deleting people
-                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else result.setdefault("delete", []).append({"field": mapped_field, "value": None})
-                log_event("delete_people_command", field=mapped_field, value=value)
-            elif mapped_field == "person":
-                # Handle deleting a person
-                result.setdefault("delete", []).append({"field": "people", "value": value})
-                log_event("delete_person_command", field="people", value=value)
-            elif mapped_field in ["companies", "roles", "tools", "services", "service", "activities", "issues"]:
-                # Fix service/services mapping
-                if mapped_field == "service":
-                    mapped_field = "services"
-                    
-                # Handle deleting list items
-                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else result.setdefault("delete", []).append({"field": mapped_field, "value": None})
-                log_event("delete_list_command", field=mapped_field, value=value)
-            elif mapped_field in ["site_name", "segment", "category", "time", "weather", "impression", "comments"]:
-                # Handle deleting scalar fields
-                result.setdefault("delete", []).append({"field": mapped_field, "value": value}) if value else result.setdefault("delete", []).append({"field": mapped_field, "value": None})
-                log_event("delete_scalar_command", field=mapped_field, value=value)
-            else:
-                log_event("unrecognized_delete_field", field=field)
-                return {}
-                
-            return result
-
-        # Handle entire category deletion
-        delete_entire_match = re.match(FIELD_PATTERNS["delete_entire"], normalized_text, re.IGNORECASE)
-        if delete_entire_match:
-            field = delete_entire_match.group(1).lower()
-            mapped_field = FIELD_MAPPING.get(field, field)
-            
-            # Fix service/services mapping
-            if mapped_field == "service":
-                mapped_field = "services"
-                
-            result[mapped_field] = {"delete": True}
-            log_event("delete_entire_category", field=mapped_field)
-            return result
-
-        # Handle correction commands
-        correct_match = re.match(FIELD_PATTERNS["correct"], normalized_text, re.IGNORECASE)
-        if correct_match:
-            raw_field = correct_match.group(1).lower() if correct_match.group(1) else None
-            old_value = correct_match.group(2).strip() if correct_match.group(2) else None
-            new_value = correct_match.group(3).strip() if correct_match.group(3) else None
-            field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
-            
-            log_event("correct_command", field=field, old=old_value, new=new_value)
-            
-            if field and old_value:
-                if new_value:
-                    result.setdefault("correct", []).append({
-                        "field": field, 
-                        "old": clean_value(old_value, field), 
-                        "new": clean_value(new_value, field)
-                    })
-                else:
-                    result["correct_prompt"] = {
-                        "field": field, 
-                        "value": clean_value(old_value, field)
-                    }
-            return result
-
-        # Handle other field extractions using regex patterns
-        for raw_field, pattern in FIELD_PATTERNS.items():
-            # Skip non-field patterns
-            if raw_field in ["reset", "delete", "correct", "clear", "help", 
-                           "undo_last", "context_add", "summary", "detailed", 
-                           "delete_entire"]:
-                continue
-                
-            match = re.match(pattern, normalized_text, re.IGNORECASE)
-            if match:
-                field = FIELD_MAPPING.get(raw_field, raw_field)
-                log_event("field_matched", raw_field=raw_field, mapped_field=field)
-                
-                # Skip site_name matches that look like commands
-                if field == "site_name" and re.search(r'\b(add|insert|delete|remove|correct|adjust|update|spell|none|as|role|new|reset)\b', normalized_text.lower()):
-                    log_event("skipped_site_name", reason="command-like input")
-                    continue
-                    
-                # Handle people field
-                if field == "people":
-                    name = clean_value(match.group(1), field)
-                    role = clean_value(match.group(2), field) if match.group(2) else None
-                    
-                    # Skip if it's just "supervisor"
-                    if name.lower() == "supervisor":
-                        log_event("skipped_people_supervisor", reason="supervisor is a role")
-                        continue
-                        
-                    result["people"] = [name]
-                    
-                    # If a role is specified, add it to roles as well
-                    if role:
-                        result["roles"] = [{"name": name, "role": role.title()}]
-                        log_event("extracted_field", field="roles", name=name, role=role)
-                        
-                    log_event("extracted_field", field="people", value=name)
-                
-                # Handle role field
-                elif field == "roles":
-                    name = clean_value(match.group(1) or match.group(3), field)
-                    role = (match.group(2) or match.group(4)).title()
-                    
-                    # Skip if it's just "supervisor"
-                    if name.lower() == "supervisor":
-                        log_event("skipped_role_supervisor", reason="supervisor is a role")
-                        continue
-                        
-                    result["people"] = [name.strip()]
-                    result["roles"] = [{"name": name.strip(), "role": role}]
-                    log_event("extracted_field", field="roles", name=name, role=role)
-                
-                # Handle supervisor field
-                elif field == "supervisor":
-                    value = clean_value(match.group(1), field)
-                    supervisor_names = [name.strip() for name in re.split(r'\s+and\s+|,', value) if name.strip()]
-                    result["roles"] = [{"name": name, "role": "Supervisor"} for name in supervisor_names]
-                    result["people"] = supervisor_names
-                    log_event("extracted_field", field="roles", value=supervisor_names)
-                
-                # Handle company field
-                elif field == "companies":
-                    captured = clean_value(match.group(2) if match.group(2) else match.group(1), field)
-                    company_names = [name.strip() for name in re.split(r'\s+and\s+|,', captured) if name.strip()]
-                    result["companies"] = [{"name": name} for name in company_names]
-                    log_event("extracted_field", field="companies", value=company_names)
-                
-                # Handle clear command
-                elif field == "clear":
-                    field_name = FIELD_MAPPING.get(match.group(1).lower(), match.group(1).lower())
-                    result[field_name] = [] if field_name in LIST_FIELDS else ""
-                    log_event("extracted_field", field=field_name, value="none")
-                
-                # Handle service/services field
-                elif field in ["services", "service"]:
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result["services"] = []
-                    else:
-                        result["services"] = [{"task": value.strip()}]
-                    log_event("extracted_field", field="services", value=value)
-                
-                # Handle tool/tools field
-                elif field in ["tools", "tool"]:
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result["tools"] = []
-                    else:
-                        result["tools"] = [{"item": value.strip()}]
-                    log_event("extracted_field", field="tools", value=value)
-                
-                # Handle issue field
-                elif field == "issues":
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result["issues"] = []
-                    else:
-                        result["issues"] = [{"description": value.strip()}]
-                    log_event("extracted_field", field="issues", value=value)
-                
-                # Handle activity field
-                elif field == "activities":
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result["activities"] = []
-                    else:
-                        result["activities"] = [value.strip()]
-                    log_event("extracted_field", field="activities", value=value)
-                
-                # Handle other fields
-                else:
-                    value = clean_value(match.group(1), field)
-                    result[field] = value
-                    log_event("extracted_field", field=field, value=value)
-                    
-                return result
-
-        # Fallback to GPT for complex inputs
-        messages = [
-            {"role": "system", "content": "Extract explicitly stated fields from construction site report input. Return JSON with extracted fields."},
-            {"role": "user", "content": GPT_PROMPT + "\nInput text: " + normalized_text}
-        ]
+        log_event("merging_data", new_fields=list(new.keys()))
         
-        try:
-            response = client.chat.completions.create(
-                model=CONFIG["OPENAI_MODEL"], 
-                messages=messages, 
-                temperature=CONFIG["OPENAI_TEMPERATURE"]
-            )
-            
-            raw_response = response.choices[0].message.content
-            log_event("gpt_response", response_length=len(raw_response))
-            
-            data = json.loads(raw_response)
-            log_event("gpt_extracted", fields=list(data.keys()))
-            
-            # Clean the extracted data
-            for field in SCALAR_FIELDS:
-                if field in data and isinstance(data[field], str):
-                    data[field] = clean_value(data[field], field)
-                    
-            for field in DICT_LIST_FIELDS:
-                if field in data:
-                    for item in data[field]:
-                        if isinstance(item, dict):
-                            if field == "tools" and "item" in item:
-                                item["item"] = clean_value(item["item"], field)
-                            elif field == "services" and "task" in item:
-                                item["task"] = clean_value(item["task"], field)
-                            elif field == "issues" and "description" in item:
-                                item["description"] = clean_value(item["description"], field)
-                            elif field == "companies" and "name" in item:
-                                item["name"] = clean_value(item["name"], field)
-                            elif field == "roles" and "name" in item:
-                                item["name"] = clean_value(item["name"], field)
-                                if "role" in item:
-                                    item["role"] = clean_value(item["role"], field)
-                                    
-            if "activities" in data:
-                data["activities"] = [clean_value(item, "activities") for item in data["activities"] 
-                                     if isinstance(item, str)]
-                
-            # Ensure people list includes all role names
-            if "roles" in data:
-                for role in data["roles"]:
-                    if isinstance(role, dict) and "name" in role:
-                        person = clean_value(role["name"], "people")
-                        if person and "people" in data:
-                            if person not in data["people"]:
-                                data["people"].append(person)
-                        elif person:
-                            data["people"] = [person]
-            
-            # If GPT couldn't extract anything, try some fallbacks
-            if not data and normalized_text.strip():
-                issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
-                activity_keywords = r'\b(work\s+was\s+done|activity|activities|task|progress|construction|building|laying|setting|wiring|installation|scaffolding)\b'
-                location_keywords = r'\b(at|in|on)\b'
-                
-                if re.search(issue_keywords, normalized_text.lower()):
-                    cleaned_text = clean_value(normalized_text.strip(), "issues")
-                    data = {"issues": [{"description": cleaned_text}]}
-                    log_event("fallback_issue", data=data)
-                elif re.search(activity_keywords, normalized_text.lower()) and re.search(location_keywords, normalized_text.lower()):
-                    parts = re.split(r'\b(at|in|on)\b', normalized_text, flags=re.IGNORECASE)
-                    location = ", ".join(clean_value(part.strip().title(), "site_name") 
-                                       for part in parts[2::2] if part.strip())
-                    activity = clean_value(parts[0].strip(), "activities")
-                    data = {"site_name": location, "activities": [activity]}
-                    log_event("fallback_activity_site", data=data)
-                else:
-                    data = {"comments": clean_value(normalized_text.strip(), "comments")}
-                    log_event("fallback_comments", data=data)
-                    
-            # Normalize field names
-            if "company" in data:
-                data["companies"] = data.pop("company")
-            if "service" in data:
-                data["services"] = data.pop("service")
-            if "tool" in data:
-                data["tools"] = data.pop("tool")
-                
-            return data
-            
-        except (json.JSONDecodeError, Exception) as e:
-            log_event("gpt_extract_error", input=normalized_text, error=str(e))
-            
-            # Simple fallback when GPT fails
-            if normalized_text.strip():
-                issue_keywords = r'\b(issue|issues|problem|problems|delay|fault|error|injury)\b'
-                
-                if re.search(issue_keywords, normalized_text.lower()):
-                    cleaned_text = clean_value(normalized_text.strip(), "issues")
-                    data = {"issues": [{"description": cleaned_text}]}
-                    log_event("fallback_issue_error", data=data)
-                    return data
-                    
-                log_event("fallback_comments_error", input=normalized_text)
-                return {"comments": clean_value(normalized_text.strip(), "comments")}
-                
-            return {}
-            
-    except Exception as e:
-        log_event("extract_single_command_error", input=text, error=str(e))
-        return {}
-
-def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge new data into existing data with robust consistency checks"""
-    try:
+        # Create a copy to avoid modifying the original
         merged = existing.copy()
         
-        # Skip special command fields
-        skipped_fields = ["reset", "undo", "undo_last", "status", "export_pdf", 
-                        "correct_prompt", "delete", "correct", "help", "summary", 
-                        "detailed", "context_add", "error"]
+        # Skip reserved operation fields
+        skipped_fields = [
+            "reset", "undo", "status", "help", "summary", "detailed", "export_pdf", 
+            "undo_last", "context_add", "correct_prompt", "error", "command_history",
+            "last_change_history", "context"
+        ]
         
+        # Handle special commands first
+        if new.get("reset"):
+            log_event("reset_detected_in_merge")
+            return blank_report()
+            
+        if new.get("undo"):
+            log_event("undo_detected_in_merge")
+            # This should be handled by the command handler
+            return merged
+            
+        if new.get("status"):
+            log_event("status_detected_in_merge")
+            # This should be handled by the command handler
+            return merged
+            
+        if new.get("help"):
+            log_event("help_detected_in_merge")
+            # This should be handled by the command handler
+            return merged
+        
+        # Handle context_add command
+        if "context_add" in new:
+            target_field = new["context_add"].get("field")
+            session = session_data.get(chat_id, {})
+            context = session.get("context", {})
+            
+            # Determine what to add based on context
+            if target_field and context:
+                if target_field in ["people", "roles"]:
+                    person = context.get("last_mentioned_person")
+                    if person:
+                        if target_field == "people":
+                            if "people" not in merged:
+                                merged["people"] = []
+                            if person not in merged["people"]:
+                                merged["people"].append(person)
+                                log_event("added_person_from_context", person=person)
+                        elif target_field == "roles":
+                            role = "Unknown"  # Default role
+                            if "roles" not in merged:
+                                merged["roles"] = []
+                            
+                            # Check if this person already has a role
+                            for existing_role in merged["roles"]:
+                                if isinstance(existing_role, dict) and existing_role.get("name") == person:
+                                    log_event("person_already_has_role", person=person)
+                                    return merged
+                            
+                            merged["roles"].append({"name": person, "role": role})
+                            
+                            # Ensure person is in people list
+                            if "people" not in merged:
+                                merged["people"] = []
+                            if person not in merged["people"]:
+                                merged["people"].append(person)
+                                
+                            log_event("added_role_from_context", person=person, role=role)
+                    else:
+                        log_event("no_person_in_context")
+                elif target_field in ["issues", "activities", "tools", "services", "companies"]:
+                    item = context.get("last_mentioned_item")
+                    if item:
+                        if target_field == "issues":
+                            if "issues" not in merged:
+                                merged["issues"] = []
+                            
+                            # Check for duplicates
+                            for existing_issue in merged["issues"]:
+                                if isinstance(existing_issue, dict) and string_similarity(
+                                    existing_issue.get("description", ""), item) > CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                                    log_event("issue_already_exists", description=item)
+                                    return merged
+                            
+                            merged["issues"].append({"description": item})
+                            log_event("added_issue_from_context", description=item)
+                        elif target_field == "activities":
+                            if "activities" not in merged:
+                                merged["activities"] = []
+                            if item not in merged["activities"]:
+                                merged["activities"].append(item)
+                                log_event("added_activity_from_context", activity=item)
+                        elif target_field == "tools":
+                            if "tools" not in merged:
+                                merged["tools"] = []
+                            
+                            # Check for duplicates
+                            for existing_tool in merged["tools"]:
+                                if isinstance(existing_tool, dict) and string_similarity(
+                                    existing_tool.get("item", ""), item) > CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                                    log_event("tool_already_exists", item=item)
+                                    return merged
+                            
+                            merged["tools"].append({"item": item})
+                            log_event("added_tool_from_context", item=item)
+                        elif target_field == "services":
+                            if "services" not in merged:
+                                merged["services"] = []
+                            
+                            # Check for duplicates
+                            for existing_service in merged["services"]:
+                                if isinstance(existing_service, dict) and string_similarity(
+                                    existing_service.get("task", ""), item) > CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                                    log_event("service_already_exists", task=item)
+                                    return merged
+                            
+                            merged["services"].append({"task": item})
+                            log_event("added_service_from_context", task=item)
+                        elif target_field == "companies":
+                            if "companies" not in merged:
+                                merged["companies"] = []
+                            
+                            # Check for duplicates
+                            for existing_company in merged["companies"]:
+                                if isinstance(existing_company, dict) and string_similarity(
+                                    existing_company.get("name", ""), item) > CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                                    log_event("company_already_exists", name=item)
+                                    return merged
+                            
+                            merged["companies"].append({"name": item})
+                            log_event("added_company_from_context", name=item)
+                    else:
+                        log_event("no_item_in_context")
+            return merged
+
+        # Handle delete operations for entire categories
+        for field in LIST_FIELDS:
+            if field in new and isinstance(new[field], dict) and new[field].get("delete") is True:
+                merged[field] = []
+                log_event(f"deleted_entire_{field}")
+
+        # Handle special deletion commands
+        if "delete" in new:
+            # Process each deletion
+            for deletion in new["delete"]:
+                field = deletion.get("field")
+                value = deletion.get("value")
+                
+                # For "single word deletion", try to find the field based on the value
+                if field is None and value:
+                    # Search in all fields to find a match
+                    for field_name in LIST_FIELDS:
+                        if field_name not in merged:
+                            continue
+                            
+                        if field_name in SIMPLE_LIST_FIELDS:  # people, activities
+                            for item in merged[field_name]:
+                                if string_similarity(value, item) > CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                                    field = field_name
+                                    break
+                        elif field_name in DICT_LIST_FIELDS:  # companies, roles, tools, services, issues
+                            field_key = (
+                                "name" if field_name == "companies" else
+                                "name" if field_name == "roles" else
+                                "item" if field_name == "tools" else
+                                "task" if field_name == "services" else
+                                "description" if field_name == "issues" else
+                                None
+                            )
+                            
+                            if field_key:
+                                for item in merged[field_name]:
+                                    if isinstance(item, dict) and field_key in item and string_similarity(value, item[field_key]) > CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                                        field = field_name
+                                        break
+                        
+                        if field:
+                            break
+                    
+                    if not field:
+                        # Also check scalar fields
+                        for field_name in SCALAR_FIELDS:
+                            if field_name in merged and string_similarity(value, merged[field_name]) > CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                                field = field_name
+                                break
+                
+                if field:
+                    merged = delete_entry(merged, field, value)
+            
+        # Handle corrections
+        if "correct" in new:
+            for correction in new["correct"]:
+                field = correction.get("field")
+                old_value = correction.get("old")
+                new_value = correction.get("new")
+                
+                if field and old_value and new_value:
+                    # Remember the original value for undo
+                    if field in LIST_FIELDS:
+                        original_value = merged.get(field, [])[:]  # Make a copy
+                    else:
+                        original_value = merged.get(field, "")
+                        
+                    merged[field] = update_field(merged.get(field, [] if field in LIST_FIELDS else ""), 
+                                               field, old_value, new_value)
+                    
+                    # Save the change for undo_last
+                    merged.setdefault("last_change_history", []).append((field, original_value))
+            
+        # Process other fields
         for key, value in new.items():
-            if key in skipped_fields:
+            if key in skipped_fields or key in ["delete", "correct"]:
                 continue
                 
             # Normalize field names
@@ -1356,12 +1379,21 @@ def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
             elif key == "tool":
                 key = "tools"
                 
+            # Remember the original value for undo
+            if key in LIST_FIELDS:
+                original_value = merged.get(key, [])[:]  # Make a copy
+            else:
+                original_value = merged.get(key, "")
+                
             # Handle list fields
             if key in LIST_FIELDS:
                 # Clear the list if empty value provided
                 if value == []:
                     merged[key] = []
                     log_event("cleared_list", field=key)
+                    
+                    # Track the change for undo_last
+                    merged.setdefault("last_change_history", []).append((key, original_value))
                     continue
                     
                 existing_list = merged.get(key, [])
@@ -1423,6 +1455,9 @@ def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
                             
                 merged[key] = existing_list
                 
+                # Track the change for undo_last
+                merged.setdefault("last_change_history", []).append((key, original_value))
+                
             # Handle scalar fields
             else:
                 if value == "" and key in SCALAR_FIELDS:
@@ -1431,6 +1466,13 @@ def merge_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
                 elif value:
                     merged[key] = value
                     log_event("updated_field", field=key, value=value)
+                    
+                # Track the change for undo_last
+                merged.setdefault("last_change_history", []).append((key, original_value))
+        
+        # Limit the size of the last_change_history
+        if "last_change_history" in merged and len(merged["last_change_history"]) > CONFIG["MAX_HISTORY"]:
+            merged["last_change_history"] = merged["last_change_history"][-CONFIG["MAX_HISTORY"]:]
         
         # Data validation and cross-field consistency
         
@@ -1705,6 +1747,101 @@ def delete_entry(data: Dict[str, Any], field: str, value: Optional[str] = None) 
         log_event("delete_entry_error", field=field, error=str(e))
         # Return original data on error to avoid data loss
         return data
+
+def update_field(current_value: Any, field: str, old_value: str, new_value: str) -> Any:
+    """Update a field with robust pattern matching and error handling"""
+    try:
+        log_event("update_field", field=field, old=old_value, new=new_value)
+        
+        # Handle list fields
+        if field in LIST_FIELDS:
+            # Convert to list if necessary
+            current_list = current_value if isinstance(current_value, list) else []
+            old_value = old_value.strip()
+            new_value = new_value.strip()
+            
+            # Handle dictionary list fields
+            if field in DICT_LIST_FIELDS:
+                field_key = (
+                    "name" if field == "companies" else
+                    "name" if field == "roles" else
+                    "item" if field == "tools" else
+                    "task" if field == "services" else
+                    "description" if field == "issues" else
+                    None
+                )
+                
+                if field_key:
+                    # Update existing item or add as new
+                    found = False
+                    for i, item in enumerate(current_list):
+                        if (isinstance(item, dict) and field_key in item and 
+                           string_similarity(item[field_key], old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"]):
+                            if field == "roles" and field_key == "name":
+                                # For roles, preserve the role value
+                                role_value = item.get("role", "")
+                                current_list[i] = {"name": new_value, "role": role_value}
+                            else:
+                                # For other fields, just update the key value
+                                current_list[i][field_key] = new_value
+                            found = True
+                            log_event(f"updated_{field}_item", old=old_value, new=new_value)
+                            break
+                    
+                    if not found:
+                        # If not found, add as new
+                        if field == "companies":
+                            current_list.append({"name": new_value})
+                        elif field == "roles":
+                            # Try to parse role info from the new value
+                            parts = re.match(r'(.*)\s+as\s+(.*)', new_value, re.IGNORECASE)
+                            if parts:
+                                name = parts.group(1).strip()
+                                role = parts.group(2).strip()
+                                current_list.append({"name": name, "role": role})
+                            else:
+                                current_list.append({"name": new_value, "role": "Unknown"})
+                        elif field == "tools":
+                            current_list.append({"item": new_value})
+                        elif field == "services":
+                            current_list.append({"task": new_value})
+                        elif field == "issues":
+                            current_list.append({"description": new_value})
+                        
+                        log_event(f"added_{field}_item", value=new_value)
+                        
+                    return current_list
+            
+            # Handle simple list fields (people, activities)
+            else:
+                # Try to update matching item
+                for i, item in enumerate(current_list):
+                    if (isinstance(item, str) and 
+                       string_similarity(item, old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"]):
+                        current_list[i] = new_value
+                        log_event(f"updated_{field}_item", old=item, new=new_value)
+                        return current_list
+                
+                # If not found, add new item
+                current_list.append(new_value)
+                log_event(f"added_{field}_item", value=new_value)
+                return current_list
+        
+        # Handle scalar fields
+        else:
+            # Check if current value closely matches the old value
+            if (not current_value or 
+               string_similarity(current_value, old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"]):
+                log_event(f"updated_{field}", old=current_value, new=new_value)
+                return new_value
+            else:
+                log_event(f"no_match_for_{field}", current=current_value, requested_old=old_value)
+                return current_value
+        
+        return current_value
+    except Exception as e:
+        log_event("update_field_error", field=field, error=str(e))
+        return current_value
     
     # --- Command Handlers ---
 COMMAND_HANDLERS: Dict[str, Callable[[str, Dict[str, Any]], None]] = {}
@@ -1729,7 +1866,15 @@ def handle_reset(chat_id: str, session: Dict[str, Any]) -> None:
     }
     save_session(session_data)
     summary = summarize_report(session["structured_data"])
-    send_message(chat_id, f"**Report reset**\n\n{summary}\n\nSpeak or type your first field (e.g., 'add site Downtown Project').")
+    # Enhanced code to show all empty fields
+    data = session["structured_data"]
+    empty_fields_msg = "**Fields to complete:**\n"
+    for field in SCALAR_FIELDS + LIST_FIELDS:
+        if field in data:
+            if (field in LIST_FIELDS and not data[field]) or (field in SCALAR_FIELDS and not data[field]):
+                empty_fields_msg += f"• {field}\n"
+
+    send_message(chat_id, f"**Report reset**\n\n{summary}\n\n{empty_fields_msg}\nSpeak or type your first field (e.g., 'add site Downtown Project').")
 
 @command("undo")
 def handle_undo(chat_id: str, session: Dict[str, Any]) -> None:
@@ -1921,697 +2066,239 @@ COMMAND_HANDLERS["/help"] = handle_help
 COMMAND_HANDLERS["undo last change"] = handle_undo_last
 COMMAND_HANDLERS["summarize"] = handle_summary
 
-# --- Flask App ---
-app = Flask(__name__)
-
-def suggest_corrections(input_text: str) -> Optional[str]:
-    """Suggest corrections for common errors in commands"""
-    # Common command suggestions
-    command_suggestions = {
-        r'\b(delet|remov|dlt)\b': "delete",
-        r'\b(statu|stat)\b': "status",
-        r'\b(undoe|undo last)\b': "undo",
-        r'\badd (peopl|peole|persons)\b': "add people",
-        r'\badd (compan|comp)\b': "add companies",
-        r'\b(rest|rst|clear all)\b': "reset",
-        r'\b(exprt|export pdf|make pdf|generate pdf)\b': "export",
-        r'\b(site nam|site name|location)\b': "site",
-    }
-    
-    # Check if input closely matches any known command
-    for pattern, suggestion in command_suggestions.items():
-        if re.search(pattern, input_text, re.IGNORECASE):
-            return f"Did you mean '{suggestion}'?"
-    
-    # Check if this looks like a field command but is malformed
-    field_pattern = r'\b(add|site|segment|category|company|people|role|tool|service|activity|issue|time|weather|impression|comment)\b'
-    if re.search(field_pattern, input_text, re.IGNORECASE):
-        # Check if the syntax is likely incorrect
-        if ":" not in input_text and not re.search(r'\s+as\s+', input_text, re.IGNORECASE):
-            field_match = re.search(field_pattern, input_text, re.IGNORECASE)
-            if field_match:
-                field = field_match.group(1).lower()
-                if field == "company":
-                    field = "companies"
-                elif field == "comment":
-                    field = "comments"
-                elif field == "tool":
-                    field = "tools"
-                elif field == "service":
-                    field = "services"
-                elif field == "activity":
-                    field = "activities"
-                elif field == "issue":
-                    field = "issues"
-                
-                example = f"{field}: " if not input_text.startswith("add") else f"add {field} "
-                return f"Try using '{example}[value]' format"
-    
-    # If nothing matches, return None
-    return None
-
-def process_context_reference(text: str, session: Dict[str, Any]) -> str:
-    """Process contextual references in text"""
-    context = session.get("context", {})
-    
-    # Replace person references
-    if re.search(CONTEXTUAL_PATTERNS["reference_person"], text, re.IGNORECASE):
-        if context.get("last_mentioned_person"):
-            text = re.sub(CONTEXTUAL_PATTERNS["reference_person"], 
-                         context["last_mentioned_person"], 
-                         text, flags=re.IGNORECASE)
-    
-    # Replace thing references
-    if re.search(CONTEXTUAL_PATTERNS["reference_thing"], text, re.IGNORECASE):
-        if context.get("last_mentioned_item"):
-            text = re.sub(CONTEXTUAL_PATTERNS["reference_thing"], 
-                         context["last_mentioned_item"], 
-                         text, flags=re.IGNORECASE)
-    
-    # Handle "last mentioned" references
-    if re.search(CONTEXTUAL_PATTERNS["last_mentioned"], text, re.IGNORECASE):
-        if context.get("last_field"):
-            text = re.sub(CONTEXTUAL_PATTERNS["last_mentioned"], 
-                         context["last_field"], 
-                         text, flags=re.IGNORECASE)
-    
-    return text
-
-def update_context(session: Dict[str, Any], field: Optional[str], value: Optional[str]) -> None:
-    """Update the conversation context"""
-    if not field or not value:
-        return
-        
-    context = session.get("context", {
-        "last_mentioned_person": None,
-        "last_mentioned_item": None,
-        "last_field": None,
-    })
-    
-    # Update last field
-    context["last_field"] = field
-    
-    # Update person context if relevant
-    if field == "people" or field == "roles":
-        context["last_mentioned_person"] = value
-    
-    # Update item context if relevant
-    if field in ["tools", "services", "activities", "issues"]:
-        context["last_mentioned_item"] = value
-    
-    session["context"] = context
-
-def handle_command(chat_id: str, text: str, sess: Dict[str, Any]) -> tuple[str, int]:
-    """Main command handler with enhanced error handling and context awareness"""
+def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[str, int]:
+    """Process user command and update session data"""
     try:
-        normalized_text = text.strip().lower() if text else ""
-        if not normalized_text:
-            send_message(chat_id, "⚠️ Empty input. Please provide a command (e.g., 'add site Downtown Project').")
-            return "ok", 200
-
-        # Process contextual references
-        if any(re.search(pattern, normalized_text, re.IGNORECASE) for pattern in CONTEXTUAL_PATTERNS.values()):
-            text = process_context_reference(text, sess)
-            log_event("processed_context_reference", original=normalized_text, processed=text)
-
-        current_time = time()
+        # Update last interaction time
+        session["last_interaction"] = time()
         
-        # Check for session timeout
-        if (current_time - sess.get("last_interaction", 0) > CONFIG["PAUSE_THRESHOLD"] and
-                normalized_text not in ("yes", "no", "new", "new report", "reset", "reset report", "/new", "existing", "continue")):
-            sess["pending_input"] = text
-            sess["awaiting_reset_confirmation"] = True
-            sess["last_interaction"] = current_time
-            save_session(session_data)
-            send_message(chat_id, "It's been a while! Would you like to reset the report or continue with the existing one? Reply 'yes' to reset or 'no' to continue.")
+        # Check for exact command matches first
+        clean_text = text.lower().strip()
+        if clean_text in COMMAND_HANDLERS:
+            COMMAND_HANDLERS[clean_text](chat_id, session)
             return "ok", 200
-
-        sess["last_interaction"] = current_time
-
-        # Handle direct commands
-        if normalized_text in COMMAND_HANDLERS:
-            COMMAND_HANDLERS[normalized_text](chat_id, sess)
-            return "ok", 200
-
-        # Handle help command with topic
-        help_match = re.match(FIELD_PATTERNS["help"], normalized_text, re.IGNORECASE)
-        if help_match:
-            topic = (help_match.group(1) or help_match.group(2) or "general").lower()
-            handle_help(chat_id, sess, topic)
-            return "ok", 200
-
-        # Handle reset command
-        if normalized_text in ("new", "new report", "reset", "reset report", "/new"):
-            sess["awaiting_reset_confirmation"] = True
-            sess["pending_input"] = text
-            save_session(session_data)
-            send_message(chat_id, "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
-            return "ok", 200
-
-        # Handle clear command (field: none)
-        clear_match = re.match(FIELD_PATTERNS["clear"], text, re.IGNORECASE)
-        if clear_match:
-            raw_field = clear_match.group(1).lower() if clear_match.group(1) else None
-            field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
-            
-            if not field:
-                log_event("clear_command_error", text=text, error="Invalid field")
-                send_message(chat_id, f"⚠️ Invalid clear command: '{text}'. Try 'tools: none' or 'issues: none'.")
-                return "ok", 200
-                
-            # Save the original value for undo last
-            if field in sess["structured_data"]:
-                sess["last_change_history"].append((field, sess["structured_data"][field]))
-                
-            # Save current state for undo
-            sess["command_history"].append(sess["structured_data"].copy())
-            
-            # Clear the field
-            sess["structured_data"] = delete_entry(sess["structured_data"], field)
-            save_session(session_data)
-            
-            # Update context
-            update_context(sess, field, "none")
-            
-            tpl = summarize_report(sess["structured_data"])
-            send_message(chat_id, f"Cleared {field}\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
-            return "ok", 200
-
-        # Extract fields from the input
+        
+        # Extract fields from input
         extracted = extract_fields(text)
         
-        # Handle reset command
-        if extracted.get("reset"):
-            sess["awaiting_reset_confirmation"] = True
-            sess["pending_input"] = text
-            save_session(session_data)
-            send_message(chat_id, "Are you sure you want to reset the report? Reply 'yes' or 'no'.")
+        # Handle special commands
+        if any(key in extracted for key in ["reset", "undo", "status", "help", "summary", 
+                                           "detailed", "export_pdf", "undo_last"]):
+            
+            if "reset" in extracted:
+                handle_reset(chat_id, session)
+            elif "undo" in extracted:
+                handle_undo(chat_id, session)
+            elif "undo_last" in extracted:
+                handle_undo_last(chat_id, session)
+            elif "status" in extracted:
+                handle_status(chat_id, session)
+            elif "export_pdf" in extracted:
+                handle_export(chat_id, session)
+            elif "summary" in extracted:
+                handle_summary(chat_id, session)
+            elif "detailed" in extracted:
+                handle_detailed(chat_id, session)
+            elif "help" in extracted:
+                topic = extracted["help"]
+                handle_help(chat_id, session, topic)
+            
             return "ok", 200
             
-        # Handle help command
-        if "help" in extracted:
-            topic = extracted["help"]
-            handle_help(chat_id, sess, topic)
+        # Handle error from field extraction
+        if "error" in extracted:
+            send_message(chat_id, f"⚠️ Error processing your request: {extracted['error']}")
             return "ok", 200
             
-        # Handle special report commands
-        if extracted.get("summary"):
-            handle_summary(chat_id, sess)
+        # Skip empty inputs
+        if not extracted:
+            send_message(chat_id, "I didn't understand that. Type 'help' for assistance.")
             return "ok", 200
-            
-        if extracted.get("detailed"):
-            handle_detailed(chat_id, sess)
-            return "ok", 200
-            
-        # Handle undo last command
-        if extracted.get("undo_last"):
-            handle_undo_last(chat_id, sess)
-            return "ok", 200
-            
-        # Handle spelling correction prompts
-        if extracted.get("correct_prompt"):
-            field = extracted["correct_prompt"]["field"]
-            value = extracted["correct_prompt"]["value"]
-            sess["awaiting_spelling_correction"] = (field, value)
-            save_session(session_data)
-            send_message(chat_id, f"Please provide the correct spelling for '{value}' in {field}.")
-            return "ok", 200
-            
-        # Handle delete commands
-        if extracted.get("delete"):
-            sess["command_history"].append(sess["structured_data"].copy())
-            
-            for delete_cmd in extracted["delete"]:
-                field = delete_cmd["field"]
-                value = delete_cmd["value"]
-                
-                # Save the original value for undo last
-                if field in sess["structured_data"]:
-                    sess["last_change_history"].append((field, sess["structured_data"][field]))
-                
-                # Fix service/services mapping
-                if field == "service":
-                    field = "services"
-                    
-                # Delete the entry
-                sess["structured_data"] = delete_entry(sess["structured_data"], field, value)
-                
-                # Update context
-                if value:
-                    update_context(sess, field, f"deleted {value}")
-                else:
-                    update_context(sess, field, "deleted")
-            
-            save_session(session_data)
-            tpl = summarize_report(sess["structured_data"])
-            
-            # Use the last delete command for the confirmation message
-            last_field = extracted["delete"][-1]["field"]
-            last_value = extracted["delete"][-1]["value"]
-            
-            send_message(chat_id, f"Removed {last_field}" + (f": {last_value}" if last_value else "") + f"\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
-            return "ok", 200
-            
-        # Handle correction commands
-        if extracted.get("correct"):
-            sess["command_history"].append(sess["structured_data"].copy())
-            
-            for correct_cmd in extracted["correct"]:
-                field = correct_cmd["field"]
-                old_value = correct_cmd["old"]
-                new_value = correct_cmd["new"]
-                
-                # Save the original value for undo last
-                if field in sess["structured_data"]:
-                    sess["last_change_history"].append((field, sess["structured_data"][field]))
-                
-                # Handle different field types
-                if field in ["companies", "roles", "tools", "services", "issues"]:
-                    data_field = (
-                        "name" if field == "companies" else
-                        "description" if field == "issues" else
-                        "item" if field == "tools" else
-                        "task" if field == "services" else
-                        "name" if field == "roles" else None
-                    )
-                    
-                    # Handle service/services correctly
-                    if field == "service":
-                        field = "services"
-                        data_field = "task"
-                        
-                    # Make sure we're working with the services field if needed
-                    if field == "services" and "service" in sess["structured_data"] and "services" not in sess["structured_data"]:
-                        sess["structured_data"]["services"] = sess["structured_data"].pop("service")
-                    
-                    sess["structured_data"][field] = [
-                        {data_field: new_value if string_similarity(item.get(data_field, ""), old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item[data_field],
-                         **({} if field != "roles" else {"role": item["role"]})}
-                        for item in sess["structured_data"].get(field, [])
-                        if isinstance(item, dict)
-                    ]
-                    
-                    # Ensure people list includes roles
-                    if field == "roles" and new_value not in sess["structured_data"].get("people", []):
-                        sess["structured_data"].setdefault("people", []).append(new_value)
-                        
-                elif field in ["people"]:
-                    # Update people and associated roles
-                    sess["structured_data"]["people"] = [
-                        new_value if string_similarity(item, old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item 
-                        for item in sess["structured_data"].get("people", [])
-                    ]
-                    
-                    # Also update roles to maintain consistency
-                    sess["structured_data"]["roles"] = [
-                        {"name": new_value, "role": role["role"]} 
-                        if string_similarity(role.get("name", ""), old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] 
-                        else role
-                        for role in sess["structured_data"].get("roles", [])
-                    ]
-                    
-                elif field in ["activities"]:
-                    # Update activities
-                    sess["structured_data"]["activities"] = [
-                        new_value if string_similarity(item, old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item 
-                        for item in sess["structured_data"].get("activities", [])
-                    ]
-                    
-                else:
-                    # Update scalar field
-                    sess["structured_data"][field] = new_value
-                    
-                # Update context
-                update_context(sess, field, new_value)
-                    
-                log_event(f"{field}_corrected", old=old_value, new=new_value)
-                
-            save_session(session_data)
-            tpl = summarize_report(sess["structured_data"])
-            
-            # Use the last correction for the confirmation message
-            last_field = extracted["correct"][-1]["field"]
-            last_old = extracted["correct"][-1]["old"]
-            last_new = extracted["correct"][-1]["new"]
-            
-            send_message(chat_id, f"Corrected {last_field} from '{last_old}' to '{last_new}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
-            return "ok", 200
-            
-        # Handle contextual add commands
-        if extracted.get("context_add"):
-            target_field = extracted["context_add"]["field"]
-            
-            # Try to extract the relevant context item
-            context = sess.get("context", {})
-            value_to_add = None
-            
-            if target_field in ["people", "roles"] and context.get("last_mentioned_person"):
-                value_to_add = context["last_mentioned_person"]
-            elif target_field in ["tools", "services", "activities", "issues"] and context.get("last_mentioned_item"):
-                value_to_add = context["last_mentioned_item"]
-                
-            if value_to_add:
-                # Save current state for undo
-                sess["command_history"].append(sess["structured_data"].copy())
-                
-                # Create a new data dictionary with just this field
-                field_data = {}
-                
-                if target_field == "people":
-                    field_data["people"] = [value_to_add]
-                elif target_field == "roles" and context.get("last_mentioned_person"):
-                    # Default role is "Worker" if not specified
-                    field_data["roles"] = [{"name": context["last_mentioned_person"], "role": "Worker"}]
-                    field_data["people"] = [context["last_mentioned_person"]]
-                elif target_field == "activities":
-                    field_data["activities"] = [value_to_add]
-                elif target_field == "tools":
-                    field_data["tools"] = [{"item": value_to_add}]
-                elif target_field == "services":
-                    field_data["services"] = [{"task": value_to_add}]
-                elif target_field == "issues":
-                    field_data["issues"] = [{"description": value_to_add}]
-                elif target_field in SCALAR_FIELDS:
-                    field_data[target_field] = value_to_add
-                
-                # Merge the new data
-                sess["structured_data"] = merge_data(sess["structured_data"], field_data)
-                save_session(session_data)
-                
-                tpl = summarize_report(sess["structured_data"])
-                send_message(chat_id, f"Added '{value_to_add}' to {target_field}.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
-                return "ok", 200
-            else:
-                send_message(chat_id, f"I couldn't find a relevant item to add to {target_field}. Please specify what you want to add.")
-                return "ok", 200
-                
-        # Check if any fields were extracted
-        if not any(k in extracted for k in LIST_FIELDS + SCALAR_FIELDS + ["export_pdf"]):
-            log_event("unrecognized_input", input=text)
-            
-            # Try to suggest corrections
-            suggestion = suggest_corrections(text)
-            if suggestion:
-                send_message(chat_id, f"⚠️ Unrecognized input: '{text}'. {suggestion}")
-            else:
-                send_message(chat_id, f"⚠️ Unrecognized input: '{text}'. Try 'add site Downtown Project', 'add issue power outage', or 'help' for assistance.")
-                
-            return "ok", 200
-
-        # Handle normal field updates
-        sess["command_history"].append(sess["structured_data"].copy())
         
-        # Save original values for all fields that will be modified
-        for field in (set(extracted.keys()) & set(LIST_FIELDS + SCALAR_FIELDS)):
-            if field in sess["structured_data"]:
-                sess["last_change_history"].append((field, sess["structured_data"][field]))
-                
-        # Update context from extracted fields
-        for field in extracted:
-            if field in LIST_FIELDS + SCALAR_FIELDS:
-                value = extracted[field]
-                if isinstance(value, list) and value:
-                    update_context(sess, field, str(value[0]))
-                elif not isinstance(value, list) and value:
-                    update_context(sess, field, str(value))
+        # Save current state for undo
+        session["command_history"].append(session["structured_data"].copy())
         
-        # Merge the extracted data
-        sess["structured_data"] = merge_data(sess["structured_data"], enrich_date(extracted))
+        # Update context tracking for references
+        context = session.get("context", {
+            "last_mentioned_person": None,
+            "last_mentioned_item": None,
+            "last_field": None,
+        })
+        
+        # Track mentioned people
+        if "people" in extracted and extracted["people"]:
+            context["last_mentioned_person"] = extracted["people"][0]
+            context["last_field"] = "people"
+        elif "roles" in extracted and extracted["roles"]:
+            for role in extracted["roles"]:
+                if isinstance(role, dict) and "name" in role:
+                    context["last_mentioned_person"] = role["name"]
+                    context["last_field"] = "roles"
+                    break
+        
+        # Track mentioned items
+        if "issues" in extracted and extracted["issues"]:
+            for issue in extracted["issues"]:
+                if isinstance(issue, dict) and "description" in issue:
+                    context["last_mentioned_item"] = issue["description"]
+                    context["last_field"] = "issues"
+                    break
+        elif "activities" in extracted and extracted["activities"]:
+            context["last_mentioned_item"] = extracted["activities"][0]
+            context["last_field"] = "activities"
+        elif "tools" in extracted and extracted["tools"]:
+            for tool in extracted["tools"]:
+                if isinstance(tool, dict) and "item" in tool:
+                    context["last_mentioned_item"] = tool["item"]
+                    context["last_field"] = "tools"
+                    break
+        elif "services" in extracted and extracted["services"]:
+            for service in extracted["services"]:
+                if isinstance(service, dict) and "task" in service:
+                    context["last_mentioned_item"] = service["task"]
+                    context["last_field"] = "services"
+                    break
+        
+        session["context"] = context
+        
+        # Merge the extracted data with existing data
+        session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
+        
+        # Make sure date field is properly set
+        session["structured_data"] = enrich_date(session["structured_data"])
+        
+        # Save session data
         save_session(session_data)
         
-        # Handle export_pdf command
-        if extracted.get("export_pdf"):
-            handle_export(chat_id, sess)
-            return "ok", 200
+        # Provide feedback to user
+        changed_fields = [field for field in extracted.keys() 
+                         if field not in ["help", "reset", "undo", "status", "export_pdf", 
+                                         "summary", "detailed", "undo_last", "error"]]
         
-        tpl = summarize_report(sess["structured_data"])
-        send_message(chat_id, f"✅ Updated report:\n\n{tpl}\n\nAnything else to add or correct?")
+        if changed_fields:
+            # Prepare a confirmation message based on what was changed
+            if "delete" in extracted or any(field.endswith("delete") for field in extracted.keys()):
+                message = "✅ Deleted information from your report."
+            elif "correct" in extracted:
+                message = "✅ Corrected information in your report."
+            elif "context_add" in extracted:
+                message = "✅ Added information using context."
+            else:
+                message = "✅ Added information to your report."
+                
+            # Add a summary of the report
+            summary = summarize_report(session["structured_data"])
+            send_message(chat_id, f"{message}\n\n{summary}")
+        else:
+            send_message(chat_id, "⚠️ No changes were made to your report.")
+        
         return "ok", 200
         
     except Exception as e:
-        log_event("handle_command_error", error=str(e))
-        send_message(chat_id, "⚠️ An error occurred while processing your command. Please try again or type 'help' for assistance.")
+        log_event("handle_command_error", chat_id=chat_id, text=text, error=str(e))
+        try:
+            send_message(chat_id, "⚠️ An error occurred while processing your request. Please try again.")
+        except Exception:
+            pass
         return "error", 500
 
 @app.route("/webhook", methods=["POST"])
 def webhook() -> tuple[str, int]:
-    """Handle Telegram webhook requests"""
+    """Handle incoming webhook from Telegram"""
     try:
-        data = request.get_json(force=True)
-        log_event("webhook_received")
+        data = request.get_json()
+        log_event("webhook_received", data=data)
         
-        if not data or "message" not in data:
-            log_event("no_message")
+        # Ignore messages without a message object
+        if "message" not in data:
             return "ok", 200
-
-        msg = data["message"]
-        chat_id = str(msg["chat"]["id"])
-        text = msg.get("text", "").strip()
-        log_event("message_received", chat_id=chat_id, text_length=len(text))
-
-        # Initialize session for new users
+            
+        message = data["message"]
+        
+        # Ignore messages without a chat
+        if "chat" not in message:
+            return "ok", 200
+            
+        chat_id = str(message["chat"]["id"])
+        
+        # Initialize session if not exists
         if chat_id not in session_data:
             session_data[chat_id] = {
                 "structured_data": blank_report(),
-                "awaiting_correction": False,
-                "last_interaction": time(),
-                "pending_input": None,
-                "awaiting_reset_confirmation": False,
                 "command_history": deque(maxlen=CONFIG["MAX_HISTORY"]),
-                "awaiting_spelling_correction": None,
                 "last_change_history": [],
+                "last_interaction": time(),
                 "context": {
                     "last_mentioned_person": None,
                     "last_mentioned_item": None,
                     "last_field": None,
                 },
-                "report_format": "detailed"
+                "report_format": CONFIG["REPORT_FORMAT"]
             }
-            log_event("session_created", chat_id=chat_id)
-            send_message(chat_id, "👋 Welcome to the Construction Site Report Bot!\n\nI'll help you create detailed construction site reports easily. Start by adding information about your site (e.g., 'add site Downtown Project').\n\nType 'help' for more information on available commands.")
-            
-        sess = session_data[chat_id]
-
-        # Clean up invalid entries from structured data
-        if "Supervisor" in sess["structured_data"].get("people", []):
-            sess["structured_data"]["people"] = [p for p in sess["structured_data"].get("people", []) if p != "Supervisor"]
-            log_event("removed_supervisor_entry", chat_id=chat_id)
-            
-        if "roles" in sess["structured_data"]:
-            sess["structured_data"]["roles"] = [r for r in sess["structured_data"].get("roles", []) if r.get("name") != "Supervisor"]
-            
-        # Normalize field names
-        _normalize_field_names(sess["structured_data"])
-
+            save_session(session_data)
+        
         # Handle voice messages
-        if "voice" in msg:
-            text, confidence = transcribe_voice(msg["voice"]["file_id"])
+        if "voice" in message:
+            # Extract file ID for the voice
+            file_id = message["voice"]["file_id"]
+            
+            # Transcribe voice to text
+            text, confidence = transcribe_voice(file_id)
+            
             if not text:
-                send_message(chat_id, "⚠️ Couldn't understand the audio. Please speak clearly (e.g., 'add site Downtown Project') or type your command.")
+                send_message(chat_id, "⚠️ I couldn't understand your voice message. Please try again or type your message.")
                 return "ok", 200
                 
-            log_event("transcribed_voice", text=text, confidence=confidence)
-            
-            # Ask for confirmation if confidence is low
+            # If confidence is low, confirm with the user
             if confidence < 0.7:
-                sess["pending_input"] = text
-                sess["awaiting_voice_confirmation"] = True
-                sess["last_interaction"] = time()
+                session_data[chat_id]["pending_transcription"] = text
+                session_data[chat_id]["awaiting_transcription_confirmation"] = True
                 save_session(session_data)
                 send_message(chat_id, f"I heard:\n\n\"{text}\"\n\nIs this correct? Reply 'yes' to proceed or 'no' to try again.")
                 return "ok", 200
-
-        # Handle reset confirmation
-        if sess.get("awaiting_reset_confirmation", False):
-            normalized_text = re.sub(r'[.!?]\s*$', '', text.strip()).lower()
-            log_event("reset_confirmation", text=normalized_text)
+                
+            # Proceed with processing the command
+            log_event("processing_voice_command", text=text)
+            return handle_command(chat_id, text, session_data[chat_id])
+        
+        # Handle transcription confirmation
+        if session_data[chat_id].get("awaiting_transcription_confirmation"):
+            text = message.get("text", "").strip().lower()
             
-            if normalized_text in ("yes", "new", "new report", "y"):
-                # User confirmed reset
-                sess["structured_data"] = blank_report()
-                sess["awaiting_correction"] = False
-                sess["awaiting_reset_confirmation"] = False
-                sess["pending_input"] = None
-                sess["command_history"].clear()
-                sess["last_change_history"].clear()
-                sess["context"] = {
-                    "last_mentioned_person": None,
-                    "last_mentioned_item": None,
-                    "last_field": None,
-                }
-                save_session(session_data)
+            if text.lower() in ["yes", "y", "yeah", "yep"]:
+                # Process the pending transcription
+                session_data[chat_id]["awaiting_transcription_confirmation"] = False
+                pending_text = session_data[chat_id].get("pending_transcription", "")
                 
-                tpl = summarize_report(sess["structured_data"])
-                send_message(chat_id, f"**Starting a fresh report**\n\n{tpl}\n\nSpeak or type your first field (e.g., 'add site Downtown Project').")
-                return "ok", 200
-                
-            elif normalized_text in ("no", "existing", "continue", "n"):
-                # User wants to continue with existing report
-                preserved_input = sess["pending_input"]
-                sess["awaiting_reset_confirmation"] = False
-                sess["pending_input"] = None
-                sess["last_interaction"] = time()
-                save_session(session_data)
-                
-                # Only process the preserved input if it's not a reset command itself
-                preserved_normalized = preserved_input.strip().lower() if preserved_input else ""
-                if preserved_normalized and preserved_normalized not in ("new", "new report", "reset", "reset report", "/new"):
-                    log_event("proceeding_with_existing_input", input=preserved_input)
-                    return handle_command(chat_id, preserved_input, sess)
+                if pending_text:
+                    session_data[chat_id]["pending_transcription"] = None
+                    save_session(session_data)
+                    log_event("transcription_confirmed", text=pending_text)
+                    return handle_command(chat_id, pending_text, session_data[chat_id])
                 else:
-                    # Just show the current status if no valid preserved input
-                    summary = summarize_report(sess["structured_data"])
-                    send_message(chat_id, f"**Continuing with existing report**\n\n{summary}")
+                    send_message(chat_id, "⚠️ No pending transcription found. Please try again.")
                     return "ok", 200
+            elif text == "no":
+                # Clear the pending transcription
+                session_data[chat_id]["awaiting_transcription_confirmation"] = False
+                session_data[chat_id]["pending_transcription"] = None
+                save_session(session_data)
+                send_message(chat_id, "Please try speaking again or type your message.")
+                return "ok", 200
             else:
-                # Unclear response
-                send_message(chat_id, "Please clearly indicate if you want to reset the report. Reply 'yes' to reset or 'no' to continue with the existing report.")
+                send_message(chat_id, "Please reply 'yes' or 'no' to confirm the transcription.")
                 return "ok", 200
-
-        # Handle voice transcription confirmation
-        if sess.get("awaiting_voice_confirmation", False):
-            normalized_text = re.sub(r'[.!?]\s*$', '', text.strip()).lower()
-            
-            if normalized_text in ("yes", "y", "correct", "proceed"):
-                # Transcription is correct, process the command
-                preserved_input = sess["pending_input"]
-                sess["awaiting_voice_confirmation"] = False
-                sess["pending_input"] = None
-                save_session(session_data)
-                
-                log_event("voice_transcription_confirmed", input=preserved_input)
-                return handle_command(chat_id, preserved_input, sess)
-                
-            elif normalized_text in ("no", "n", "incorrect", "wrong"):
-                # Transcription is incorrect
-                sess["awaiting_voice_confirmation"] = False
-                sess["pending_input"] = None
-                save_session(session_data)
-                
-                send_message(chat_id, "Please try speaking again more clearly, or type your command instead.")
-                return "ok", 200
-                
-            else:
-                # Unclear response
-                send_message(chat_id, "Please clearly indicate if the transcription is correct. Reply 'yes' to proceed or 'no' to try again.")
-                return "ok", 200
-
-        # Handle spelling correction
-        if sess.get("awaiting_spelling_correction"):
-            field, old_value = sess["awaiting_spelling_correction"]
-            new_value = text.strip()
-            
-            log_event("spelling_correction", field=field, old=old_value, new=new_value)
-            
-            # Check if the new value is too similar to the old one
-            if string_similarity(new_value.lower(), old_value.lower()) > 0.95:
-                sess["awaiting_spelling_correction"] = None
-                save_session(session_data)
-                send_message(chat_id, f"⚠️ New value '{new_value}' is too similar to the old value '{old_value}'. Please provide a different spelling or type 'cancel' to abort the correction.")
-                return "ok", 200
-                
-            # Cancel the correction if requested
-            if new_value.lower() in ("cancel", "abort", "stop", "nevermind", "never mind"):
-                sess["awaiting_spelling_correction"] = None
-                save_session(session_data)
-                send_message(chat_id, "Spelling correction cancelled.")
-                return "ok", 200
-                
-            # Save original value for undo last
-            if field in sess["structured_data"]:
-                sess["last_change_history"].append((field, sess["structured_data"][field]))
-                
-            # Save current state for undo
-            sess["command_history"].append(sess["structured_data"].copy())
-            
-            # Apply the correction based on field type
-            sess["awaiting_spelling_correction"] = None
-            
-            if field in ["service", "services"]:
-                # Handle service/services mapping
-                field = "services"
-                data_field = "task"
-                
-                # Make sure we're working with the services field
-                if "service" in sess["structured_data"] and "services" not in sess["structured_data"]:
-                    sess["structured_data"]["services"] = sess["structured_data"].pop("service")
-                    
-                sess["structured_data"][field] = [
-                    {data_field: new_value if string_similarity(item.get(data_field, ""), old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item[data_field]}
-                    for item in sess["structured_data"].get(field, [])
-                    if isinstance(item, dict)
-                ]
-                
-            elif field in ["companies", "roles", "tools", "issues"]:
-                data_field = (
-                    "name" if field == "companies" else
-                    "description" if field == "issues" else
-                    "item" if field == "tools" else
-                    "name" if field == "roles" else None
-                )
-                
-                sess["structured_data"][field] = [
-                    {data_field: new_value if string_similarity(item.get(data_field, ""), old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item[data_field],
-                     **({} if field != "roles" else {"role": item["role"]})}
-                    for item in sess["structured_data"].get(field, [])
-                    if isinstance(item, dict)
-                ]
-                
-                # Add to people list if it's a role
-                if field == "roles" and new_value not in sess["structured_data"].get("people", []):
-                    sess["structured_data"].setdefault("people", []).append(new_value)
-                    
-            elif field in ["people"]:
-                # Update people list
-                sess["structured_data"]["people"] = [
-                    new_value if string_similarity(item, old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item 
-                    for item in sess["structured_data"].get("people", [])
-                ]
-                
-                # Also update roles with the same person
-                sess["structured_data"]["roles"] = [
-                    {"name": new_value, "role": role["role"]} 
-                    if string_similarity(role.get("name", ""), old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] 
-                    else role
-                    for role in sess["structured_data"].get("roles", [])
-                ]
-                
-            elif field in ["activities"]:
-                # Update activities list
-                sess["structured_data"]["activities"] = [
-                    new_value if string_similarity(item, old_value) > CONFIG["NAME_SIMILARITY_THRESHOLD"] else item 
-                    for item in sess["structured_data"].get("activities", [])
-                ]
-                
-            else:
-                # Update scalar field
-                sess["structured_data"][field] = new_value
-                
-            # Update context
-            update_context(sess, field, new_value)
-                
-            save_session(session_data)
-            tpl = summarize_report(sess["structured_data"])
-            send_message(chat_id, f"Corrected {field} from '{old_value}' to '{new_value}'.\n\nUpdated report:\n\n{tpl}\n\nAnything else to add or correct?")
-            return "ok", 200
-
-        # Process regular command
-        return handle_command(chat_id, text, sess)
+        
+        # Handle text messages
+        if "text" in message:
+            text = message["text"].strip()
+            log_event("processing_text_command", text=text)
+            return handle_command(chat_id, text, session_data[chat_id])
+        
+        # Handle other types of messages
+        send_message(chat_id, "⚠️ I can only process text and voice messages. Please try again.")
+        return "ok", 200
         
     except Exception as e:
         log_event("webhook_error", error=str(e))
-        try:
-            chat_id = str(data["message"]["chat"]["id"]) if data and "message" in data and "chat" in data["message"] else "unknown"
-            send_message(chat_id, "⚠️ An unexpected error occurred. Please try again or type 'help' for assistance.")
-        except Exception:
-            pass
         return "error", 500
-
-if __name__ == "__main__":
-    # Use production server when in production environment
-    if os.environ.get("ENVIRONMENT") == "production":
-        from waitress import serve
-        serve(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-    else:
-        # Use development server for local testing
-        app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
