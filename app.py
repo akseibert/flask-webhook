@@ -54,8 +54,8 @@ def extract_fields(text: str) -> Dict[str, Any]:
         if len(text) > 100:  # Any longer message is treated as a free-form report
             log_event("detected_free_form_report", length=len(text))
             
-            # Direct pattern matching for construction site reports
-            site_pattern = r'(?:on|at)\s+(?:the\s+)?([A-Za-z0-9\s]+)\s+(?:site|project)'
+            # Direct pattern matching for construction site reports - expanded pattern for more natural language
+            site_pattern = r'(?:on|at|in|working\s+(?:in|at))\s+(?:the\s+)?([A-Za-z0-9\s]+?)\s*(?:site|project|location|$|[.,])'
             site_match = re.search(site_pattern, text, re.IGNORECASE)
             if site_match:
                 result["site_name"] = site_match.group(1).strip()
@@ -78,7 +78,18 @@ def extract_fields(text: str) -> Dict[str, Any]:
             if companies_match:
                 companies_text = companies_match.group(1).strip()
                 companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
-                result["companies"] = [{"name": company} for company in companies if company]
+                
+                # Deduplicate companies
+                unique_companies = []
+                seen_companies = set()
+                for company in companies:
+                    if company and company.lower() not in seen_companies:
+                        seen_companies.add(company.lower())
+                        unique_companies.append(company)
+                    elif company:
+                        log_event("skipped_duplicate_company", company=company)
+                        
+                result["companies"] = [{"name": company} for company in unique_companies]
             
             # Extract people and roles
             people_pattern = r'(?:people|persons)(?:\s+were)?\s+([^.]+)'
@@ -95,25 +106,35 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 # Split by commas or "and"
                 people_items = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
                 
+                # Deduplicate people
+                unique_people = []
+                seen_names = set()
+                
                 for person_item in people_items:
-                    # Check for "as role" pattern
-                    role_match = re.search(r'(.*?)\s+as\s+(.*)', person_item, re.IGNORECASE)
-                    if role_match:
-                        person_name = role_match.group(1).strip()
-                        role_title = role_match.group(2).strip()
+                    person_lower = person_item.lower()
+                    if person_lower not in seen_names:
+                        seen_names.add(person_lower)
                         
-                        # Handle "myself" reference without requiring message context
-                        if person_name.lower() == "myself":
-                            # For "myself", we can't access the sender's name here
-                            # Just use "Myself" with proper capitalization
-                            person_name = "Myself"
-                        
-                        people.append(person_name)
-                        roles.append({"name": person_name, "role": role_title})
+                        # Check for "as role" pattern
+                        role_match = re.search(r'(.*?)\s+as\s+(.*)', person_item, re.IGNORECASE)
+                        if role_match:
+                            person_name = role_match.group(1).strip()
+                            role_title = role_match.group(2).strip()
+                            
+                            # Handle "myself" reference without requiring message context
+                            if person_name.lower() == "myself":
+                                # For "myself", we can't access the sender's name here
+                                # Just use "Myself" with proper capitalization
+                                person_name = "Myself"
+                            
+                            people.append(person_name)
+                            roles.append({"name": person_name, "role": role_title})
+                        else:
+                            # No role specified
+                            people.append(person_item)
                     else:
-                        # No role specified
-                        people.append(person_item)
-            
+                        log_event("skipped_duplicate_person", person=person_item)
+                        
             # Also look for specific role patterns
             supervisor_pattern = r'([A-Za-z\s]+)\s+as\s+(?:the\s+)?supervisor'
             supervisor_match = re.search(supervisor_pattern, text, re.IGNORECASE)
@@ -195,9 +216,20 @@ def extract_fields(text: str) -> Dict[str, Any]:
             # If we didn't find enough information, try the GPT extraction as fallback
             try:
                 gpt_result = extract_with_gpt(text)
-                if gpt_result:
-                    log_event("gpt_extraction_success", fields=list(gpt_result.keys()))
-                    return gpt_result
+                # Validate that the GPT result contains essential fields before using it
+                if gpt_result and any(key in gpt_result for key in ["site_name", "people", "activities"]):
+                    # Check if it's likely a valid extraction
+                    field_count = sum(1 for field in ["site_name", "segment", "category", "companies", 
+                                                    "people", "roles", "tools", "services", 
+                                                    "activities", "issues", "time", "weather", 
+                                                    "impression"] if field in gpt_result)
+                    if field_count >= 3:  # At least 3 relevant fields found
+                        log_event("gpt_extraction_success", fields=list(gpt_result.keys()))
+                        return gpt_result
+                    else:
+                        log_event("gpt_extraction_incomplete", fields=list(gpt_result.keys()))
+                else:
+                    log_event("gpt_extraction_invalid", result=str(gpt_result)[:100])
             except Exception as e:
                 log_event("gpt_extraction_error", error=str(e))
                 # Continue with normal pattern matching below if GPT fails
@@ -3234,7 +3266,6 @@ def webhook() -> tuple[str, int]:
             save_session(session_data)
         
         # Handle voice messages with improved error handling
-        # Handle voice messages with improved error handling
         if "voice" in message:
             try:
                 # Extract file ID for the voice
@@ -3243,15 +3274,17 @@ def webhook() -> tuple[str, int]:
                 # Transcribe voice to text
                 text, confidence = transcribe_voice(file_id)
                 
-                if not text:
-                    send_message(chat_id, "⚠️ I couldn't understand your voice message. Please try again or type your message.")
+                # Check if text is empty or confidence is too low
+                if not text or confidence < 0.6:  # Moderate threshold for noisy construction sites
+                    log_event("low_confidence_transcription", text=text, confidence=confidence)
+                    send_message(chat_id, "⚠️ I couldn't clearly understand your voice message. Please speak clearly or type your message.")
                     return "ok", 200
                 
-                # For longer messages, let the user know we're processing
-                if len(text) > 100:
+                # For free-form reports, notify the user
+                if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
                     send_message(chat_id, "Processing your detailed report...")
-                    
-                # Process all transcriptions directly without confirmation
+                
+                # Process transcription directly
                 log_event("processing_voice_command", text=text, confidence=confidence)
                 return handle_command(chat_id, text, session_data[chat_id])
                 
@@ -3259,32 +3292,7 @@ def webhook() -> tuple[str, int]:
                 log_event("voice_processing_error", error=str(e))
                 send_message(chat_id, "⚠️ There was an error processing your voice message. Please try again or type your message.")
                 return "ok", 200
-        
-        # Handle transcription confirmation - simplify this logic to reduce user friction
-            if session_data[chat_id].get("awaiting_transcription_confirmation"):
-                # Whatever the user responds, process the transcription
-                # This avoids the confusion when user confirms but still gets errors
-                session_data[chat_id]["awaiting_transcription_confirmation"] = False
-                pending_text = session_data[chat_id].get("pending_transcription", "")
-                
-                if pending_text:
-                    session_data[chat_id]["pending_transcription"] = None
-                    save_session(session_data)
-                    log_event("transcription_auto_confirmed", text=pending_text)
-                    return handle_command(chat_id, pending_text, session_data[chat_id])
-                else:
-                    send_message(chat_id, "Please speak again or type your message.")
-                    return "ok", 200
-            elif re.match(FIELD_PATTERNS["no_confirm"], text, re.IGNORECASE):
-                # Clear the pending transcription
-                session_data[chat_id]["awaiting_transcription_confirmation"] = False
-                session_data[chat_id]["pending_transcription"] = None
-                save_session(session_data)
-                send_message(chat_id, "Please try speaking again or type your message.")
-                return "ok", 200
-            else:
-                send_message(chat_id, "Please reply 'yes' or 'no' to confirm the transcription.")
-                return "ok", 200
+
     
         # Handle text messages
         if "text" in message:
