@@ -1607,7 +1607,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
 
             # Standard pattern matching for commands
             commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)|(?:add|insert)\s+(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments))|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
-            log_event("commands_split", commands=commands)
+            log_event("commands_split", command_count=len(commands))
             
             processed_result = {
                 "companies": [], "roles": [], "tools": [], "services": [],
@@ -1617,22 +1617,88 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
 
             for cmd in commands:
                 # Process each command individually
-                cmd_result = extract_single_command(cmd)
-                
-                # Special handling for commands that need to be merged
-                if "delete" in cmd_result:
-                    result.setdefault("delete", []).extend(cmd_result.pop("delete"))
-                elif "correct" in cmd_result:
-                    result.setdefault("correct", []).extend(cmd_result.pop("correct"))
-                
-                # Special handling for reset, help, etc.
-                if any(key in cmd_result for key in ["reset", "yes_confirm", "no_confirm", "undo", "undo_last", 
-                                                "status", "export_pdf", "sharepoint_export", 
-                                                "sharepoint_status", "help", "summary", "detailed",
-                                                "spelling_correction"]):
-                    # For these commands, just return them directly
-                    return cmd_result
+                delete_match = re.match(FIELD_PATTERNS["delete"], cmd, re.IGNORECASE)
+                if delete_match:
+                    # Handle deletion commands
+                    groups = delete_match.groups()
+                    
+                    # Different patterns for different delete syntaxes
+                    if groups[0]:  # First pattern: "delete category value"
+                        raw_field = groups[0]
+                        value = groups[1]
+                    elif groups[2] and groups[3]:  # Second pattern: "delete value from category"
+                        raw_field = groups[3]
+                        value = groups[2]
+                    elif groups[4] and groups[5]:  # Third pattern: "category delete value"
+                        raw_field = groups[4]
+                        value = groups[5]
+                    else:  # Fourth pattern: "delete value" (single word delete)
+                        raw_field = None
+                        value = groups[6]
+                    
+                    raw_field = raw_field.lower() if raw_field else None
+                    value = value.strip() if value else None
+                    field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
+                    
+                    log_event("delete_command", field=field, value=value)
+                    
+                    if field or value:  # Allow deletions with just a value for fuzzy matching
+                        result.setdefault("delete", []).append({"field": field, "value": value})
+                    continue
 
+                delete_entire_match = re.match(FIELD_PATTERNS["delete_entire"], cmd, re.IGNORECASE)
+                if delete_entire_match:
+                    field = delete_entire_match.group(1).lower()
+                    mapped_field = FIELD_MAPPING.get(field, field)
+                    
+                    # Fix service/services mapping
+                    if mapped_field == "service":
+                        mapped_field = "services"
+                        
+                    result[mapped_field] = {"delete": True}
+                    log_event("delete_entire_category", field=mapped_field)
+                    continue
+
+                correct_match = re.match(FIELD_PATTERNS["correct"], cmd, re.IGNORECASE)
+                if correct_match:
+                    raw_field = correct_match.group(1).lower() if correct_match.group(1) else None
+                    old_value = correct_match.group(2).strip() if correct_match.group(2) else None
+                    new_value = correct_match.group(3).strip() if correct_match.group(3) else None
+                    field = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
+                    
+                    log_event("correct_command", field=field, old=old_value, new=new_value)
+                    
+                    if field and old_value:
+                        if new_value:
+                            result.setdefault("correct", []).append({
+                                "field": field, 
+                                "old": clean_value(old_value, field), 
+                                "new": clean_value(new_value, field)
+                            })
+                        else:
+                            # If no new value provided, we'll enter the correction mode
+                            result["spelling_correction"] = {
+                                "field": field, 
+                                "old_value": clean_value(old_value, field)
+                            }
+                    continue
+                # Handle contextual references
+                context_add_match = re.match(FIELD_PATTERNS["context_add"], cmd, re.IGNORECASE)
+                if context_add_match:
+                    target_field = context_add_match.group(1).lower()
+                    field = FIELD_MAPPING.get(target_field, target_field)
+                    
+                    log_event("context_add_command", field=field)
+                    
+                    if field:
+                        result["context_add"] = {"field": field}
+                    continue
+                    
+                # Extract other fields using the command parser
+                cmd_result = extract_single_command(cmd)
+                if cmd_result.get("reset"):
+                    return {"reset": True}
+                    
                 for key, value in cmd_result.items():
                     # Skip fields we've already seen (except for list fields)
                     if key in seen_fields and key not in LIST_FIELDS:
@@ -1710,6 +1776,8 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
             log_event("extract_fields_error", input=text, error=str(e))
             # Return a minimal result to avoid breaking the app
             return {"error": str(e)}
+
+
     # Part 10 - b Merge Data Function
 
 def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id: str) -> Dict[str, Any]:
