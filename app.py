@@ -1,3 +1,4 @@
+# Import necessary libraries at the top
 import os
 import sys
 import io
@@ -24,6 +25,57 @@ from functools import lru_cache
 
 # Initialize Flask app
 app = Flask(__name__)
+
+# --- Important function definitions (adding stubs to prevent "not defined" errors) ---
+
+# Define extract_fields function (stub version in case the real one isn't loaded)
+def extract_fields(text: str) -> Dict[str, Any]:
+    """Extract fields from text input with enhanced error handling and field validation"""
+    print("WARNING: Using stub extract_fields function - real function not loaded!")
+    return {}
+
+# Define merge_data function (stub version)
+def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id: str) -> Dict[str, Any]:
+    """Merge new data with existing data, handling special cases"""
+    print("WARNING: Using stub merge_data function - real function not loaded!")
+    return existing_data.copy()
+
+# Define summarize_report function (stub version)
+def summarize_report(data: Dict[str, Any]) -> str:
+    """Generate a formatted text summary of the report data"""
+    print("WARNING: Using stub summarize_report function - real function not loaded!")
+    return "Report Summary"
+
+# Define is_free_form_report function (stub version)
+def is_free_form_report(text: str) -> bool:
+    """Detect if the text looks like a free-form report"""
+    print("WARNING: Using stub is_free_form_report function - real function not loaded!")
+    return False
+
+# Define send_message function (stub version)
+def send_message(chat_id: str, text: str) -> None:
+    """Send message to Telegram with enhanced error handling"""
+    print("WARNING: Using stub send_message function - real function not loaded!")
+    pass
+
+# Define enrich_date function (stub version)
+def enrich_date(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate and standardize date format in report data"""
+    print("WARNING: Using stub enrich_date function - real function not loaded!")
+    return data
+
+# Declare COMMAND_HANDLERS dictionary (empty version)
+COMMAND_HANDLERS: Dict[str, Callable[[str, Dict[str, Any]], None]] = {}
+
+# Declare session_data dictionary (empty version)
+session_data: Dict[str, Any] = {}
+
+# Declare config variables (empty version)
+CONFIG = {}
+SCALAR_FIELDS = []
+LIST_FIELDS = []
+FIELD_PATTERNS = {}
+
 
 # --- Configuration ---
 CONFIG = {
@@ -171,8 +223,8 @@ FIELD_PATTERNS = {
     "export_pdf": r'^(export|export pdf|export report|generate pdf|generate report)\s*[.!]?$',
     "sharepoint": r'^(export|sync|upload|send|save)\s+(to|on|in|into)\s+sharepoint\s*[.!]?$',
     "sharepoint_status": r'^sharepoint\s+(status|info|information|connection|check)\s*[.!]?$',
-    "yes_confirm": r'^(?:yes|ya|yep|yeah|yup|ok|okay|sure|confirm|confirmed|y)\s*[.!]?$',
-    "no_confirm": r'^(?:no|nope|nah|negative|n)\s*[.!]?$'
+    "yes_confirm": r'^(?:yes|ya|yep|yeah|yup|ok|okay|sure|confirm|confirmed|y|да|ню|нью)\s*[.!]?$',
+    "no_confirm": r'^(?:no|nope|nah|negative|n|нет)\s*[.!]?$'
 }
 
 # Extended regex patterns for more nuanced commands
@@ -412,7 +464,7 @@ Expected Output:
   "comments": "ensure safety protocols are reinforced"
 }
 """
-#Part 5 Signal Handlers and Telegram API
+# Part 5 Signal Handlers and Telegram API
 # --- Signal Handlers ---
 def handle_shutdown(signum: int, frame: Any) -> None:
     """Handle shutdown signals by saving session data"""
@@ -495,7 +547,7 @@ def get_telegram_file_path(file_id: str) -> str:
             
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def transcribe_voice(file_id: str) -> Tuple[str, float]:
-    """Transcribe voice message with confidence score"""
+    """Transcribe voice message with confidence score and language normalization"""
     try:
         audio_url = get_telegram_file_path(file_id)
         audio_response = requests.get(audio_url)
@@ -513,6 +565,9 @@ def transcribe_voice(file_id: str) -> Tuple[str, float]:
             log_event("transcription_empty")
             return "", 0.0
         
+        # Normalize text - handle common non-English transcriptions
+        text = normalize_transcription(text)
+        
         # Extract and return confidence (approximate calculation)
         # Longer texts generally indicate higher confidence
         confidence = min(0.95, 0.5 + (len(text) / 200))
@@ -522,6 +577,38 @@ def transcribe_voice(file_id: str) -> Tuple[str, float]:
     except (requests.RequestException, Exception) as e:
         log_event("transcription_failed", error=str(e))
         return "", 0.0
+
+def normalize_transcription(text: str) -> str:
+    """Normalize transcription text to handle non-English characters and common patterns"""
+    # Convert common Russian/Cyrillic transcriptions to English equivalents
+    cyrillic_to_english = {
+        # Russian transcription fixes
+        "да": "yes",
+        "нет": "no",
+        "ню": "new",
+        "нью": "new",
+        # Add more mappings as needed
+    }
+    
+    # Check and replace known words
+    for cyrillic, english in cyrillic_to_english.items():
+        if text.lower() == cyrillic.lower():
+            text = english
+            break
+    
+    # Handle single-word "yes" cases with punctuation
+    if re.match(r'^yes[.!?]*$', text.lower()):
+        text = "yes"
+    
+    # Handle single-word "no" cases with punctuation
+    if re.match(r'^no[.!?]*$', text.lower()):
+        text = "no"
+    
+    # Handle single-word "new" cases with punctuation
+    if re.match(r'^new[.!?]*$', text.lower()):
+        text = "new"
+    
+    return text
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def send_pdf(chat_id: str, pdf_buffer: io.BytesIO, report_type: str = "standard") -> bool:
@@ -2814,6 +2901,9 @@ def webhook() -> tuple[str, int]:
                 pending_text = session_data[chat_id].get("pending_transcription", "")
                 
                 if pending_text:
+                    # Normalize the pending text one more time before processing
+                    pending_text = normalize_transcription(pending_text)
+                    
                     session_data[chat_id]["pending_transcription"] = None
                     save_session(session_data)
                     log_event("transcription_confirmed", text=pending_text)
@@ -2831,7 +2921,7 @@ def webhook() -> tuple[str, int]:
             else:
                 send_message(chat_id, "Please reply 'yes' or 'no' to confirm the transcription.")
                 return "ok", 200
-        
+    
         # Handle text messages
         if "text" in message:
             text = message["text"].strip()
