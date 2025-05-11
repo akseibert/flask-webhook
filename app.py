@@ -29,11 +29,201 @@ app = Flask(__name__)
 # --- Important function definitions (adding stubs to prevent "not defined" errors) ---
 
 # Define extract_fields function (stub version in case the real one isn't loaded)
+# Define extract_fields function (REAL IMPLEMENTATION)
 def extract_fields(text: str) -> Dict[str, Any]:
     """Extract fields from text input with enhanced error handling and field validation"""
-    print("WARNING: Using stub extract_fields function - real function not loaded!")
-    return {}
+    try:
+        # Print marker to confirm this function is being used
+        print("REAL extract_fields FUNCTION RUNNING")
+        log_event("extract_fields_real", input=text[:100])
+        
+        result: Dict[str, Any] = {}
+        normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
 
+        # Check for basic commands first
+        if normalized_text.lower() in ("yes", "y", "ya", "yeah", "yep", "yup", "okay", "ok"):
+            return {"yes_confirm": True}
+            
+        if normalized_text.lower() in ("no", "n", "nope", "nah"):
+            return {"no_confirm": True}
+
+        if normalized_text.lower() in ("new", "new report", "/new", "reset", "reset report"):
+            return {"reset": True}
+            
+        # Free-form report handling - this is essential for voice reports
+        if len(text) > 100:  # Any longer message is treated as a free-form report
+            log_event("detected_free_form_report", length=len(text))
+            
+            # Direct pattern matching for construction site reports
+            site_pattern = r'(?:on|at)\s+(?:the\s+)?([A-Za-z0-9\s]+)\s+(?:site|project)'
+            site_match = re.search(site_pattern, text, re.IGNORECASE)
+            if site_match:
+                result["site_name"] = site_match.group(1).strip()
+            
+            # Extract segment
+            segment_pattern = r'(?:segment|section)\s+([A-Za-z0-9\s]+)'
+            segment_match = re.search(segment_pattern, text, re.IGNORECASE)
+            if segment_match:
+                result["segment"] = segment_match.group(1).strip()
+            
+            # Extract category
+            category_pattern = r'category\s+([A-Za-z0-9\s]+)'
+            category_match = re.search(category_pattern, text, re.IGNORECASE)
+            if category_match:
+                result["category"] = category_match.group(1).strip()
+            
+            # Extract companies
+            companies_pattern = r'(?:companies|company)(?:\s+involved)?\s+(?:were|was|are|is)\s+([^.]+)'
+            companies_match = re.search(companies_pattern, text, re.IGNORECASE)
+            if companies_match:
+                companies_text = companies_match.group(1).strip()
+                companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
+                result["companies"] = [{"name": company} for company in companies if company]
+            
+            # Extract people and roles
+            people_pattern = r'(?:people|persons)(?:\s+were)?\s+([^.]+)'
+            people_match = re.search(people_pattern, text, re.IGNORECASE)
+            
+            people = []
+            roles = []
+            
+            if people_match:
+                people_text = people_match.group(1).strip()
+                # Split by commas or "and"
+                people_items = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+                
+                for person_item in people_items:
+                    # Check for "as role" pattern
+                    role_match = re.search(r'(.*?)\s+as\s+(.*)', person_item, re.IGNORECASE)
+                    if role_match:
+                        person_name = role_match.group(1).strip()
+                        role_title = role_match.group(2).strip()
+                        
+                        if people_match:
+                        people_text = people_match.group(1).strip()
+                        # Split by commas or "and"
+                        people_items = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+                        
+                        for person_item in people_items:
+                            # Check for "as role" pattern
+                            role_match = re.search(r'(.*?)\s+as\s+(.*)', person_item, re.IGNORECASE)
+                            if role_match:
+                                person_name = role_match.group(1).strip()
+                                role_title = role_match.group(2).strip()
+                                
+                                # Handle "myself" reference without requiring message context
+                                if person_name.lower() == "myself":
+                                    # For "myself", we can't access the sender's name here
+                                    # Just use "Myself" with proper capitalization
+                                    person_name = "Myself"
+                                
+                                people.append(person_name)
+                                roles.append({"name": person_name, "role": role_title})
+                            else:
+                                # No role specified
+                                people.append(person_item)
+            
+            # Also look for specific role patterns
+            supervisor_pattern = r'([A-Za-z\s]+)\s+as\s+(?:the\s+)?supervisor'
+            supervisor_match = re.search(supervisor_pattern, text, re.IGNORECASE)
+            if supervisor_match:
+                supervisor = supervisor_match.group(1).strip()
+                if supervisor not in people:
+                    people.append(supervisor)
+                
+                # Check if this person already has a role
+                has_role = False
+                for role in roles:
+                    if role["name"] == supervisor:
+                        has_role = True
+                        break
+                
+                if not has_role:
+                    roles.append({"name": supervisor, "role": "Supervisor"})
+            
+            result["people"] = people
+            result["roles"] = roles
+            
+            # Extract services
+            services_pattern = r'(?:services|service)(?:\s+(?:were|was|provided))?\s+([^.]+)'
+            services_match = re.search(services_pattern, text, re.IGNORECASE)
+            if services_match:
+                services_text = services_match.group(1).strip()
+                services = [s.strip() for s in re.split(r',|\s+and\s+', services_text)]
+                result["services"] = [{"task": service} for service in services if service]
+            
+            # Extract tools
+            tools_pattern = r'(?:tools|equipment)(?:\s+used)?\s+(?:were|was)?\s+([^.]+)'
+            tools_match = re.search(tools_pattern, text, re.IGNORECASE)
+            if tools_match:
+                tools_text = tools_match.group(1).strip()
+                tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text)]
+                result["tools"] = [{"item": tool} for tool in tools if tool]
+            
+            # Extract activities
+            activities_pattern = r'(?:activities|activity)(?:\s+(?:were|was|included))?\s+([^.]+)'
+            activities_match = re.search(activities_pattern, text, re.IGNORECASE)
+            if activities_match:
+                activities_text = activities_match.group(1).strip()
+                activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text)]
+                result["activities"] = activities
+            
+            # Extract issues
+            issues_pattern = r'(?:issues|issue|problem)(?:\s+(?:were|was|had))?\s+([^.]+)'
+            issues_match = re.search(issues_pattern, text, re.IGNORECASE)
+            if issues_match:
+                issues_text = issues_match.group(1).strip()
+                issues = [i.strip() for i in re.split(r';|\s+and\s+', issues_text)]
+                result["issues"] = [{"description": issue} for issue in issues if issue]
+            
+            # Extract time
+            time_pattern = r'(?:time|duration)(?:\s+(?:spent|was))?\s+([^.]+)'
+            time_match = re.search(time_pattern, text, re.IGNORECASE)
+            if time_match:
+                result["time"] = time_match.group(1).strip()
+            
+            # Extract weather
+            weather_pattern = r'(?:weather|conditions)(?:\s+(?:were|was))?\s+([^.]+)'
+            weather_match = re.search(weather_pattern, text, re.IGNORECASE)
+            if weather_match:
+                result["weather"] = weather_match.group(1).strip()
+            
+            # Extract impression
+            impression_pattern = r'(?:impression|assessment)(?:\s+(?:was|is))?\s+([^.]+)'
+            impression_match = re.search(impression_pattern, text, re.IGNORECASE)
+            if impression_match:
+                result["impression"] = impression_match.group(1).strip()
+            
+            # If we found at least a site name or people, consider it a valid report
+            if result.get("site_name") or result.get("people"):
+                log_event("free_form_extraction_success", found_fields=list(result.keys()))
+                # Add today's date
+                result["date"] = datetime.now().strftime("%d-%m-%Y")
+                return result
+            
+            # If we didn't find enough information, try the GPT extraction as fallback
+            try:
+                gpt_result = extract_with_gpt(text)
+                if gpt_result:
+                    log_event("gpt_extraction_success", fields=list(gpt_result.keys()))
+                    return gpt_result
+            except Exception as e:
+                log_event("gpt_extraction_error", error=str(e))
+                # Continue with normal pattern matching below if GPT fails
+        
+        # If we reach here, the previous extractions didn't work or it's not a free-form report
+
+        # Standard command pattern matching (left in place for legacy code support)
+        # ...
+        
+        log_event("fields_extracted", result_fields=len(result))
+        return result
+    except Exception as e:
+        log_event("extract_fields_error", input=text[:100], error=str(e))
+        print(f"ERROR in extract_fields: {str(e)}")
+        # Return a minimal result to avoid breaking the app
+        return {"error": str(e)}
+    
 # Define merge_data function (stub version)
 def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id: str) -> Dict[str, Any]:
     """Merge new data with existing data, handling special cases"""
@@ -1174,45 +1364,73 @@ def extract_with_gpt(text: str) -> Dict[str, Any]:
         return {}
 
 def is_free_form_report(text: str) -> bool:
-    """Detect if the text looks like a free-form report with enhanced detection"""
+    """Detect if the text looks like a free-form report with enhanced construction site awareness"""
     # If text is very short, it's definitely not a report
-    if len(text) < 50:
+    if len(text) < CONFIG["FREEFORM_MIN_LENGTH"]:
         return False
         
-    # Detect starting with reporting phrases
-    reporting_starts = [
-        r'^(?:hey|hi|hello|good\s+(?:morning|afternoon|evening))[,.]?\s+this\s+is\s+',
-        r'^reporting\s+(?:from|on)\s+',
-        r'^(?:today|yesterday)(?:\s+at|,)\s+',
-        r'^i\'?(?:m)?\s+(?:at|on|reporting\s+from)\s+'
+    # Construction site specific report patterns
+    construction_patterns = [
+        # Project/site identification
+        r'\b(?:at|on|from|reporting\s+from)\s+(?:the\s+)?(?:site|project|location)\b',
+        r'\b(?:site|project)(?:\s+name)?\s*[:=\s]+\w+',
+        
+        # Team/people mentions 
+        r'\b(?:team|crew|personnel|staff)\s+(?:included|consisted\s+of|were|was)\b',
+        r'\b(?:included\s+myself|with\s+me)[,\s]+(?:\w+\s+)+(?:as\s+(?:the\s+)?(?:supervisor|inspector|manager))',
+        
+        # Tools and equipment
+        r'\b(?:tools?|equipment)\s+(?:used|utilized|needed|available)\s+(?:were|was|included)\b',
+        r'\b(?:crane|mixer|drill|scaffold|truck|digger|excavator)\b',
+        
+        # Companies
+        r'\b(?:compan(?:y|ies)|contractor[s]?)\s+(?:on\s+site|involved|present)\s+(?:were|was|included)\b',
+        
+        # Activities reporting
+        r'\b(?:work|tasks?|activities)\s+(?:(?:carried|done)\s+out|performed|completed|included)\b',
+        
+        # Weather and conditions
+        r'\b(?:weather|conditions?)\s+(?:were|was)\s+(?:good|bad|rainy|sunny|cloudy|windy|cold|hot|warm)\b',
+        
+        # Issues and problems
+        r'\b(?:issues?|problems?|concerns?|incident[s]?|accident[s]?)\s+(?:encountered|occurred|happened|reported)\b'
     ]
     
-    if any(re.search(pattern, text.lower()) for pattern in reporting_starts):
-        return True
+    # Count how many construction patterns match
+    construction_matches = sum(1 for pattern in construction_patterns 
+                              if re.search(pattern, text, re.IGNORECASE))
     
-    # Reports often mention sites, people, activities
-    report_indicators = [
-        # Reports mention project/site names
-        r'\b(?:site|project|location|section)\b[:\s]+\w+',
+    # Check for common report structure indicators
+    structure_indicators = [
+        # Multiple sentences (reports tend to have several sentences)
+        len(re.findall(r'[.!?]+', text)) >= 3,
         
-        # Reports mention dates/times
-        r'\b(?:today|yesterday|this\s+morning|afternoon|on\s+\w+day)\b',
+        # Contains multiple commas (listing things)
+        len(re.findall(r',', text)) >= 3,
         
-        # Reports mention people
-        r'\b(?:team|included|supervisor|operator|officer)\b',
+        # Contains a date or time reference
+        bool(re.search(r'\b(?:today|yesterday|this\s+morning|on\s+\w+day|\d{1,2}(?::|am|pm)|\d{1,2}[-/]\d{1,2})\b', 
+                     text, re.IGNORECASE)),
         
-        # Reports mention tools/companies
-        r'\b(?:compan(?:y|ies)|tools?|equipment|crane|mixer|scaffold)\b',
+        # Contains content with measurements or numbers
+        bool(re.search(r'\b\d+\s*(?:m|cm|mm|ft|feet|inch|meters?|hours?|mins?|minutes?)\b', text, re.IGNORECASE)),
         
-        # Reports often have multiple sentences
-        r'\..*\.'
+        # Likely to be a greeting followed by content
+        bool(re.search(r'^(?:hi|hello|hey|good\s+(?:morning|afternoon|evening)),?\s+(?:this\s+is|I\'m|I\s+am)', 
+                     text, re.IGNORECASE))
     ]
     
-    # Count the number of indicators present
-    indicator_count = sum(1 for pattern in report_indicators if re.search(pattern, text, re.IGNORECASE))
+    # Count structure indicators
+    structure_matches = sum(1 for indicator in structure_indicators if indicator)
     
-    # If we have 3 or more indicators, it's likely a report
-    return indicator_count >= 3
+    # Log the detection results for debugging
+    log_event("free_form_report_detection", 
+             length=len(text), 
+             construction_matches=construction_matches,
+             structure_matches=structure_matches)
+    
+    # Return true if we have enough matches (at least 2 construction patterns and 2 structure indicators)
+    return construction_matches >= 2 and structure_matches >= 2
         
     # Check for typical report indicators
     report_indicators = [
@@ -3024,22 +3242,32 @@ def webhook() -> tuple[str, int]:
             }
             save_session(session_data)
         
-        # Handle voice messages
+        # Handle voice messages with improved error handling
+        # Handle voice messages with improved error handling
         if "voice" in message:
-            # Extract file ID for the voice
-            file_id = message["voice"]["file_id"]
-            
-            # Transcribe voice to text
-            text, confidence = transcribe_voice(file_id)
-            
-            if not text:
-                send_message(chat_id, "⚠️ I couldn't understand your voice message. Please try again or type your message.")
-                return "ok", 200
+            try:
+                # Extract file ID for the voice
+                file_id = message["voice"]["file_id"]
                 
-            # Process all transcriptions without confirmation for better user experience
-            # Log the transcription for reference
-            log_event("processing_voice_command", text=text)
-            return handle_command(chat_id, text, session_data[chat_id])
+                # Transcribe voice to text
+                text, confidence = transcribe_voice(file_id)
+                
+                if not text:
+                    send_message(chat_id, "⚠️ I couldn't understand your voice message. Please try again or type your message.")
+                    return "ok", 200
+                
+                # For longer messages, let the user know we're processing
+                if len(text) > 100:
+                    send_message(chat_id, "Processing your detailed report...")
+                    
+                # Process all transcriptions directly without confirmation
+                log_event("processing_voice_command", text=text, confidence=confidence)
+                return handle_command(chat_id, text, session_data[chat_id])
+                
+            except Exception as e:
+                log_event("voice_processing_error", error=str(e))
+                send_message(chat_id, "⚠️ There was an error processing your voice message. Please try again or type your message.")
+                return "ok", 200
         
         # Handle transcription confirmation - simplify this logic to reduce user friction
             if session_data[chat_id].get("awaiting_transcription_confirmation"):
