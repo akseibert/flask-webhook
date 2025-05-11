@@ -1444,185 +1444,185 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
     
     # Part 10 Field Extraction Continued
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
-def extract_fields(text: str) -> Dict[str, Any]:
-    """Extract fields from text input with enhanced error handling and field validation"""
-    try:
-        log_event("extract_fields", input=text)
-        result: Dict[str, Any] = {}
-        normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
+    def extract_fields(text: str) -> Dict[str, Any]:
+        """Extract fields from text input with enhanced error handling and field validation"""
+        try:
+            log_event("extract_fields", input=text)
+            result: Dict[str, Any] = {}
+            normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
 
-        # Check for system commands first
-        reset_match = re.match(FIELD_PATTERNS["reset"], normalized_text, re.IGNORECASE)
-        if reset_match:
-            log_event("reset_detected")
-            return {"reset": True}
+            # Check for system commands first
+            reset_match = re.match(FIELD_PATTERNS["reset"], normalized_text, re.IGNORECASE)
+            if reset_match:
+                log_event("reset_detected")
+                return {"reset": True}
 
-        # Check for yes/no confirmations
-        yes_match = re.match(FIELD_PATTERNS["yes_confirm"], normalized_text, re.IGNORECASE)
-        if yes_match:
-            log_event("yes_confirm_detected")
-            return {"yes_confirm": True}
-            
-        no_match = re.match(FIELD_PATTERNS["no_confirm"], normalized_text, re.IGNORECASE)
-        if no_match:
-            log_event("no_confirm_detected")
-            return {"no_confirm": True}
+            # Check for yes/no confirmations
+            yes_match = re.match(FIELD_PATTERNS["yes_confirm"], normalized_text, re.IGNORECASE)
+            if yes_match:
+                log_event("yes_confirm_detected")
+                return {"yes_confirm": True}
+                
+            no_match = re.match(FIELD_PATTERNS["no_confirm"], normalized_text, re.IGNORECASE)
+            if no_match:
+                log_event("no_confirm_detected")
+                return {"no_confirm": True}
 
-        if normalized_text.lower() in ("undo", "/undo"):
-            log_event("undo_detected")
-            return {"undo": True}
-            
-        if re.match(FIELD_PATTERNS["undo_last"], normalized_text, re.IGNORECASE):
-            log_event("undo_last_detected")
-            return {"undo_last": True}
+            if normalized_text.lower() in ("undo", "/undo"):
+                log_event("undo_detected")
+                return {"undo": True}
+                
+            if re.match(FIELD_PATTERNS["undo_last"], normalized_text, re.IGNORECASE):
+                log_event("undo_last_detected")
+                return {"undo_last": True}
 
-        if normalized_text.lower() in ("status", "/status"):
-            log_event("status_detected")
-            return {"status": True}
+            if normalized_text.lower() in ("status", "/status"):
+                log_event("status_detected")
+                return {"status": True}
 
-        # Check for export command
-        if re.match(FIELD_PATTERNS["export_pdf"], normalized_text, re.IGNORECASE):
-            log_event("export_pdf_detected")
-            return {"export_pdf": True}
-            
-        # Check for SharePoint commands
-        if re.match(FIELD_PATTERNS["sharepoint"], normalized_text, re.IGNORECASE):
-            log_event("sharepoint_export_detected")
-            return {"sharepoint_export": True}
-            
-        if re.match(FIELD_PATTERNS["sharepoint_status"], normalized_text, re.IGNORECASE):
-            log_event("sharepoint_status_detected")
-            return {"sharepoint_status": True}
-            
-        # Check for help command
-        help_match = re.match(FIELD_PATTERNS["help"], normalized_text, re.IGNORECASE)
-        if help_match:
-            topic = help_match.group(1) or help_match.group(2) or "general"
-            log_event("help_requested", topic=topic)
-            return {"help": topic.lower()}
-            
-        # Check for report type commands
-        if re.match(FIELD_PATTERNS["summary"], normalized_text, re.IGNORECASE):
-            log_event("summary_requested")
-            return {"summary": True}
-            
-        if re.match(FIELD_PATTERNS["detailed"], normalized_text, re.IGNORECASE):
-            log_event("detailed_requested")
-            return {"detailed": True}
-            
-        # Check if this is a free-form report and use GPT for extraction if enabled
-        if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
-            log_event("free_form_report_detected", length=len(text))
-            gpt_result = extract_with_gpt(text)
-            if gpt_result:
-                log_event("gpt_extraction_success", fields=list(gpt_result.keys()))
-                return gpt_result
+            # Check for export command
+            if re.match(FIELD_PATTERNS["export_pdf"], normalized_text, re.IGNORECASE):
+                log_event("export_pdf_detected")
+                return {"export_pdf": True}
+                
+            # Check for SharePoint commands
+            if re.match(FIELD_PATTERNS["sharepoint"], normalized_text, re.IGNORECASE):
+                log_event("sharepoint_export_detected")
+                return {"sharepoint_export": True}
+                
+            if re.match(FIELD_PATTERNS["sharepoint_status"], normalized_text, re.IGNORECASE):
+                log_event("sharepoint_status_detected")
+                return {"sharepoint_status": True}
+                
+            # Check for help command
+            help_match = re.match(FIELD_PATTERNS["help"], normalized_text, re.IGNORECASE)
+            if help_match:
+                topic = help_match.group(1) or help_match.group(2) or "general"
+                log_event("help_requested", topic=topic)
+                return {"help": topic.lower()}
+                
+            # Check for report type commands
+            if re.match(FIELD_PATTERNS["summary"], normalized_text, re.IGNORECASE):
+                log_event("summary_requested")
+                return {"summary": True}
+                
+            if re.match(FIELD_PATTERNS["detailed"], normalized_text, re.IGNORECASE):
+                log_event("detailed_requested")
+                return {"detailed": True}
+                
+            # Check if this is a free-form report and use GPT for extraction if enabled
+            if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
+                log_event("free_form_report_detected", length=len(text))
+                gpt_result = extract_with_gpt(text)
+                if gpt_result:
+                    log_event("gpt_extraction_success", fields=list(gpt_result.keys()))
+                    return gpt_result
 
-        # Standard pattern matching for commands
-        commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)|(?:add|insert)\s+(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments))|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
-        log_event("commands_split", commands=commands)
-        
-        processed_result = {
-            "companies": [], "roles": [], "tools": [], "services": [],
-            "activities": [], "issues": [], "people": []
-        }
-        seen_fields = set()
-
-        for cmd in commands:
-            # Process each command individually
-            cmd_result = extract_single_command(cmd)
+            # Standard pattern matching for commands
+            commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)|(?:add|insert)\s+(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments))|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
+            log_event("commands_split", commands=commands)
             
-            # Special handling for commands that need to be merged
-            if "delete" in cmd_result:
-                result.setdefault("delete", []).extend(cmd_result.pop("delete"))
-            elif "correct" in cmd_result:
-                result.setdefault("correct", []).extend(cmd_result.pop("correct"))
-            
-            # Special handling for reset, help, etc.
-            if any(key in cmd_result for key in ["reset", "yes_confirm", "no_confirm", "undo", "undo_last", 
-                                             "status", "export_pdf", "sharepoint_export", 
-                                             "sharepoint_status", "help", "summary", "detailed",
-                                             "spelling_correction"]):
-                # For these commands, just return them directly
-                return cmd_result
+            processed_result = {
+                "companies": [], "roles": [], "tools": [], "services": [],
+                "activities": [], "issues": [], "people": []
+            }
+            seen_fields = set()
 
-            for key, value in cmd_result.items():
-                # Skip fields we've already seen (except for list fields)
-                if key in seen_fields and key not in LIST_FIELDS:
-                    continue
+            for cmd in commands:
+                # Process each command individually
+                cmd_result = extract_single_command(cmd)
+                
+                # Special handling for commands that need to be merged
+                if "delete" in cmd_result:
+                    result.setdefault("delete", []).extend(cmd_result.pop("delete"))
+                elif "correct" in cmd_result:
+                    result.setdefault("correct", []).extend(cmd_result.pop("correct"))
+                
+                # Special handling for reset, help, etc.
+                if any(key in cmd_result for key in ["reset", "yes_confirm", "no_confirm", "undo", "undo_last", 
+                                                "status", "export_pdf", "sharepoint_export", 
+                                                "sharepoint_status", "help", "summary", "detailed",
+                                                "spelling_correction"]):
+                    # For these commands, just return them directly
+                    return cmd_result
+
+                for key, value in cmd_result.items():
+                    # Skip fields we've already seen (except for list fields)
+                    if key in seen_fields and key not in LIST_FIELDS:
+                        continue
+                        
+                    seen_fields.add(key)
                     
-                seen_fields.add(key)
-                
-                # If this is a list field, add to the processed result
-                if key in processed_result:
-                    if isinstance(value, list):
-                        processed_result[key].extend(value)
+                    # If this is a list field, add to the processed result
+                    if key in processed_result:
+                        if isinstance(value, list):
+                            processed_result[key].extend(value)
+                        else:
+                            processed_result[key].append(value)
                     else:
-                        processed_result[key].append(value)
-                else:
-                    result[key] = value
+                        result[key] = value
 
-        # Process the collected list fields
-        for field in processed_result:
-            if processed_result[field]:
-                # Get existing items (if any) from the result
-                if field == "companies":
-                    existing_items = [item["name"] for item in result.get(field, []) 
-                                    if isinstance(item, dict) and "name" in item]
-                elif field == "issues":
-                    existing_items = [item["description"] for item in result.get(field, []) 
-                                    if isinstance(item, dict) and "description" in item]
-                elif field == "services":
-                    existing_items = [item["task"] for item in result.get(field, []) 
-                                    if isinstance(item, dict) and "task" in item]
-                elif field == "tools":
-                    existing_items = [item["item"] for item in result.get(field, []) 
-                                    if isinstance(item, dict) and "item" in item]
-                elif field == "roles":
-                    existing_items = [f"{item['name']} ({item['role']})" for item in result.get(field, []) 
-                                    if isinstance(item, dict) and "name" in item and "role" in item]
-                elif field in ["people", "activities"]:
-                    existing_items = result.get(field, [])
-                else:
-                    existing_items = []
+            # Process the collected list fields
+            for field in processed_result:
+                if processed_result[field]:
+                    # Get existing items (if any) from the result
+                    if field == "companies":
+                        existing_items = [item["name"] for item in result.get(field, []) 
+                                        if isinstance(item, dict) and "name" in item]
+                    elif field == "issues":
+                        existing_items = [item["description"] for item in result.get(field, []) 
+                                        if isinstance(item, dict) and "description" in item]
+                    elif field == "services":
+                        existing_items = [item["task"] for item in result.get(field, []) 
+                                        if isinstance(item, dict) and "task" in item]
+                    elif field == "tools":
+                        existing_items = [item["item"] for item in result.get(field, []) 
+                                        if isinstance(item, dict) and "item" in item]
+                    elif field == "roles":
+                        existing_items = [f"{item['name']} ({item['role']})" for item in result.get(field, []) 
+                                        if isinstance(item, dict) and "name" in item and "role" in item]
+                    elif field in ["people", "activities"]:
+                        existing_items = result.get(field, [])
+                    else:
+                        existing_items = []
+                    
+                    # Combine processed items with existing items
+                    if field == "companies":
+                        result[field] = processed_result[field] + [{"name": i} for i in existing_items 
+                                                                if isinstance(i, str)]
+                    elif field == "issues":
+                        result[field] = processed_result[field] + [{"description": i} for i in existing_items 
+                                                                if isinstance(i, str)]
+                    elif field == "services":
+                        result[field] = processed_result[field] + [{"task": i} for i in existing_items 
+                                                                if isinstance(i, str)]
+                    elif field == "tools":
+                        result[field] = processed_result[field] + [{"item": i} for i in existing_items 
+                                                                if isinstance(i, str)]
+                    elif field == "roles":
+                        result[field] = processed_result[field] + [
+                            {"name": i.split(' (')[0], "role": i.split(' (')[1].rstrip(')')} 
+                            for i in existing_items if isinstance(i, str) and ' (' in i
+                        ]
+                    elif field in ["people", "activities"]:
+                        result[field] = processed_result[field] + existing_items
+                    else:
+                        result[field] = processed_result[field]
+
+            # Fix field naming consistency
+            if "company" in result:
+                result["companies"] = result.pop("company")
+            if "service" in result:
+                result["services"] = result.pop("service")
+            if "tool" in result:
+                result["tools"] = result.pop("tool")
                 
-                # Combine processed items with existing items
-                if field == "companies":
-                    result[field] = processed_result[field] + [{"name": i} for i in existing_items 
-                                                            if isinstance(i, str)]
-                elif field == "issues":
-                    result[field] = processed_result[field] + [{"description": i} for i in existing_items 
-                                                            if isinstance(i, str)]
-                elif field == "services":
-                    result[field] = processed_result[field] + [{"task": i} for i in existing_items 
-                                                            if isinstance(i, str)]
-                elif field == "tools":
-                    result[field] = processed_result[field] + [{"item": i} for i in existing_items 
-                                                            if isinstance(i, str)]
-                elif field == "roles":
-                    result[field] = processed_result[field] + [
-                        {"name": i.split(' (')[0], "role": i.split(' (')[1].rstrip(')')} 
-                        for i in existing_items if isinstance(i, str) and ' (' in i
-                    ]
-                elif field in ["people", "activities"]:
-                    result[field] = processed_result[field] + existing_items
-                else:
-                    result[field] = processed_result[field]
-
-        # Fix field naming consistency
-        if "company" in result:
-            result["companies"] = result.pop("company")
-        if "service" in result:
-            result["services"] = result.pop("service")
-        if "tool" in result:
-            result["tools"] = result.pop("tool")
-            
-        log_event("fields_extracted", result_fields=len(result))
-        return result
-    except Exception as e:
-        log_event("extract_fields_error", input=text, error=str(e))
-        # Return a minimal result to avoid breaking the app
-        return {"error": str(e)}
+            log_event("fields_extracted", result_fields=len(result))
+            return result
+        except Exception as e:
+            log_event("extract_fields_error", input=text, error=str(e))
+            # Return a minimal result to avoid breaking the app
+            return {"error": str(e)}
     
     # Part 11 Command Handlers
 
