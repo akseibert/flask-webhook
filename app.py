@@ -87,6 +87,9 @@ def extract_fields(text: str) -> Dict[str, Any]:
             people = []
             roles = []
             
+            # Replace this section in the extract_fields function where it processes people roles
+# Around line 146-147 in your extract_fields implementation
+
             if people_match:
                 people_text = people_match.group(1).strip()
                 # Split by commas or "and"
@@ -99,29 +102,17 @@ def extract_fields(text: str) -> Dict[str, Any]:
                         person_name = role_match.group(1).strip()
                         role_title = role_match.group(2).strip()
                         
-                        if people_match:
-                        people_text = people_match.group(1).strip()
-                        # Split by commas or "and"
-                        people_items = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+                        # Handle "myself" reference without requiring message context
+                        if person_name.lower() == "myself":
+                            # For "myself", we can't access the sender's name here
+                            # Just use "Myself" with proper capitalization
+                            person_name = "Myself"
                         
-                        for person_item in people_items:
-                            # Check for "as role" pattern
-                            role_match = re.search(r'(.*?)\s+as\s+(.*)', person_item, re.IGNORECASE)
-                            if role_match:
-                                person_name = role_match.group(1).strip()
-                                role_title = role_match.group(2).strip()
-                                
-                                # Handle "myself" reference without requiring message context
-                                if person_name.lower() == "myself":
-                                    # For "myself", we can't access the sender's name here
-                                    # Just use "Myself" with proper capitalization
-                                    person_name = "Myself"
-                                
-                                people.append(person_name)
-                                roles.append({"name": person_name, "role": role_title})
-                            else:
-                                # No role specified
-                                people.append(person_item)
+                        people.append(person_name)
+                        roles.append({"name": person_name, "role": role_title})
+                    else:
+                        # No role specified
+                        people.append(person_item)
             
             # Also look for specific role patterns
             supervisor_pattern = r'([A-Za-z\s]+)\s+as\s+(?:the\s+)?supervisor'
