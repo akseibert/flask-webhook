@@ -50,6 +50,13 @@ def extract_fields(text: str) -> Dict[str, Any]:
         if normalized_text.lower() in ("new", "new report", "/new", "reset", "reset report"):
             return {"reset": True}
             
+        site_command_pattern = r'^(?:add\s+)?site\s+(.+)$'
+        site_match = re.match(site_command_pattern, normalized_text, re.IGNORECASE)
+        if site_match:
+            site_name = site_match.group(1).strip()
+            if site_name:
+                return {"site_name": site_name}
+            
         # Handle direct "add issue X" commands
         issue_add_pattern = r'^(?:add|insert)\s+issues?\s+(.+)$'
         issue_add_match = re.match(issue_add_pattern, normalized_text, re.IGNORECASE)
@@ -109,15 +116,46 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 result["companies"] = [{"name": company} for company in unique_companies]
             
             # Extract people and roles
-            people_pattern = r'(?:people|persons)(?:\s+were)?\s+([^.]+)'
+            people_pattern = r'(?:people|persons)(?:\s+(?:were|are|is|:))?\s+(.*?)(?=\.|$)'
             people_match = re.search(people_pattern, text, re.IGNORECASE)
-            
+                        
             people = []
             roles = []
-            
-            # Replace this section in the extract_fields function where it processes people roles
-# Around line 146-147 in your extract_fields implementation
+                        
+            if people_match:
+                people_text = people_match.group(1).strip()
+                # Split by commas or "and"
+                people_items = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+                            
+                # Add each person to people list
+                for person in people_items:
+                    if person and not person.lower().startswith("on site"):
+                        people.append(person)
+                            
+            # Find your role pattern matching code and REPLACE with:
+            role_pattern = r'([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+is\s+(?:the\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)'
+            role_matches = re.finditer(role_pattern, text, re.IGNORECASE)
 
+            for match in role_matches:
+                person_name = match.group(1).strip()
+                role_title = match.group(2).strip()
+                
+                # Skip common words that shouldn't be roles
+                skip_words = ['it', 'this', 'that', 'there', 'here', 'what', 'which', 'on', 'at', 'in', 'category', 'segment', 'site']
+                if person_name.lower() in skip_words or role_title.lower() in skip_words:
+                    continue
+                
+                # Add the person if not already in list
+                if person_name not in people:
+                    people.append(person_name)
+                
+                # Add the role
+                roles.append({"name": person_name, "role": role_title})
+
+            result["people"] = people
+            result["roles"] = roles
+            
+           
             if people_match:
                 people_text = people_match.group(1).strip()
                 # Split by commas or "and"
@@ -2030,6 +2068,47 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                 "activities": [], "issues": [], "people": []
             }
             seen_fields = set()
+
+            # Handle direct field patterns for single command inputs
+            if len(commands) == 1 and not any(re.match(FIELD_PATTERNS[p], normalized_text, re.IGNORECASE) for p in ["reset", "delete", "correct", "help"]):
+                for field_name, pattern in FIELD_PATTERNS.items():
+                    # Skip non-field patterns and special commands
+                    if field_name in ["reset", "delete", "correct", "clear", "help", 
+                                    "undo_last", "context_add", "summary", "detailed", 
+                                    "delete_entire", "export_pdf", "sharepoint",
+                                    "sharepoint_status", "yes_confirm", "no_confirm"]:
+                        continue
+                        
+                    match = re.match(pattern, normalized_text, re.IGNORECASE)
+                    if match:
+                        # Handle scalar fields
+                        if field_name in SCALAR_FIELDS:
+                            result[field_name] = match.group(1).strip()
+                            log_event("extracted_scalar_field", field=field_name, value=result[field_name])
+                            return result  # Return immediately for direct commands
+                        
+                        # Handle simple list fields (people, activities)
+                        elif field_name in ["people", "activities"]:
+                            values = [v.strip() for v in match.group(1).split(',') if v.strip()]
+                            result[field_name] = values
+                            log_event("extracted_list_field", field=field_name, count=len(values))
+                            return result
+                            
+                        # Handle dictionary list fields (companies, tools, services, issues)
+                        elif field_name in ["companies", "tools", "services", "issues"]:
+                            values = [v.strip() for v in match.group(1).split(',') if v.strip()]
+                            key = "name" if field_name == "companies" else "task" if field_name == "services" else "item" if field_name == "tools" else "description"
+                            result[field_name] = [{key: v} for v in values]
+                            log_event("extracted_dict_list_field", field=field_name, count=len(values))
+                            return result
+                            
+                        # Handle roles specially
+                        elif field_name == "roles":
+                            # [Your existing roles handling code]
+                            # ...
+                            return result
+
+
 
             for cmd in commands:
                 # Process each command individually
