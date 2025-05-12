@@ -73,7 +73,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 result["category"] = category_match.group(1).strip()
             
             # Extract companies
-            companies_pattern = r'(?:companies|company)(?:\s+involved)?\s+(?:were|was|are|is)\s+([^.]+)'
+            companies_pattern = r'(?:companies|company|contractors?)(?:\s+(?:involved|here|present|working|onsite|today|are))?(?:\s+\w+)*?\s*(?:were|was|are|is|:)?\s*([^.]+)'
             companies_match = re.search(companies_pattern, text, re.IGNORECASE)
             if companies_match:
                 companies_text = companies_match.group(1).strip()
@@ -130,8 +130,9 @@ def extract_fields(text: str) -> Dict[str, Any]:
                             people.append(person_name)
                             roles.append({"name": person_name, "role": role_title})
                         else:
-                            # No role specified
-                            people.append(person_item)
+                            # No role specified - only add "myself" if explicitly mentioned as a person
+                            if person_lower != "myself" or re.search(r'\b(i am|i\'m|myself)\b', text, re.IGNORECASE):
+                                people.append(person_item)
                     else:
                         log_event("skipped_duplicate_person", person=person_item)
                         
@@ -157,7 +158,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
             result["roles"] = roles
             
             # Extract services
-            services_pattern = r'(?:services|service)(?:\s+(?:were|was|provided))?\s+([^.]+)'
+            services_pattern = r'(?:services|service|tasks?)(?:\s+(?:provided|performed|done|were|was|included|offered))?\s*(?:\s+\w+)*?(?:are|is|:)?\s*([^.]+)'
             services_match = re.search(services_pattern, text, re.IGNORECASE)
             if services_match:
                 services_text = services_match.group(1).strip()
@@ -165,7 +166,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 result["services"] = [{"task": service} for service in services if service]
             
             # Extract tools
-            tools_pattern = r'(?:tools|equipment)(?:\s+used)?\s+(?:were|was)?\s+([^.]+)'
+            tools_pattern = r'(?:tools|equipment|gear|machinery)(?:\s+(?:used|utilized|employed|needed|brought|available))?\s*(?:\s+\w+)*?(?:were|was|are|is|:)?\s*([^.]+)'
             tools_match = re.search(tools_pattern, text, re.IGNORECASE)
             if tools_match:
                 tools_text = tools_match.group(1).strip()
@@ -173,7 +174,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 result["tools"] = [{"item": tool} for tool in tools if tool]
             
             # Extract activities
-            activities_pattern = r'(?:activities|activity)(?:\s+(?:were|was|included))?\s+([^.]+)'
+            activities_pattern = r'(?:activities|activity|work|tasks?|jobs?)(?:\s+(?:done|performed|covered|included|completed|carried|out))?\s*(?:\s+\w+)*?(?:were|was|are|is|:)?\s*([^.]+)'
             activities_match = re.search(activities_pattern, text, re.IGNORECASE)
             if activities_match:
                 activities_text = activities_match.group(1).strip()
@@ -181,7 +182,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 result["activities"] = activities
             
             # Extract issues
-            issues_pattern = r'(?:issues|issue|problem)(?:\s+(?:were|was|had))?\s+([^.]+)'
+            issues_pattern = r'(?:issues|issue|problems?|delays?|injuries?|challenges)(?:\s+(?:encountered|had|occurred|faced|experienced))?\s*(?:\s+\w+)*?(?:were|was|are|is|:)?\s*([^.]+)'
             issues_match = re.search(issues_pattern, text, re.IGNORECASE)
             if issues_match:
                 issues_text = issues_match.group(1).strip()
@@ -189,19 +190,19 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 result["issues"] = [{"description": issue} for issue in issues if issue]
             
             # Extract time
-            time_pattern = r'(?:time|duration)(?:\s+(?:spent|was))?\s+([^.]+)'
+            time_pattern = r'(?:time|duration|hours?|period)(?:\s+(?:spent|worked|taken|lasted|required|needed))?\s*(?:\s+\w+)*?(?:was|is|:)?\s*([^.]+)'
             time_match = re.search(time_pattern, text, re.IGNORECASE)
             if time_match:
                 result["time"] = time_match.group(1).strip()
             
             # Extract weather
-            weather_pattern = r'(?:weather|conditions)(?:\s+(?:were|was))?\s+([^.]+)'
+            weather_pattern = r'(?:weather|conditions?|climate)(?:\s+(?:were|was|is|today|outside|current))?\s*(?:\s+\w+)*?(?:like|are|is|:)?\s*([^.]+)'
             weather_match = re.search(weather_pattern, text, re.IGNORECASE)
             if weather_match:
                 result["weather"] = weather_match.group(1).strip()
             
             # Extract impression
-            impression_pattern = r'(?:impression|assessment)(?:\s+(?:was|is))?\s+([^.]+)'
+            impression_pattern = r'(?:impression|assessment|overview|progress|rating)(?:\s+(?:was|is|overall|general))?\s*(?:\s+\w+)*?(?:like|as|is|:)?\s*([^.]+)'
             impression_match = re.search(impression_pattern, text, re.IGNORECASE)
             if impression_match:
                 result["impression"] = impression_match.group(1).strip()
@@ -213,25 +214,27 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 result["date"] = datetime.now().strftime("%d-%m-%Y")
                 return result
             
-            # If we didn't find enough information, try the GPT extraction as fallback
+            
+            # Always try GPT extraction for free-form reports and merge with regex results
             try:
                 gpt_result = extract_with_gpt(text)
-                # Validate that the GPT result contains essential fields before using it
-                if gpt_result and any(key in gpt_result for key in ["site_name", "people", "activities"]):
-                    # Check if it's likely a valid extraction
-                    field_count = sum(1 for field in ["site_name", "segment", "category", "companies", 
-                                                    "people", "roles", "tools", "services", 
-                                                    "activities", "issues", "time", "weather", 
-                                                    "impression"] if field in gpt_result)
-                    if field_count >= 3:  # At least 3 relevant fields found
-                        log_event("gpt_extraction_success", fields=list(gpt_result.keys()))
-                        return gpt_result
-                    else:
-                        log_event("gpt_extraction_incomplete", fields=list(gpt_result.keys()))
+                if gpt_result and any(key in gpt_result for key in ["site_name", "people", "activities", "companies"]):
+                    log_event("gpt_extraction_success", fields=list(gpt_result.keys()))
+                    
+                    # Merge GPT results with regex results, preferring GPT for fields it found
+                    for field in gpt_result:
+                        # If regex didn't find this field or the field is empty, use GPT's value
+                        if field not in result or not result[field]:
+                            result[field] = gpt_result[field]
+                            
+                    # Log the combined fields
+                    log_event("combined_extraction_success", fields=list(result.keys()))
                 else:
                     log_event("gpt_extraction_invalid", result=str(gpt_result)[:100])
             except Exception as e:
                 log_event("gpt_extraction_error", error=str(e))
+
+    # Continue with our regex results if GPT fails
                 # Continue with normal pattern matching below if GPT fails
         
         # If we reach here, the previous extractions didn't work or it's not a free-form report
@@ -3249,7 +3252,7 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                          if field not in ["help", "reset", "undo", "status", "export_pdf", 
                                          "summary", "detailed", "undo_last", "error",
                                          "sharepoint_export", "sharepoint_status"]]
-        
+                
         if changed_fields:
             # Prepare a confirmation message based on what was changed
             if "delete" in extracted or any(field.endswith("delete") for field in extracted.keys()):
@@ -3260,10 +3263,45 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                 message = "✅ Added information using context."
             else:
                 message = "✅ Added information to your report."
+
+            # Check for potentially missed fields in free-form reports
+            if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
+                # List of key fields users often mention in reports
+                expected_fields = ["site_name", "segment", "category", "companies", "people", 
+                                "tools", "services", "activities", "issues", 
+                                "time", "weather", "impression"]
                 
+                # Only inform about fields that might be in the text but weren't extracted
+                likely_missed = []
+                for field in expected_fields:
+                    field_terms = {
+                        "companies": r'\b(?:company|companies|contractor)\b',
+                        "services": r'\b(?:service|services|task|tasks)\b',
+                        "tools": r'\b(?:tool|tools|equipment|gear)\b', 
+                        "activities": r'\b(?:activities|activity|work|task|tasks|job|jobs)\b',
+                        "issues": r'\b(?:issue|issues|problem|problems|delay|delays)\b',
+                        "time": r'\b(?:time|duration|hours)\b',
+                        "weather": r'\b(?:weather|conditions|sunny|rain|cloudy)\b',
+                        "impression": r'\b(?:impression|assessment|progress|overview)\b'
+                    }
+                    
+                    search_term = field_terms.get(field, r'\b' + field + r'\b')
+                    
+                    # If the term appears in the text but wasn't extracted, add to likely missed
+                    if (re.search(search_term, text, re.IGNORECASE) and 
+                        field not in extracted and 
+                        (field not in session["structured_data"] or 
+                        (isinstance(session["structured_data"].get(field), list) and not session["structured_data"][field]) or
+                        (not isinstance(session["structured_data"].get(field), list) and not session["structured_data"].get(field)))):
+                        likely_missed.append(field)
+                
+                if likely_missed:
+                    message += f"\n\n⚠️ I may have missed information about: {', '.join(likely_missed)}. Please add these details if needed (e.g., 'companies: AXIS Construction')."
+
             # Add a summary of the report
             summary = summarize_report(session["structured_data"])
             send_message(chat_id, f"{message}\n\n{summary}")
+            
         else:
             send_message(chat_id, "⚠️ No changes were made to your report.")
         
