@@ -50,13 +50,23 @@ def extract_fields(text: str) -> Dict[str, Any]:
         if normalized_text.lower() in ("new", "new report", "/new", "reset", "reset report"):
             return {"reset": True}
             
-        site_command_pattern = r'^(?:add\s+)?site\s+(.+)$'
-        site_match = re.match(site_command_pattern, normalized_text, re.IGNORECASE)
-        if site_match:
-            site_name = site_match.group(1).strip()
-            if site_name:
-                return {"site_name": site_name}
-            
+        # Try FIELD_PATTERNS first for structured commands
+        for field, pattern in FIELD_PATTERNS.items():
+            if field in ["site_name", "segment", "category", "company"]:
+                match = re.match(pattern, normalized_text, re.IGNORECASE)
+                if match:
+                    if field == "site_name":
+                        result["site_name"] = match.group(1).strip()
+                    elif field == "segment":
+                        result["segment"] = match.group(1).strip()
+                    elif field == "category":
+                        result["category"] = match.group(1).strip()
+                    elif field == "company":
+                        companies_text = match.group(1).strip()
+                        companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
+                        result["companies"] = [{"name": company} for company in companies if company]
+                    return result
+        
         # Handle direct "add issue X" commands
         issue_add_pattern = r'^(?:add|insert)\s+issues?\s+(.+)$'
         issue_add_match = re.match(issue_add_pattern, normalized_text, re.IGNORECASE)
@@ -65,39 +75,30 @@ def extract_fields(text: str) -> Dict[str, Any]:
             if issue_text:
                 return {"issues": [{"description": issue_text}]}
         
-        # Handle direct "add company X" commands
-        company_add_pattern = r'^(?:add|insert)\s+compan(?:y|ies)\s+(.+)$'
-        company_add_match = re.match(company_add_pattern, normalized_text, re.IGNORECASE)
-        if company_add_match:
-            company_text = company_add_match.group(1).strip()
-            if company_text:
-                companies = [c.strip() for c in re.split(r',|\s+and\s+', company_text)]
-                return {"companies": [{"name": company} for company in companies if company]}
-            
-        # Free-form report handling - this is essential for voice reports
-        if len(text) > 100:  # Any longer message is treated as a free-form report
+        # Free-form report handling - lower threshold for voice inputs
+        if len(text) > 50:  # Reduced threshold for short voice reports
             log_event("detected_free_form_report", length=len(text))
             
-            # Direct pattern matching for construction site reports - expanded pattern for more natural language
+            # Direct pattern matching for construction site reports
             site_pattern = r'(?:on|at|in|working\s+(?:in|at))\s+(?:the\s+)?([A-Za-z0-9\s]+?)\s*(?:site|project|location)(?=\s*(?:,|\.|$|[.;]))'
             site_match = re.search(site_pattern, text, re.IGNORECASE)
             if site_match:
                 result["site_name"] = site_match.group(1).strip()
             
             # Extract segment
-            segment_pattern = r'(?:segment|section)\s+([A-Za-z0-9]+)(?=\s*(?:category|[,.\s]|$))'
+            segment_pattern = r'(?:segment|section)\s+([A-Za-z0-9\s]+?)(?=\s*(?:category|[,.\s]|$))'
             segment_match = re.search(segment_pattern, text, re.IGNORECASE)
             if segment_match:
                 result["segment"] = segment_match.group(1).strip()
             
             # Extract category
-            category_pattern = r'(?:category\s+is\s+|category\s*:?\s*)([A-Za-z\s]+)(?=\s*(?:,|\.|$|[.;]))'
+            category_pattern = r'(?:category|kategorie)\s*(?:is\s+|[:,]?\s*)([A-Za-z\s]+)(?=\s*(?:,|\.|$|[.;]))'
             category_match = re.search(category_pattern, text, re.IGNORECASE)
             if category_match:
                 result["category"] = category_match.group(1).strip()
             
             # Extract companies
-            companies_pattern = r'(?:companies|company|contractors?)(?:\s+(?:involved|here|present|working|onsite|today|are))?(?:\s+\w+)*?\s*(?:were|was|are|is|:)?\s*([^.]+)'
+            companies_pattern = r'(?:companies|company|contractors?|unternehmen|firma)\s*(?:involved|here|present|working|onsite|today|are)?\s*(?:were|was|are|is|:)?\s*([^.]+)'
             companies_match = re.search(companies_pattern, text, re.IGNORECASE)
             if companies_match:
                 companies_text = companies_match.group(1).strip()
@@ -498,14 +499,15 @@ list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
-    "category": r'^(?:(?:add|insert)\s+categories?\s+|categories?\s*[:,]?\s*(?:is|are|:)?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.|\s*$)',    "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|comments)\s*:)|$|\s*$)',
+    "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*|section\s*[:,]?\s*)([^,.]+?)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.|\s*$)',
+    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\s*(?:is|are|:)?\s*)([^,.]+?)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.|\s*$)',
+    "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|comments)\s*:)|$|\s*$)',
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*(?:are|is|were|include[ds]?|on\s+site\s+are|:)?\s*)([^,]+?)(?:\s+as\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "role": r'^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+|\w+)\s*[:,]?\s*(?:as|is|as\s+the|is\s+the|is\s+a|is\s+an)\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+|\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^roles?\s*[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)([^,]+?)(?=\s*(?:\.|\s+tools?|services?|activit(?:y|ies)|issues?|$))',
-    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*(?:are|is|were|include[ds]?|:)?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*((?:[^,.]+?(?:\s+and\s+[^,.]+?)*?))(?=\s*(?:\.|\s+supervisors?|tools?|services?|activit(?:y|ies)|issues?|$))',
-    "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*(?:are|is|were|include[ds]?|:)?\s*)([^,.]+?)(?=(?:\s*,\s*(?:site|segment|category|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.|\s*$)',
+    "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:|\s+issues?\s*:|\s+times?\s*:|$|\s*$))',
     "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*[:,]?\s*|issues?\s*(?:encountered|included)?\s*|problem\s*:?\s*|delay\s*:?\s*|injury\s*:?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|times?|weather|impression|comments)\s*:|\s+times?\s*:|$|\s*$))',
     "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|impression|comments)\s*:)|$|\s*$)',
@@ -874,14 +876,18 @@ def transcribe_voice(file_id: str) -> Tuple[str, float]:
         # Normalize text - handle common non-English transcriptions
         text = normalize_transcription(text)
         
-        # Bypass confidence check for exact command matches
+        # Bypass confidence check for exact command matches or field-like patterns
         known_commands = ["new", "new report", "yes", "no", "reset", "status", "export", "summary", "detailed", "help"]
-        if text.lower().strip() in known_commands:
+        field_patterns = [
+            r'^(?:site|segment|category|companies|people|tools|services|activities|issues|time|weather|impression)\b',
+            r'^(?:kategorie|baustelle|unternehmen|firma)\b'
+        ]
+        if (text.lower().strip() in known_commands or
+            any(re.match(pattern, text, re.IGNORECASE) for pattern in field_patterns)):
             log_event("transcription_bypassed_confidence", text=text)
             return text, 1.0  # Assign maximum confidence
         
         # Extract and return confidence (approximate calculation)
-        # Longer texts generally indicate higher confidence
         confidence = min(0.95, 0.5 + (len(text) / 200))
         
         # Log the transcription for debugging
@@ -897,32 +903,39 @@ def transcribe_voice(file_id: str) -> Tuple[str, float]:
     
 def normalize_transcription(text: str) -> str:
     """Normalize transcription text to handle common issues with construction site terms"""
-    # Convert common Russian/Cyrillic transcriptions to English equivalents
-    cyrillic_to_english = {
-        # Russian transcription fixes
+    # Convert common non-English transcriptions to English equivalents
+    non_english_to_english = {
+        # Russian/Cyrillic
         "да": "yes",
         "нет": "no",
         "ню": "new",
         "нью": "new",
+        # German
+        "kategorie": "category",
+        "abnahme": "acceptance",
+        "baustelle": "site",
+        "unternehmen": "companies",
+        "firma": "company",
     }
     
     # Check and replace known words
-    for cyrillic, english in cyrillic_to_english.items():
-        if text.lower() == cyrillic.lower():
-            text = english
+    text_lower = text.lower()
+    for non_english, english in non_english_to_english.items():
+        if text_lower.startswith(non_english):
+            text = english + text[len(non_english):]
             break
     
     # Handle single-word responses with punctuation
-    if re.match(r'^yes[.!?]*$', text.lower()):
+    if re.match(r'^yes[.!?]*$', text_lower):
         text = "yes"
     
-    if re.match(r'^no[.!?]*$', text.lower()):
+    if re.match(r'^no[.!?]*$', text_lower):
         text = "no"
     
-    if re.match(r'^new[.!?]*$', text.lower()):
+    if re.match(r'^new[.!?]*$', text_lower):
         text = "new"
         
-    if re.match(r'^new\s+report[.!?]*$', text.lower()):
+    if re.match(r'^new\s+report[.!?]*$', text_lower):
         text = "new report"
         
     # Fix common construction terms that may be misheard
@@ -930,9 +943,10 @@ def normalize_transcription(text: str) -> str:
         r'\bside\s+([a-z]+)\b': r'site \1',  # "side riverside" -> "site riverside"
         r'\bcan\s+be\b': r'',  # Remove "can be" which might be inserted incorrectly
         r'\bproject\s+section\b': r'project',  # Fix common mishearing
-        r'\belse\s+true\s+fix\b': r'electro fix',  # Fix common company name mishearing
+        r'\belse\s+true\s+fix\b': r'electro fix',  # Fix company name mishearing
         r'\bbuild\s+a\b': r'builder',  # Misheard company names
-        r'\broof\s+master\b': r'roof masters',  # Fix common company name
+        r'\broof\s+master\b': r'roof masters',  # Fix company name
+        r'\bkategorie\s+abnahme\b': r'category acceptance',  # German category
     }
     
     for pattern, replacement in construction_replacements.items():
@@ -3645,7 +3659,10 @@ def webhook() -> tuple[str, int]:
                 text, confidence = transcribe_voice(file_id)
                 
                 # Check if text is empty or confidence is too low
-                if not text or confidence < 0.6:  # Moderate threshold for noisy construction sites
+                if not text or (confidence < 0.5 and not any(re.match(pattern, text, re.IGNORECASE) for pattern in [
+                    r'^(?:site|segment|category|companies|people|tools|services|activities|issues|time|weather|impression)\b',
+                    r'^(?:kategorie|baustelle|unternehmen|firma)\b'
+                ])):
                     log_event("low_confidence_transcription", text=text, confidence=confidence)
                     error_message = "⚠️ I couldn't clearly understand your voice message."
                     if text:
