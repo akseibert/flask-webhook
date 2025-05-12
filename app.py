@@ -410,12 +410,11 @@ list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
-    "category": r'^(?:(?:add|insert)\s+categories?\s+|categories?\s*[:,]?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.)',
-    "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|comments)\s*:)|$|\s*$)',
-    "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*)([^,]+?)(?:\s+as\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
-    "role": r'^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+|\w+)\s*[:,]?\s*as\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+|\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "category": r'^(?:(?:add|insert)\s+categories?\s+|categories?\s*[:,]?\s*(?:is|are|:)?\s*)([^,.\s]+)(?=(?:\s*,\s*(?:site|segment|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*\.|\s*$)',    "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|comments)\s*:)|$|\s*$)',
+    "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*(?:are|is|were|include[ds]?|on\s+site\s+are|:)?\s*)([^,]+?)(?:\s+as\s+([^,]+?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|roles?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
+    "role": r'^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+|\w+)\s*[:,]?\s*(?:as|is|as\s+the|is\s+the|is\s+a|is\s+an)\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+|\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)|^roles?\s*[:,]?\s*([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|tools?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)([^,]+?)(?=\s*(?:\.|\s+tools?|services?|activit(?:y|ies)|issues?|$))',
-    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*((?:[^,.]+?(?:\s+and\s+[^,.]+?)*?))(?=\s*(?:\.|\s+supervisors?|tools?|services?|activit(?:y|ies)|issues?|$))',
+    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*(?:are|is|were|include[ds]?|:)?\s*|(?:add|insert)\s+([^,]+?)\s+as\s+compan(?:y|ies)\s*)[:,]?\s*((?:[^,.]+?(?:\s+and\s+[^,.]+?)*?))(?=\s*(?:\.|\s+supervisors?|tools?|services?|activit(?:y|ies)|issues?|$))',
     "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|services?|activit(?:y|ies)|issues?|time|weather|impression|comments)\s*:)|$|\s*$)',
     "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)([^,]+?)(?=(?:\s*,\s*(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|issues?|time|weather|impression|comments)\s*:|\s+issues?\s*:|\s+times?\s*:|$|\s*$))',
@@ -1391,6 +1390,9 @@ def is_free_form_report(text: str) -> bool:
     # If text is very short, it's definitely not a report
     if len(text) < CONFIG["FREEFORM_MIN_LENGTH"]:
         return False
+    # If text starts with a command keyword, it's not a free-form report
+    if re.match(r'^(?:add|insert|delete|remove|category|site|segment|people|companies|roles|tools|services|activities|issues|weather|time|impression|correct)\b', text.lower()):
+        return False
         
     # Construction site specific report patterns
     construction_patterns = [
@@ -1445,38 +1447,49 @@ def is_free_form_report(text: str) -> bool:
     
     # Count structure indicators
     structure_matches = sum(1 for indicator in structure_indicators if indicator)
+
+    if company_match:
+        companies_text = company_match.group(1).strip()
+        company_names = [name.strip() for name in re.split(r'\s+and\s+|,', companies_text) if name.strip()]
+        result["companies"] = [{"name": name} for name in company_names]
     
-    # Log the detection results for debugging
-    log_event("free_form_report_detection", 
-             length=len(text), 
-             construction_matches=construction_matches,
-             structure_matches=structure_matches)
+    # Extract people from inputs like "People are X, Y and Z"
+    people_pattern = r'(?:people|persons)\s+(?:is|are|on\s+site\s+are)\s+(.*?)(?:\.|\s*$)'
+    people_match = re.search(people_pattern, text, re.IGNORECASE)
+    if people_match:
+        people_text = people_match.group(1).strip()
+        people_names = [name.strip() for name in re.split(r'\s+and\s+|,', people_text) if name.strip()]
+        result["people"] = people_names
     
-    # Return true if we have enough matches (at least 2 construction patterns and 2 structure indicators)
-    return construction_matches >= 2 and structure_matches >= 2
-        
-    # Check for typical report indicators
-    report_indicators = [
-        # Reports often start with greetings
-        r'^(?:hi|hello|good\s+(?:morning|afternoon|evening))\b',
-        
-        # Reports often mention sites, people, activities
-        r'\b(?:site|project|location|work(?:ed|ing)?)\b',
-        
-        # Reports often have multiple sentences
-        r'\..*\.',
-        
-        # Reports often have common report terms
-        r'\b(?:compan(?:y|ies)|team|tools?|issues?)\b',
-        
-        # Reports often mention time
-        r'\b(?:today|yesterday|this\s+morning|afternoon)\b'
-    ]
+    # Extract category from "Category is X"
+    category_pattern = r'category\s+(?:is|:)\s+([^,.]+)'
+    category_match = re.search(category_pattern, text, re.IGNORECASE)
+    if category_match:
+        result["category"] = category_match.group(1).strip()
     
-    # Count the number of indicators present
-    indicator_count = sum(1 for pattern in report_indicators if re.search(pattern, text, re.IGNORECASE))
+    log_event("custom_extraction", found_fields=list(result.keys()))
+    return result
+def custom_extract_fields(text: str) -> Dict[str, Any]:
+    """Extract fields from common natural language patterns"""
+    result = {}
     
-    return indicator_count >= 3
+    # Extract multiple roles from inputs like "X is Y, A is B"
+    role_pattern = r'([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+is\s+(?:the|a|an)?\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)'
+    role_matches = re.findall(role_pattern, text)
+    
+    if role_matches:
+        result["people"] = []
+        result["roles"] = []
+        for name, role in role_matches:
+            name = name.strip()
+            role = role.strip()
+            if name and role:
+                result["people"].append(name)
+                result["roles"].append({"name": name, "role": role.title()})
+    
+    # Extract companies from inputs like "Companies are X, Y and Z"
+    company_pattern = r'compan(?:y|ies)\s+(?:is|are)\s+(.*?)(?:\.|\s*$)'
+    company_match = re.search(company_pattern, text, re.IGNORECASE)
 
 # --- Data Processing ---
 def clean_value(value: Optional[str], field: str) -> Optional[str]:
@@ -1654,8 +1667,6 @@ def find_name_match(name: str, name_list: List[str]) -> Optional[str]:
     
     if best_match:
         log_event("name_match_found", search=name, match=best_match, score=best_score)
-        
-    return best_match
 
 def extract_single_command(cmd: str) -> Dict[str, Any]:
     """Extract structured data from a single command with enhanced error handling"""
@@ -1717,20 +1728,26 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     name = None
                     role = None
                     
-                    # Extract the name and role from the correct match groups
+                    # Process through all groups to find name and role
                     for i in range(1, len(match.groups()) + 1):
                         if match.group(i):
-                            if not name:
-                                name = clean_value(match.group(i), field)
-                            elif not role:
-                                role = clean_value(match.group(i), field).title()
+                            group_text = match.group(i)
+                            # If this looks like a name and we don't have one yet
+                            if not name and re.match(r'^[A-Za-z]+(\s+[A-Za-z]+)?$', group_text):
+                                name = clean_value(group_text, field)
+                            # If we have a name but no role yet, this must be the role
+                            elif name and not role:
+                                # Clean up role text by removing "the", "a", "an"
+                                role_text = re.sub(r'^(?:the|a|an)\s+', '', group_text)
+                                role = clean_value(role_text, field).title()
                     
                     if not name or not role or name.lower() == "supervisor":
                         continue
-                    
+                        
+                    log_event("role_extraction", name=name, role=role)
                     result["people"] = [name]
                     result["roles"] = [{"name": name, "role": role}]
-                
+
                 # Handle supervisor field
                 elif field == "roles" and raw_field == "supervisor":
                     value = clean_value(match.group(1), "roles")
@@ -1741,11 +1758,15 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                 # Handle company field
                 elif field == "companies":
                     captured = clean_value(match.group(1) if len(match.groups()) >= 1 and match.group(1) else "", field)
-                    # If the first group is empty, try the second group
-                    if not captured and len(match.groups()) >= 2:
+                    # If the first group is empty or starts with 'are/is', try the second group
+                    if (not captured or captured.lower().startswith(('are', 'is', 'were'))) and len(match.groups()) >= 2:
                         captured = clean_value(match.group(2), field)
                     
+                    # Remove leading "are", "is", etc.
+                    captured = re.sub(r'^(?:are|is|were|include[ds]?)\s+', '', captured)
+                    
                     company_names = [name.strip() for name in re.split(r'\s+and\s+|,', captured) if name.strip()]
+                    log_event("company_extraction", captured=captured, company_names=company_names)
                     result["companies"] = [{"name": name} for name in company_names]
                 
                 # Handle service/services field
@@ -1861,6 +1882,11 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
             result: Dict[str, Any] = {}
             normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
 
+            custom_extracted = custom_extract_fields(normalized_text)
+            if custom_extracted:
+                log_event("custom_extraction_success", fields=list(custom_extracted.keys()))
+                return custom_extracted
+
             # Check for system commands first
             reset_match = re.match(FIELD_PATTERNS["reset"], normalized_text, re.IGNORECASE)
             if reset_match:
@@ -1923,7 +1949,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                 return {"detailed": True}
                 
             # Check if this is a free-form report and use GPT for extraction if enabled
-            if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
+            if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text) and len(text) > 300:
                 log_event("free_form_report_detected", length=len(text))
                 try:
                     gpt_result = extract_with_gpt(text)
