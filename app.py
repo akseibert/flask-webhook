@@ -76,52 +76,58 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 return {"issues": [{"description": issue_text}]}
         
         # Free-form report handling - lower threshold for voice inputs
-        if len(text) > 50:  # Reduced threshold for short voice reports
-            log_event("detected_free_form_report", length=len(text))
-            
-            # Direct pattern matching for construction site reports
-            site_pattern = r'(?:on|at|in|working\s+(?:in|at))\s+(?:the\s+)?([A-Za-z0-9\s]+?)\s*(?:site|project|location)(?=\s*(?:,|\.|$|[.;]))'
-            site_match = re.search(site_pattern, text, re.IGNORECASE)
-            if site_match:
-                result["site_name"] = site_match.group(1).strip()
-            
-            # Extract segment
-            segment_pattern = r'(?:segment|section)\s+([A-Za-z0-9\s]+?)(?=\s*(?:category|[,.\s]|$))'
-            segment_match = re.search(segment_pattern, text, re.IGNORECASE)
-            if segment_match:
-                result["segment"] = segment_match.group(1).strip()
-            
-            # Extract category
-            category_pattern = r'(?:category|kategorie)\s*(?:is\s+|[:,]?\s*)([A-Za-z\s]+)(?=\s*(?:,|\.|$|[.;]))'
-            category_match = re.search(category_pattern, text, re.IGNORECASE)
-            if category_match:
-                result["category"] = category_match.group(1).strip()
-            
-            # Extract companies
-            companies_pattern = r'(?:companies|company|contractors?|unternehmen|firma)\s*(?:involved|here|present|working|onsite|today|are)?\s*(?:were|was|are|is|:)?\s*([^.]+)'
-            companies_match = re.search(companies_pattern, text, re.IGNORECASE)
-            if companies_match:
-                companies_text = companies_match.group(1).strip()
-                companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
-                
-                # Deduplicate companies
-                unique_companies = []
-                seen_companies = set()
-                for company in companies:
-                    if company and company.lower() not in seen_companies:
-                        seen_companies.add(company.lower())
-                        unique_companies.append(company)
-                    elif company:
-                        log_event("skipped_duplicate_company", company=company)
-                        
-                result["companies"] = [{"name": company} for company in unique_companies]
-            
-            # Extract people and roles
-            people_pattern = r'(?:people|persons)(?:\s+(?:were|are|is|:))?\s+(.*?)(?=\.|$)'
-            people_match = re.search(people_pattern, text, re.IGNORECASE)
-                        
-            people = []
-            roles = []
+        if len(text) > 50:  # Free-form report handling
+        log_event("detected_free_form_report", length=len(text))
+        
+        # Extract site name
+        site_pattern = r'(?:working\s+(?:on|at|in)|site)\s+(?:the\s+)?([A-Za-z0-9\s]+?)(?=\s*(?:site|project|location|segment|category|,|\.|$))'
+        site_match = re.search(site_pattern, text, re.IGNORECASE)
+        if site_match:
+            result["site_name"] = site_match.group(1).strip()
+        
+        # Extract segment
+        segment_pattern = r'(?:segment|section)\s+([A-Za-z0-9\s]+?)(?=\s*(?:category|,|\.|$))'
+        segment_match = re.search(segment_pattern, text, re.IGNORECASE)
+        if segment_match:
+            result["segment"] = segment_match.group(1).strip()
+        
+        # Extract category
+        category_pattern = r'(?:category|kategorie)\s*(?:is\s+|[:,]?\s*)([A-Za-z\s]+)(?=\s*(?:,|\.|$))'
+        category_match = re.search(category_pattern, text, re.IGNORECASE)
+        if category_match:
+            result["category"] = category_match.group(1).strip()
+        
+        # Extract people
+        people_pattern = r'(?:people|persons|team)\s*(?:included|were|are|is|:)\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)(?=\s*(?:as|,|\.|$))'
+        people_match = re.search(people_pattern, text, re.IGNORECASE)
+        if people_match:
+            people_text = people_match.group(1).strip()
+            people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+            result["people"] = people
+        
+        # Extract roles
+        roles_pattern = r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+as\s+([A-Za-z\s]+)(?=\s*(?:,|\.|$))'
+        roles_matches = re.findall(roles_pattern, text, re.IGNORECASE)
+        for name, role in roles_matches:
+            name = name.strip()
+            role = role.strip()
+            if name not in result.get("people", []):
+                result["people"] = result.get("people", []) + [name]
+            result["roles"] = result.get("roles", []) + [{"name": name, "role": role}]
+        
+        # Extract activities
+        activities_pattern = r'(?:activities|work|tasks)\s*(?:included|were|are|is|:)\s*([^.]+?)(?=\s*(?:,|\.|$))'
+        activities_match = re.search(activities_pattern, text, re.IGNORECASE)
+        if activities_match:
+            activities_text = activities_match.group(1).strip()
+            activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text)]
+            result["activities"] = activities
+        
+        # If we found at least a site name or segment, consider it a valid report
+        if result.get("site_name") or result.get("segment"):
+            log_event("free_form_extraction_success", found_fields=list(result.keys()))
+            result["date"] = datetime.now().strftime("%d-%m-%Y")
+            return result
                         
             if people_match:
                 people_text = people_match.group(1).strip()
@@ -134,12 +140,14 @@ def extract_fields(text: str) -> Dict[str, Any]:
                         people.append(person)
                             
             # Find your role pattern matching code and REPLACE with:
-            role_pattern = r'([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+is\s+(?:the\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)'
-            role_matches = re.finditer(role_pattern, text, re.IGNORECASE)
-
-            for match in role_matches:
-                person_name = match.group(1).strip()
-                role_title = match.group(2).strip()
+            roles_pattern = r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+as\s+([A-Za-z\s]+)(?=\s*(?:,|\.|$))'
+            roles_matches = re.findall(roles_pattern, text, re.IGNORECASE)
+            for name, role in roles_matches:
+                name = name.strip()
+                role = role.strip()
+                if name not in result.get("people", []):
+                    result["people"] = result.get("people", []) + [name]
+                result["roles"] = result.get("roles", []) + [{"name": name, "role": role}]
                 
                 # Skip common words that shouldn't be roles
                 skip_words = ['it', 'this', 'that', 'there', 'here', 'what', 'which', 'on', 'at', 'in', 'category', 'segment', 'site']
@@ -261,7 +269,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 result["tools"] = [{"item": tool} for tool in tools if tool]
             
             # Extract activities
-            activities_pattern = r'(?:activities|activity|work|tasks?|jobs?)(?:\s+(?:done|performed|covered|included|completed|carried|out))?\s*(?:\s+\w+)*?(?:were|was|are|is|:)?\s*([^.]+)'
+            activities_pattern = r'(?:activities|work|tasks)\s*(?:included|were|are|is|:)\s*([^.]+?)(?=\s*(?:,|\.|$))'
             activities_match = re.search(activities_pattern, text, re.IGNORECASE)
             if activities_match:
                 activities_text = activities_match.group(1).strip()
