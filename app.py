@@ -785,6 +785,12 @@ def transcribe_voice(file_id: str) -> Tuple[str, float]:
         # Normalize text - handle common non-English transcriptions
         text = normalize_transcription(text)
         
+        # Bypass confidence check for exact command matches
+        known_commands = ["new", "yes", "no", "reset", "status", "export", "summary", "detailed", "help"]
+        if text.lower().strip() in known_commands:
+            log_event("transcription_bypassed_confidence", text=text)
+            return text, 1.0  # Assign maximum confidence
+        
         # Extract and return confidence (approximate calculation)
         # Longer texts generally indicate higher confidence
         confidence = min(0.95, 0.5 + (len(text) / 200))
@@ -3333,7 +3339,12 @@ def webhook() -> tuple[str, int]:
                 # Check if text is empty or confidence is too low
                 if not text or confidence < 0.6:  # Moderate threshold for noisy construction sites
                     log_event("low_confidence_transcription", text=text, confidence=confidence)
-                    send_message(chat_id, "⚠️ I couldn't clearly understand your voice message. Please speak clearly or type your message.")
+                    error_message = "⚠️ I couldn't clearly understand your voice message."
+                    if text:
+                        error_message += f" I heard: '{text}'. Please speak clearly or type your message."
+                    else:
+                        error_message += " Please speak clearly or type your message."
+                    send_message(chat_id, error_message)
                     return "ok", 200
                 
                 # For free-form reports, notify the user
