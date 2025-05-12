@@ -97,15 +97,22 @@ def extract_fields(text: str) -> Dict[str, Any]:
         category_match = re.search(category_pattern, text, re.IGNORECASE)
         if category_match:
             result["category"] = category_match.group(1).strip()
-            
-        # Extract company name
-        companies_pattern = r'(?:companies|company|contractors?|unternehmen|firma)\s*(?:involved|here|present|working|onsite|today|are)?\s*(?:were|was|are|is|:)?\s*([^.]+)'
+
+        # Extract companies
+        print("About to extract companies...")  # Debug print statement
+        companies_pattern = r'(?:companies|company|contractors?)(?:\s+(?:involved|on-site|here|present|working|onsite|today|are|were))?(?:\s+\w+)*?\s*(?:were|was|are|is|:)?\s*([^.]+)'
         companies_match = re.search(companies_pattern, text, re.IGNORECASE)
-        if companies_match:  # Corrected
-            companies_text = companies_match.group(1).strip()  # Corrected
-            companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
-            result["companies"] = [{"name": company} for company in companies if company]
-            # Further processing
+        if companies_match:
+            companies_text = companies_match.group(1).strip()
+            company_names = [name.strip() for name in re.split(r'\s+and\s+|,', companies_text) if name.strip()]
+            # Deduplicate companies
+            unique_companies = []
+            seen_companies = set()
+            for name in company_names:
+                if name and name.lower() not in seen_companies:
+                    seen_companies.add(name.lower())
+                    unique_companies.append(name)
+            result["companies"] = [{"name": name} for name in unique_companies]
         
         # Extract people
         people_pattern = r'(?:people|persons|team)\s*(?:included|were|are|is|:)\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)(?=\s*(?:as|,|\.|$))'
@@ -1572,30 +1579,6 @@ def is_free_form_report(text: str) -> bool:
                      text, re.IGNORECASE))
     ]
     
-    # Count structure indicators
-    structure_matches = sum(1 for indicator in structure_indicators if indicator)
-
-    if company_match:
-        companies_text = company_match.group(1).strip()
-        company_names = [name.strip() for name in re.split(r'\s+and\s+|,', companies_text) if name.strip()]
-        result["companies"] = [{"name": name} for name in company_names]
-    
-    # Extract people from inputs like "People are X, Y and Z"
-    people_pattern = r'(?:people|persons)\s+(?:is|are|on\s+site\s+are)\s+(.*?)(?:\.|\s*$)'
-    people_match = re.search(people_pattern, text, re.IGNORECASE)
-    if people_match:
-        people_text = people_match.group(1).strip()
-        people_names = [name.strip() for name in re.split(r'\s+and\s+|,', people_text) if name.strip()]
-        result["people"] = people_names
-    
-    # Extract category from "Category is X"
-    category_pattern = r'category\s+(?:is|:)\s+([^,.]+)'
-    category_match = re.search(category_pattern, text, re.IGNORECASE)
-    if category_match:
-        result["category"] = category_match.group(1).strip()
-    
-    log_event("custom_extraction", found_fields=list(result.keys()))
-    return result
 def custom_extract_fields(text: str) -> Dict[str, Any]:
     """Extract fields from common natural language patterns"""
     result = {}
@@ -3469,9 +3452,9 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     key_words.append(f"Site: {site_match.group(1).strip()}")
                     
                 # Try to extract company names
-                company_match = re.search(r'\b(?:companies|company)[:\s]+([^,.]+)', text, re.IGNORECASE)
-                if company_match:
-                    key_words.append(f"Companies: {company_match.group(1).strip()}")
+                companies_match = re.search(r'\b(?:companies|company)[:\s]+([^,.]+)', text, re.IGNORECASE)
+                if companies_match:
+                    key_words.append(f"Companies: {companies_match.group(1).strip()}")
                 
                 # Try to extract some people
                 people_match = re.search(r'\b(?:team included|people|persons)[:\s]+([^,.]+)', text, re.IGNORECASE)
