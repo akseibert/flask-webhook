@@ -77,7 +77,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
         
         # Free-form report handling - lower threshold for voice inputs
         if len(text) > 50:  # Free-form report handling
-        log_event("detected_free_form_report", length=len(text))
+            log_event("detected_free_form_report", length=len(text))
         
         # Extract site name
         site_pattern = r'(?:working\s+(?:on|at|in)|site)\s+(?:the\s+)?([A-Za-z0-9\s]+?)(?=\s*(?:site|project|location|segment|category|,|\.|$))'
