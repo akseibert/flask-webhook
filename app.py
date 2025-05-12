@@ -1570,6 +1570,27 @@ def validate_patterns() -> None:
 
 validate_patterns()
 
+def debug_command_matching(text):
+    """Debug function to test all regex patterns against input"""
+    results = []
+    for field, pattern in FIELD_PATTERNS.items():
+        try:
+            match = re.match(pattern, text, re.IGNORECASE)
+            if match:
+                results.append({
+                    "field": field,
+                    "matched": True,
+                    "groups": [g for g in match.groups() if g is not None]
+                })
+        except Exception as e:
+            results.append({
+                "field": field,
+                "error": str(e)
+            })
+    
+    log_event("debug_command_matching", text=text, matches=results)
+    return results
+
 def string_similarity(a: str, b: str) -> float:
     """Calculate string similarity ratio between two strings"""
     try:
@@ -1916,6 +1937,9 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
             # Standard pattern matching for commands
             commands = [cmd.strip() for cmd in re.split(r',\s*(?=(?:[^:]*:)|(?:add|insert)\s+(?:site|segment|category|compan(?:y|ies)|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments))|(?<!\w)\.\s*(?=[A-Z])', text) if cmd.strip()]
             log_event("commands_split", command_count=len(commands))
+
+            for cmd in commands:
+                debug_command_matching(cmd)
             
             processed_result = {
                 "companies": [], "roles": [], "tools": [], "services": [],
@@ -3124,7 +3148,13 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                 
                 send_message(chat_id, message)
             else:
-                send_message(chat_id, "I didn't understand that. Type 'help' for assistance or try saying one category at a time.")
+                # Add more diagnostics about why the command wasn't understood
+                debug_results = debug_command_matching(text)
+                if debug_results:
+                    matched_fields = [r["field"] for r in debug_results]
+                    send_message(chat_id, f"I didn't understand that command. Debug info: patterns tried: {matched_fields}. Type 'help' for assistance.")
+                else:
+                    send_message(chat_id, "I didn't understand that. Type 'help' for assistance or try saying one category at a time.")
             return "ok", 200
         
         # Save current state for undo
