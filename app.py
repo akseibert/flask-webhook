@@ -85,6 +85,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
         if site_match:
             result["site_name"] = site_match.group(1).strip()
         
+        
         # Extract segment
         segment_pattern = r'(?:segment|section)\s+([A-Za-z0-9\s]+?)(?=\s*(?:category|,|\.|$))'
         segment_match = re.search(segment_pattern, text, re.IGNORECASE)
@@ -96,6 +97,15 @@ def extract_fields(text: str) -> Dict[str, Any]:
         category_match = re.search(category_pattern, text, re.IGNORECASE)
         if category_match:
             result["category"] = category_match.group(1).strip()
+            
+        # Extract company name
+        companies_pattern = r'(?:companies|company|contractors?|unternehmen|firma)\s*(?:involved|here|present|working|onsite|today|are)?\s*(?:were|was|are|is|:)?\s*([^.]+)'
+        companies_match = re.search(companies_pattern, text, re.IGNORECASE)
+        if companies_match:  # Corrected
+            companies_text = companies_match.group(1).strip()  # Corrected
+            companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
+            result["companies"] = [{"name": company} for company in companies if company]
+            # Further processing
         
         # Extract people
         people_pattern = r'(?:people|persons|team)\s*(?:included|were|are|is|:)\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)(?=\s*(?:as|,|\.|$))'
