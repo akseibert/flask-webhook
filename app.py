@@ -1,27 +1,27 @@
     # Import necessary libraries at the top
-    import os
-    import sys
-    import io
-    import json
-    import re
-    import requests
-    import logging
-    import signal
-    from datetime import datetime
-    from time import time
-    from typing import Dict, Any, List, Optional, Callable, Tuple, Set, Union
-    from flask import Flask, request, jsonify
-    from openai import OpenAI
-    from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-    from difflib import SequenceMatcher
-    from collections import deque
-    from reportlab.lib.pagesizes import letter, A4
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import inch, cm
-    from reportlab.lib import colors
-    from decouple import config
-    from functools import lru_cache
+import os
+import sys
+import io
+import json
+import re
+import requests
+import logging
+import signal
+from datetime import datetime
+from time import time
+from typing import Dict, Any, List, Optional, Callable, Tuple, Set, Union
+from flask import Flask, request, jsonify
+from openai import OpenAI
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from difflib import SequenceMatcher
+from collections import deque
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch, cm
+from reportlab.lib import colors
+from decouple import config
+from functools import lru_cache
 
     # Initialize Flask app
     app = Flask(__name__)
