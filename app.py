@@ -32,7 +32,6 @@ app = Flask(__name__)
 def extract_fields(text: str) -> Dict[str, Any]:
     """Extract fields from text input with enhanced error handling and field validation"""
     try:
-        # Print marker to confirm this function is being used
         print("REAL extract_fields FUNCTION RUNNING")
         log_event("extract_fields_real", input=text[:100])
         
@@ -40,235 +39,120 @@ def extract_fields(text: str) -> Dict[str, Any]:
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
 
         # Check for basic commands first
-        if normalized_text.lower() in ("yes", "y", "ya", "yeah", "yep", "yup", "okay", "ok"):
-            return {"yes_confirm": True}
-            
-        if normalized_text.lower() in ("no", "n", "nope", "nah"):
-            return {"no_confirm": True}
+        for command in ["yes_confirm", "no_confirm", "reset", "undo_last", "summary", "detailed", "export_pdf", "help", "sharepoint", "sharepoint_status"]:
+            if re.match(FIELD_PATTERNS[command], normalized_text, re.IGNORECASE):
+                result[command] = True
+                return result
 
-        if normalized_text.lower() in ("new", "new report", "/new", "reset", "reset report"):
-            return {"reset": True}
-            
-        # Try FIELD_PATTERNS first for structured commands
+        # Handle structured commands using FIELD_PATTERNS
         for field, pattern in FIELD_PATTERNS.items():
             match = re.match(pattern, normalized_text, re.IGNORECASE)
             if match:
-                if field == "site_name":
-                    result["site_name"] = match.group(1).strip()
-                    return result
-                elif field == "segment":
-                    result["segment"] = match.group(1).strip()
-                    return result
-                elif field == "category":
-                    # Special handling for Mängelerfassung
-                    value = match.group(1).strip()
-                    if value.lower() == "mängelerfassung":
-                        result["category"] = "Mängelerfassung"
-                    else:
-                        result["category"] = value
-                    return result
+                if field in ["site_name", "segment", "category", "impression", "weather", "time", "comments"]:
+                    result[field] = match.group(1).strip()
                 elif field == "company":
                     companies_text = match.group(1).strip()
-                    companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
-                    result["companies"] = [{"name": company} for company in companies if company]
-                    return result
-                elif field == "tool":
-                    tools_text = match.group(1).strip()
-                    tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text)]
-                    result["tools"] = [{"item": tool} for tool in tools if tool]
-                    return result
-                elif field == "service":
-                    services_text = match.group(1).strip()
-                    services = [s.strip() for s in re.split(r',|\s+and\s+', services_text)]
-                    result["services"] = [{"task": service} for service in services if service]
-                    return result
-                elif field == "activity":
-                    activities_text = match.group(1).strip()
-                    activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text)]
-                    result["activities"] = activities
-                    return result
-                elif field == "issue":
-                    issues_text = match.group(1).strip()
-                    issues = [i.strip() for i in re.split(r';|,|\s+and\s+', issues_text)]
-                    result["issues"] = []
-                    for issue in issues:
-                        if issue:
-                            has_photo = "photo" in issue.lower() or "picture" in issue.lower() or "took a" in issue.lower()
-                            result["issues"].append({"description": issue, "has_photo": has_photo})
-                    return result
-                elif field == "time":
-                    result["time"] = match.group(1).strip()
-                    return result
-                elif field == "weather":
-                    result["weather"] = match.group(1).strip()
-                    return result
-                elif field == "impression":
-                    result["impression"] = match.group(1).strip()
-                    return result
-                elif field == "comments":
-                    result["comments"] = match.group(1).strip()
-                    return result
+                    companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text) if c.strip()]
+                    result["companies"] = [{"name": company} for company in companies]
                 elif field == "people":
                     people_text = match.group(1).strip()
-                    role_text = match.group(2).strip() if len(match.groups()) > 1 and match.group(2) else None
-                    
-                    people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+                    people = [p.strip() for p in re.split(r',|\s+and\s+', people_text) if p.strip()]
                     result["people"] = people
-                    
-                    if role_text:
-                        result["roles"] = [{"name": people[0], "role": role_text}]
-                    
-                    return result
+                    if match.group(2):  # Role specified
+                        role = match.group(2).strip()
+                        result["roles"] = [{"name": p, "role": role} for p in people]
                 elif field == "role":
-                    # This pattern has multiple group captures for different variations
-                    name = None
-                    role = None
-                    
-                    # Find the non-None groups for name and role
-                    for i in range(1, len(match.groups()) + 1):
-                        if match.group(i):
-                            if name is None:
-                                name = match.group(i).strip()
-                            elif role is None:
-                                role = match.group(i).strip()
-                    
-                    if name and role:
-                        result["people"] = [name]
-                        result["roles"] = [{"name": name, "role": role}]
-                    
-                    return result
+                    if match.group(1) and match.group(2):  # Name and role
+                        name = match.group(1).strip()
+                        role = match.group(2).strip()
+                        result["people"] = result.get("people", []) + [name]
+                        result["roles"] = result.get("roles", []) + [{"name": name, "role": role}]
+                    elif match.group(3):  # Role only
+                        role = match.group(3).strip()
+                        result["roles"] = result.get("roles", []) + [{"name": "Unknown", "role": role}]
                 elif field == "supervisor":
                     name = match.group(1).strip()
-                    result["people"] = [name]
-                    result["roles"] = [{"name": name, "role": "Supervisor"}]
-                    return result
+                    result["people"] = result.get("people", []) + [name]
+                    result["roles"] = result.get("roles", []) + [{"name": name, "role": "Supervisor"}]
+                elif field == "tool":
+                    tools_text = match.group(1).strip()
+                    tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text) if t.strip()]
+                    result["tools"] = [{"item": tool} for tool in tools]
+                elif field == "service":
+                    services_text = match.group(1).strip()
+                    services = [s.strip() for s in re.split(r',|\s+and\s+', services_text) if s.strip()]
+                    result["services"] = [{"task": service} for service in services]
+                elif field == "activity":
+                    activities_text = match.group(1).strip()
+                    activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text) if a.strip()]
+                    result["activities"] = activities
+                elif field == "issue":
+                    issues_text = match.group(1).strip()
+                    issues = [i.strip() for i in re.split(r';|,|\s+and\s+', issues_text) if i.strip()]
+                    result["issues"] = [{"description": issue, "has_photo": "photo" in issue.lower()} for issue in issues]
                 elif field == "delete":
-                    # Parse different delete syntax patterns
-                    groups = match.groups()
-                    category = None
-                    value = None
-                    
-                    if groups[0] and groups[1]:  # "delete value from category"
-                        value = groups[0].strip()
-                        category = groups[1].lower()
-                    elif groups[2] and groups[3]:  # "delete category value"
-                        category = groups[2].lower()
-                        value = groups[3].strip() if groups[3] else None
-                    elif groups[4] and groups[5]:  # "category delete value"
-                        category = groups[4].lower()
-                        value = groups[5].strip() if groups[5] else None
-                    elif groups[6]:  # "delete value" (no category)
-                        value = groups[6].strip()
-                    
-                    # Map category names to field names
-                    if category:
-                        category = FIELD_MAPPING.get(category, category)
-                    
-                    return {"delete": {"category": category, "value": value}}
+                    target = match.group(1).strip()
+                    field_name = match.group(2).strip()
+                    result["delete"] = {"target": target, "field": FIELD_MAPPING.get(field_name, field_name)}
                 elif field == "delete_entire":
-                    field_name = match.group(1).lower()
-                    mapped_field = FIELD_MAPPING.get(field_name, field_name)
-                    return {mapped_field: {"delete": True}}
+                    field_name = match.group(1).strip()
+                    result["delete_entire"] = {"field": FIELD_MAPPING.get(field_name, field_name)}
                 elif field == "correct":
-                    raw_field = match.group(1).lower()
-                    old_value = match.group(2).strip() if match.group(2) else None
-                    new_value = match.group(3).strip() if match.group(3) else None
-                    field_name = FIELD_MAPPING.get(raw_field, raw_field)
-                    
-                    if old_value:
-                        if new_value:
-                            return {"correct": [{"field": field_name, "old": old_value, "new": new_value}]}
-                        else:
-                            return {"spelling_correction": {"field": field_name, "old_value": old_value}}
-                elif field == "reset":
-                    return {"reset": True}
-                elif field == "undo_last":
-                    return {"undo_last": True}
-                elif field == "help":
-                    topic = match.group(1) or match.group(2) or "general"
-                    return {"help": topic.lower()}
-                elif field == "summary":
-                    return {"summary": True}
-                elif field == "detailed":
-                    return {"detailed": True}
-                elif field == "export_pdf":
-                    return {"export_pdf": True}
-                elif field == "sharepoint":
-                    return {"sharepoint_export": True}
-                elif field == "sharepoint_status":
-                    return {"sharepoint_status": True}
-                elif field == "clear":
-                    field_name = match.group(1).lower()
-                    field_name = FIELD_MAPPING.get(field_name, field_name)
-                    result[field_name] = [] if field_name in LIST_FIELDS else ""
-                    return result
-        
-        # Handle direct "add issue X" commands
-        issue_add_pattern = r'^(?:add|insert)\s+issues?\s+(.+)$'
-        issue_add_match = re.match(issue_add_pattern, normalized_text, re.IGNORECASE)
-        if issue_add_match:
-            issue_text = issue_add_match.group(1).strip()
-            if issue_text:
-                has_photo = "photo" in issue_text.lower() or "picture" in issue_text.lower() or "took a" in issue_text.lower()
-                return {"issues": [{"description": issue_text, "has_photo": has_photo}]}
-        
-        # Free-form report handling - lower threshold for voice inputs
-        if len(text) > 50:  # Free-form report handling
+                    old_value = match.group(1).strip()
+                    field_name = match.group(2).strip()
+                    new_value = match.group(3).strip()
+                    result["correct"] = [{"field": FIELD_MAPPING.get(field_name, field_name), "old": old_value, "new": new_value}]
+                return result
+
+        # Handle free-form reports
+        if len(text) > 50 and CONFIG["ENABLE_FREEFORM_EXTRACTION"]:
             log_event("detected_free_form_report", length=len(text))
             
+            # Extract reporter's name
+            reporter_pattern = r'(?:this\s+is|I\'m|I\s+am)\s+([A-Za-z\s]+)'
+            reporter_match = re.search(reporter_pattern, text, re.IGNORECASE)
+            reporter_name = reporter_match.group(1).strip() if reporter_match else "Unknown"
+
             # Extract site name
-            site_pattern = r'(?:from|at|on|reporting\s+(?:from|at))\s+(?:the\s+)?([A-Za-z0-9\s]+?)(?:\s*(?:project|site|location)(?:,|\.|$|\s+section|\s+segment))'
+            site_pattern = r'(?:from|at|on|reporting\s+(?:from|at))\s+(?:the\s+)?([A-Za-z0-9\s]+?)(?=\s*(?:project|site|location|,|\.|$))'
             site_match = re.search(site_pattern, text, re.IGNORECASE)
             if site_match:
                 result["site_name"] = site_match.group(1).strip()
-            
+
             # Extract segment
             segment_pattern = r'(?:segment|section)\s+([A-Za-z0-9\s]+?)(?=\s*(?:category|,|\.|$))'
             segment_match = re.search(segment_pattern, text, re.IGNORECASE)
             if segment_match:
                 result["segment"] = segment_match.group(1).strip()
-            
+
             # Extract category
-            category_pattern = r'(?:category|kategorie|Mängelerfassung)\s*(?:is\s+|[:,]?\s*)([A-Za-z\s]+)(?=\s*(?:,|\.|$))'
+            category_pattern = r'(?:category|kategorie|file\s+under)\s*(?:is\s+|[:,]?\s*)([A-Za-z\s]+)(?=\s*(?:,|\.|$))'
             category_match = re.search(category_pattern, text, re.IGNORECASE)
             if category_match:
                 result["category"] = category_match.group(1).strip()
-            
-            # Special category handling for "file this under Mängelerfassung"
-            if "Mängelerfassung" in text or "file this under" in text.lower():
-                result["category"] = "Mängelerfassung"
-            
+
             # Extract companies
-            print("About to extract companies...")  # Debug print statement
-            companies_pattern = r'(?:companies|company|contractors?)(?:\s+(?:involved|on-site|here|present|working|onsite|today|are|were))?(?:\s+\w+)*?\s*(?:were|was|are|is|:)?\s*([^.]+)'
+            companies_pattern = r'(?:companies|company|contractors?)(?:\s+(?:involved|on-site|here|present|working|onsite|today|are|were))?\s*(?:were|was|are|is|:)?\s*([^.]+)'
             companies_match = re.search(companies_pattern, text, re.IGNORECASE)
             if companies_match:
                 companies_text = companies_match.group(1).strip()
                 company_names = [name.strip() for name in re.split(r'\s+and\s+|,', companies_text) if name.strip()]
-                # Deduplicate companies
-                unique_companies = []
-                seen_companies = set()
-                for name in company_names:
-                    if name and name.lower() not in seen_companies:
-                        seen_companies.add(name.lower())
-                        unique_companies.append(name)
-                result["companies"] = [{"name": name} for name in unique_companies]
-            
+                result["companies"] = [{"name": name} for name in company_names]
+
             # Extract people and roles
-            roles_pattern = r'([A-Za-z]+(?:\s+[A-Za-z]+)?|myself)\s+(?:handled|as|was)\s+(?:the\s+)?([A-Za-z\s]+?)(?=\s*(?:,|\.|$|\sand\b))'
+            roles_pattern = r'([A-Za-z\s]+|myself)\s+(?:as|is|handled|handling)\s+(?:the\s+)?([A-Za-z\s]+?)(?=\s*(?:,|\.|$|\sand\b))'
             roles_matches = re.findall(roles_pattern, text, re.IGNORECASE)
             result["people"] = []
             result["roles"] = []
             for name, role in roles_matches:
                 name = name.strip()
                 role = role.strip()
-                # Resolve "myself" to reporter's name
                 if name.lower() == "myself":
-                    name = "Anna"  # Default to Anna from the context
-                if name not in result["people"]:
+                    name = reporter_name
+                if name and name not in result["people"]:
                     result["people"].append(name)
                 result["roles"].append({"name": name, "role": role})
-            
+
             # Extract tools
             tools_pattern = r'(?:tools|equipment|gear|machinery)(?:\s+(?:used|utilized|employed|needed|brought|available))?\s*(?:were|was|are|is|:)?\s*([^.]+)'
             tools_match = re.search(tools_pattern, text, re.IGNORECASE)
@@ -276,15 +160,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 tools_text = tools_match.group(1).strip()
                 tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text)]
                 result["tools"] = [{"item": tool} for tool in tools if tool]
-            
-            # Also check for specific tools mentioned directly
-            specific_tools = ["tower crane", "concrete mixer", "concrete pump"]
-            for tool in specific_tools:
-                if tool in text.lower() and not any(t.get("item", "").lower() == tool for t in result.get("tools", [])):
-                    if "tools" not in result:
-                        result["tools"] = []
-                    result["tools"].append({"item": tool})
-            
+
             # Extract services
             services_pattern = r'(?:services|service|tasks?)(?:\s+(?:provided|performed|done|were|was|included|offered))?\s*(?:were|was|are|is|:)?\s*([^.]+)'
             services_match = re.search(services_pattern, text, re.IGNORECASE)
@@ -292,7 +168,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 services_text = services_match.group(1).strip()
                 services = [s.strip() for s in re.split(r',|\s+and\s+', services_text)]
                 result["services"] = [{"task": service} for service in services if service]
-            
+
             # Extract activities
             activities_pattern = r'(?:activities|work|tasks)\s*(?:included|were|are|is|:)\s*([^.]+)'
             activities_match = re.search(activities_pattern, text, re.IGNORECASE)
@@ -300,82 +176,50 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 activities_text = activities_match.group(1).strip()
                 activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text)]
                 result["activities"] = activities
-            
-            # Also check for specific activities mentioned directly
-            specific_activities = ["erecting steel frames", "pouring footings", "setting the foundation"]
-            for activity in specific_activities:
-                if activity in text.lower() and activity not in result.get("activities", []):
-                    if "activities" not in result:
-                        result["activities"] = []
-                    result["activities"].append(activity)
-            
+
             # Extract issues
-            issues_pattern = r'(?:issues|issue|problems?|delays?|injuries?|challenges|spotted|spotted a)(?:\s+(?:encountered|had|occurred|faced|experienced|ran\s+into))?\s*(?:were|was|are|is|:)?\s*([^.]+)'
+            issues_pattern = r'(?:issues|issue|problems?|delays?|injuries?|challenges|spotted|crack)(?:\s+(?:encountered|had|occurred|faced|experienced|ran\s+into))?\s*(?:were|was|are|is|:)?\s*([^.]+)'
             issues_match = re.search(issues_pattern, text, re.IGNORECASE)
             if issues_match:
                 issues_text = issues_match.group(1).strip()
                 issues = [i.strip() for i in re.split(r';|,|\s+and\s+', issues_text)]
-                result["issues"] = []
-                for issue in issues:
-                    has_photo = "photo" in issue.lower() or "picture" in issue.lower() or "took a" in issue.lower()
-                    result["issues"].append({"description": issue, "has_photo": has_photo})
-            
-            # Also check for specific issue patterns like "spotted a crack"
-            crack_pattern = r'(?:spotted|observed|found|noticed)\s+(?:a\s+)?([^,.]+(?:crack|leak|damage|issue)[^,.]*)'
-            crack_match = re.search(crack_pattern, text, re.IGNORECASE)
-            if crack_match:
-                issue_desc = crack_match.group(1).strip()
-                has_photo = "photo" in text.lower() or "picture" in text.lower() or "took a" in text.lower()
-                
-                if "issues" not in result:
-                    result["issues"] = []
-                
-                # Check if this issue is already added
-                if not any(i.get("description", "").lower() == issue_desc.lower() for i in result["issues"]):
-                    result["issues"].append({"description": issue_desc, "has_photo": has_photo})
-            
+                result["issues"] = [{"description": issue, "has_photo": "photo" in issue.lower()} for issue in issues]
+
             # Extract time
             time_pattern = r'(?:time|duration|hours?|period|worked)\s*(?:spent|worked|taken|lasted|required|needed)?\s*(?:was|is|:)?\s*([^.]+)'
             time_match = re.search(time_pattern, text, re.IGNORECASE)
             if time_match:
                 result["time"] = time_match.group(1).strip()
-            
+
             # Extract weather
             weather_pattern = r'(?:weather|conditions?|climate)(?:\s+(?:were|was|is|today|outside|current))?\s*(?:like|are|is|:)?\s*([^.]+)'
             weather_match = re.search(weather_pattern, text, re.IGNORECASE)
             if weather_match:
                 result["weather"] = weather_match.group(1).strip()
-            
-            # Also check for specific weather patterns
-            specific_weather = ["sunny", "overcast", "light drizzle", "rainy", "cloudy"]
-            for weather in specific_weather:
-                if weather in text.lower() and not result.get("weather"):
-                    result["weather"] = weather
-                    break
-            
+
             # Extract impression
-            impression_pattern = r'(?:impression|assessment|overview|progress|rating)(?:\s+(?:was|is|overall|general))?\s*(?:like|as|is|:)?\s*([^.]+)'
+            impression_pattern = r'(?:impression|assessment|overview|progress|rating|on\s+track)(?:\s+(?:was|is|overall|general))?\s*(?:like|as|is|:)?\s*([^.]+)'
             impression_match = re.search(impression_pattern, text, re.IGNORECASE)
             if impression_match:
                 result["impression"] = impression_match.group(1).strip()
-            
-            # Check for "on track" or "no delays" as impression
-            if "on track" in text.lower() or "no delays" in text.lower():
-                result["impression"] = "On track, no delays"
-            
-            # If we found at least a site name or people, consider it a valid report
-            if result.get("site_name") or result.get("people"):
+
+            # Extract comments
+            comments_pattern = r'(?:comments|notes|additional\s+notes|thanks)(?:\s*(?:are|is|:))?\s*([^.]+)'
+            comments_match = re.search(comments_pattern, text, re.IGNORECASE)
+            if comments_match:
+                result["comments"] = comments_match.group(1).strip()
+
+            # If valid report, add date
+            if any(result.get(field) for field in ["site_name", "people", "companies", "activities", "issues"]):
                 log_event("free_form_extraction_success", found_fields=list(result.keys()))
                 result["date"] = datetime.now().strftime("%d-%m-%Y")
                 return result
-        
-        # If we reach here, no structured or free-form extraction worked
+
         log_event("fields_extracted", result_fields=len(result))
         return result
     except Exception as e:
         log_event("extract_fields_error", input=text[:100], error=str(e))
         print(f"ERROR in extract_fields: {str(e)}")
-        # Return a minimal result to avoid breaking the app
         return {"error": str(e)}
     
 # Define merge_data function (stub version)
@@ -539,29 +383,29 @@ categories_pattern = '|'.join(re.escape(cat) for cat in categories)
 list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 
 FIELD_PATTERNS = {
-    "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)([^,]+)(?:\s*(?:,|\.|$))?',
-    "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*|section\s*[:,]?\s*)([^,.]+)(?:\s*(?:,|\.|$))?',
-    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie|Mängelerfassung)\s+|(?:categories?|kategorie|Mängelerfassung)\s*[:,]?\s*(?:is|are|:)?\s*)([^,.]+)(?:\s*(?:,|\.|$))?',
-    "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)([^,]+)(?:\s*(?:,|\.|$))?',
-    "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?)\s+|(?:peoples?|persons?)\s*[:,]?\s*(?:are|is|were|include[ds]?|on\s+site\s+are|:)?\s*)([^,]+?)(?:\s+as\s+([^,]+?))?(?:\s*(?:,|\.|$))?',
-    "role": r'^(?:(?:add|insert)\s+|(?:peoples?|persons?)\s+)?(\w+\s+\w+|\w+)\s*[:,]?\s*(?:as|is|as\s+the|is\s+the|is\s+a|is\s+an)\s+([^,\s]+)(?:\s+to\s+(?:peoples?|persons?))?(?:\s*(?:,|\.|$))?|^(?:persons?|peoples?)\s*[:,]?\s*(\w+\s+\w+|\w+)\s*,\s*roles?\s*[:,]?\s*([^,\s]+)(?:\s*(?:,|\.|$))?|^roles?\s*[:,]?\s*([^,]+?)(?:\s*(?:,|\.|$))?',
-    "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)([^,]+?)(?:\s*(?:,|\.|$))?',
-    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*(?:are|is|were|include[ds]?|:)?\s*)([^,.]+?)(?:\s*(?:,|\.|$))?',
-    "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)([^,]+?)(?:\s*(?:,|\.|$))?',
-    "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)([^,]+?)(?:\s*(?:,|\.|$))?',
-    "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)([^,]+?)(?:\s*(?:,|\.|$))?',
-    "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*[:,]?\s*|issues?\s*(?:encountered|included|spotted)?\s*|problem\s*:?\s*|delay\s*:?\s*|injury\s*:?\s*|crack\s*:?\s*)([^,]+?)(?:\s*(?:,|\.|$))?',
-    "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)([^,]+?)(?:\s*(?:,|\.|$))?',
-    "time": r'^(?:(?:add|insert)\s+times?\s+|times?\s*[:,]?\s*|time\s+spent\s+|morning\s+time\s*|afternoon\s+time\s*|evening\s+time\s*)([^,]+?)(?:\s*(?:,|\.|$))?',
-    "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)([^,]+?)(?:\s*(?:,|\.|$))?',
+    "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
+    "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*|section\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
+    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\s*(?:is|are|:)?\s*)(.+?)(?:\s*(?:,|\.|$))',
+    "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
+    "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?|pople)\s+|(?:peoples?|persons?|pople)\s*[:,]?\s*(?:are|is|were|include[ds]?|on\s+site\s+are|:)?\s*)(.+?)(?:\s+as\s+(.+?))?(?:\s*(?:,|\.|$))',
+    "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(?:(\w+\s+\w+|\w+)\s*(?:as|is)\s+(.+?)|(.+?))(?:\s*(?:,|\.|$))',
+    "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
+    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*(?:are|is|were|include[ds]?|:)?\s*)(.+?)(?:\s*(?:,|\.|$))',
+    "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)(.+?)(?:\s*(?:,|\.|$))',
+    "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)(.+?)(?:\s*(?:,|\.|$))',
+    "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)(.+?)(?:\s*(?:,|\.|$))',
+    "issue": r'^(?:(?:add|insert)\s+issues?\s+|issues?\s*[:,]?\s*|issues?\s*(?:encountered|included)?\s*|problem\s*:?\s*|delay\s*:?\s*|injury\s*:?\s*)(.+?)(?:\s*(?:,|\.|$))',
+    "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)(.+?)(?:\s*(?:,|\.|$))',
+    "time": r'^(?:(?:add|insert)\s+times?\s+|times?\s*[:,]?\s*|time\s+spent\s+|morning\s+time\s*|afternoon\s+time\s*|evening\s+time\s*)(.+?)(?:\s*(?:,|\.|$))',
+    "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*(?:none|delete|clear|remove|reset)$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": r'^(?:delete|remove)\s+(.+)\s+(?:from|in)\s+(' + categories_pattern + r')$|^(?:delete|remove|none)\s+(' + categories_pattern + r')\s+(.+)?$|^(' + categories_pattern + r')\s+(?:delete|remove|none)\s+(.+)?$|^(?:delete|remove|none)\s+(.+)$',
-    "delete_entire": r'^(?:delete|remove|clear)\s+(?:entire|all)\s+(?:category|field|entries|list)?\s*[:]?\s*(' + list_categories_pattern + r')\s*[.!]?$',
-    "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+((?:sites?|segments?|categories?|compan(?:y|ies)|persons?|peoples?|roles?|tools?|services?|activit(?:y|ies)|issues?|times?|weathers?|impressions?|comments?))\s+([^,]+?)(?:\s+(?:to|in|from)\s+([^,]+?))?(?:\s*(?:,|\.|$))?',
+    "delete": r'^(?:delete|remove|none)\s+(.+?)\s+from\s+(.+?)(?:\s*(?:,|\.|$))',
+    "delete_entire": r'^(?:delete|remove|clear)\s+(?:entire|all)\s+(.+?)(?:\s*(?:,|\.|$))',
+    "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+(.+?)\s+in\s+(.+?)\s+to\s+(.+?)(?:\s*(?:,|\.|$))',
     "help": r'^help(?:\s+on\s+([a-z_]+))?$|^\/help(?:\s+([a-z_]+))?$',
     "undo_last": r'^undo\s+last\s*[.!]?$|^undo\s+last\s+(?:change|modification|edit)\s*[.!]?$',
-    "context_add": r'^(?:add|include|include|insert)\s+(?:it|this|that|him|her|them)\s+(?:to|in|into|as)\s+(.+?)\s*[.!]?$',
+    "context_add": r'^(?:add|include|insert)\s+(?:it|this|that|him|her|them)\s+(?:to|in|into|as)\s+(.+?)\s*[.!]?$',
     "summary": r'^(summarize|summary|short report|brief report|overview|compact report)\s*[.!]?$',
     "detailed": r'^(detailed|full|complete|comprehensive)\s+report\s*[.!]?$',
     "export_pdf": r'^(export|export pdf|export report|generate pdf|generate report)\s*[.!]?$',
@@ -570,7 +414,6 @@ FIELD_PATTERNS = {
     "yes_confirm": r'^(?:yes|ya|yep|yeah|yup|ok|okay|sure|confirm|confirmed|y|да|ню|нью)\s*[.!]?$',
     "no_confirm": r'^(?:no|nope|nah|negative|n|нет)\s*[.!]?$'
 }
-
 # Extended regex patterns for more nuanced commands
 CONTEXTUAL_PATTERNS = {
     "reference_person": r'(he|she|they|him|her|them)\b',
@@ -3169,430 +3012,101 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         # Handle special commands
         # Process extracted fields
         if extracted:
-            # Handle special commands first
+            # Handle special commands
             if "reset" in extracted:
                 handle_reset(chat_id, session)
-                return "ok", 200
             elif "undo" in extracted:
                 handle_undo(chat_id, session)
-                return "ok", 200
             elif "undo_last" in extracted:
                 handle_undo_last(chat_id, session)
-                return "ok", 200
             elif "status" in extracted:
                 handle_status(chat_id, session)
-                return "ok", 200
             elif "export_pdf" in extracted:
                 handle_export(chat_id, session)
-                return "ok", 200
             elif "summary" in extracted:
                 handle_summary(chat_id, session)
-                return "ok", 200
             elif "detailed" in extracted:
                 handle_detailed(chat_id, session)
-                return "ok", 200
-            elif "sharepoint_export" in extracted:
+            elif "sharepoint" in extracted:
                 handle_sharepoint_export(chat_id, session)
-                return "ok", 200
             elif "sharepoint_status" in extracted:
                 handle_sharepoint_status(chat_id, session)
-                return "ok", 200
             elif "help" in extracted:
-                topic = extracted["help"]
+                topic = extracted.get("help", "general")
                 handle_help(chat_id, session, topic)
-                return "ok", 200
             elif "yes_confirm" in extracted and session.get("awaiting_reset_confirmation"):
                 handle_reset(chat_id, session)
-                return "ok", 200
             elif "no_confirm" in extracted and session.get("awaiting_reset_confirmation"):
                 session["awaiting_reset_confirmation"] = False
                 save_session(session_data)
                 send_message(chat_id, "Reset cancelled. Your report was not changed.")
-                return "ok", 200
             elif "spelling_correction" in extracted:
-                # Enter spelling correction mode
                 field = extracted["spelling_correction"]["field"]
                 old_value = extracted["spelling_correction"]["old_value"]
-                
-                # Set the awaiting state
                 session["awaiting_spelling_correction"] = {
                     "active": True,
                     "field": field,
                     "old_value": old_value
                 }
                 save_session(session_data)
-                
-                # Ask the user for the corrected value
                 send_message(chat_id, f"Please enter the correct spelling for '{old_value}' in {field}:")
-                return "ok", 200
-            
-            # Regular field updates - save current state for undo
-            if any(field in extracted for field in SCALAR_FIELDS + LIST_FIELDS):
+            else:
+                # Handle field updates
                 session["command_history"].append(session["structured_data"].copy())
-                
-                # Update context tracking for references
-                context = session.get("context", {
-                    "last_mentioned_person": None,
-                    "last_mentioned_item": None,
-                    "last_field": None,
-                })
-                
-                # Track mentioned people
-                if "people" in extracted and extracted["people"]:
-                    context["last_mentioned_person"] = extracted["people"][0]
-                    context["last_field"] = "people"
-                elif "roles" in extracted and extracted["roles"]:
-                    for role in extracted["roles"]:
-                        if isinstance(role, dict) and "name" in role:
-                            context["last_mentioned_person"] = role["name"]
-                            context["last_field"] = "roles"
-                            break
-                
-                # Track mentioned items
-                if "issues" in extracted and extracted["issues"]:
-                    for issue in extracted["issues"]:
-                        if isinstance(issue, dict) and "description" in issue:
-                            context["last_mentioned_item"] = issue["description"]
-                            context["last_field"] = "issues"
-                            break
-                elif "activities" in extracted and extracted["activities"]:
-                    context["last_mentioned_item"] = extracted["activities"][0]
-                    context["last_field"] = "activities"
-                elif "tools" in extracted and extracted["tools"]:
-                    for tool in extracted["tools"]:
-                        if isinstance(tool, dict) and "item" in tool:
-                            context["last_mentioned_item"] = tool["item"]
-                            context["last_field"] = "tools"
-                            break
-                elif "services" in extracted and extracted["services"]:
-                    for service in extracted["services"]:
-                        if isinstance(service, dict) and "task" in service:
-                            context["last_mentioned_item"] = service["task"]
-                            context["last_field"] = "services"
-                            break
-                
-                session["context"] = context
-                
-                # Merge the extracted data with existing data
                 session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
-                
-                # Make sure date field is properly set
                 session["structured_data"] = enrich_date(session["structured_data"])
-                
-                # Save session data
                 save_session(session_data)
+
+                # Prepare feedback
+                changed_fields = [field for field in extracted.keys() 
+                                if field not in ["help", "reset", "undo", "status", "export_pdf", 
+                                                "summary", "detailed", "undo_last", "error",
+                                                "sharepoint", "sharepoint_status",
+                                                "yes_confirm", "no_confirm", "spelling_correction"]]
                 
-                # Provide feedback to user
-                if "delete" in extracted:
-                    message = "✅ Deleted information from your report."
-                elif any(field.endswith("delete") for field in extracted.keys()):
-                    message = "✅ Deleted information from your report."
-                elif "correct" in extracted:
-                    message = "✅ Corrected information in your report."
-                elif "context_add" in extracted:
-                    message = "✅ Added information using context."
-                else:
-                    message = "✅ Added information to your report."
-                    
-                    # Check for potentially missed fields in free-form reports
+                if changed_fields:
+                    message = "✅ Updated report."
+                    if "delete" in extracted:
+                        message = "✅ Deleted information from your report."
+                    elif "delete_entire" in extracted:
+                        message = "✅ Cleared entire field from your report."
+                    elif "correct" in extracted:
+                        message = "✅ Corrected information in your report."
+
+                    # Check for missed fields in free-form reports
                     if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
-                        # List of key fields users often mention in reports
                         expected_fields = ["site_name", "segment", "category", "companies", "people", 
-                                        "tools", "services", "activities", "issues", 
-                                        "time", "weather", "impression"]
-                        
-                        # Only inform about fields that might be in the text but weren't extracted
+                                        "tools", "services", "activities", "issues", "time", "weather", 
+                                        "impression", "comments"]
                         likely_missed = []
+                        field_terms = {
+                            "companies": r'\b(?:company|companies|contractor)\b',
+                            "services": r'\b(?:service|services|task|tasks)\b',
+                            "tools": r'\b(?:tool|tools|equipment|gear)\b', 
+                            "activities": r'\b(?:activities|activity|work|task|tasks|job|jobs)\b',
+                            "issues": r'\b(?:issue|issues|problem|problems|delay|delays|spotted|crack)\b',
+                            "time": r'\b(?:time|duration|hours)\b',
+                            "weather": r'\b(?:weather|conditions|sunny|rain|cloudy)\b',
+                            "impression": r'\b(?:impression|assessment|progress|overview|on\s+track)\b',
+                            "comments": r'\b(?:comments|notes|thanks)\b'
+                        }
                         for field in expected_fields:
-                            field_terms = {
-                                "companies": r'\b(?:company|companies|contractor)\b',
-                                "services": r'\b(?:service|services|task|tasks)\b',
-                                "tools": r'\b(?:tool|tools|equipment|gear)\b', 
-                                "activities": r'\b(?:activities|activity|work|task|tasks|job|jobs)\b',
-                                "issues": r'\b(?:issue|issues|problem|problems|delay|delays)\b',
-                                "time": r'\b(?:time|duration|hours)\b',
-                                "weather": r'\b(?:weather|conditions|sunny|rain|cloudy)\b',
-                                "impression": r'\b(?:impression|assessment|progress|overview)\b'
-                            }
-                            
                             search_term = field_terms.get(field, r'\b' + field + r'\b')
-                            
-                            # If the term appears in the text but wasn't extracted, add to likely missed
                             if (re.search(search_term, text, re.IGNORECASE) and 
                                 field not in extracted and 
                                 (field not in session["structured_data"] or 
                                 (isinstance(session["structured_data"].get(field), list) and not session["structured_data"][field]) or
                                 (not isinstance(session["structured_data"].get(field), list) and not session["structured_data"].get(field)))):
                                 likely_missed.append(field)
-                        
                         if likely_missed:
                             message += f"\n\n⚠️ I may have missed information about: {', '.join(likely_missed)}. Please add these details if needed (e.g., 'companies: AXIS Construction')."
-                
-                # Add a summary of the report
-                summary = summarize_report(session["structured_data"])
-                send_message(chat_id, f"{message}\n\n{summary}")
-                return "ok", 200
-        else:
-            # Empty extraction result - provide debug info
-            debug_results = debug_command_matching(text)
-            if debug_results and any(r.get("matched") for r in debug_results):
-                matched_fields = [r["field"] for r in debug_results if r.get("matched")]
-                log_event("matched_but_failed_extraction", fields=matched_fields)
-                
-                # Try to provide more helpful feedback
-                if matched_fields:
-                    send_message(chat_id, f"I recognized patterns for {', '.join(matched_fields)} but couldn't process the command. Try rephrasing or adding more details.")
+
+                    summary = summarize_report(session["structured_data"])
+                    send_message(chat_id, f"{message}\n\n{summary}")
                 else:
-                    send_message(chat_id, "I didn't understand that command. Type 'help' for assistance.")
-            else:
-                # If this looks like a free-form report, provide more helpful feedback
-                if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
-                    # Get key information from the report to confirm what was heard
-                    key_words = []
-                    
-                    # Try to extract site name
-                    site_match = re.search(r'\b(?:site|project)\s+([a-zA-Z0-9\s]+?)(?:,|\.|$)', text, re.IGNORECASE)
-                    if site_match:
-                        key_words.append(f"Site: {site_match.group(1).strip()}")
-                        
-                    # Try to extract company names
-                    companies_match = re.search(r'\b(?:companies|company)[:\s]+([^,.]+)', text, re.IGNORECASE)
-                    if companies_match:
-                        key_words.append(f"Companies: {companies_match.group(1).strip()}")
-                    
-                    # Try to extract some people
-                    people_match = re.search(r'\b(?:team included|people|persons)[:\s]+([^,.]+)', text, re.IGNORECASE)
-                    if people_match:
-                        key_words.append(f"People: {people_match.group(1).strip()}")
-                    
-                    if key_words:
-                        message = "I heard your report including:\n" + "\n".join(key_words) + "\n\nPlease enter information for one category at a time, like:\n- site Riverside Heights\n- people Anna, Thomas, Maria\n- companies Apex Build, Roof Masters"
-                    else:
-                        message = "I heard your report but couldn't extract specific information. Please try entering one category at a time, for example:\n- site Riverside Heights\n- segment 10B\n- companies Apex Build, Roof Masters"
-                    
-                    send_message(chat_id, message)
-                else:
-                    send_message(chat_id, "I didn't understand that. Type 'help' for assistance or try saying one category at a time.")
-            
+                    send_message(chat_id, "⚠️ No changes were made to your report.")
+
             return "ok", 200
-
-        # Process specific command types - SHOULD BE HERE, OUTSIDE the special commands block
-        # First check if extracted is empty but matched fields
-        if not extracted:
-            debug_results = debug_command_matching(text)
-            if debug_results and any(r.get("matched") for r in debug_results):
-                # We matched patterns but didn't extract properly
-                matched_fields = [r["field"] for r in debug_results if r.get("matched")]
-                log_event("matched_but_not_extracted", fields=matched_fields)
-                
-                # Try to extract using the first matched field
-                if matched_fields:
-                    field = matched_fields[0]
-                    mapped_field = FIELD_MAPPING.get(field, field)
-                    # If this is a list field, extract the value from groups
-                    if mapped_field in LIST_FIELDS:
-                        for match in debug_results:
-                            if match.get("field") == field and match.get("groups"):
-                                value = match["groups"][0]
-                                if mapped_field == "activities":
-                                    extracted = {mapped_field: [value]}
-                                elif mapped_field == "tools":
-                                    extracted = {mapped_field: [{"item": value}]}
-                                elif mapped_field == "companies":
-                                    extracted = {mapped_field: [{"name": value}]}
-                                elif mapped_field == "services":
-                                    extracted = {mapped_field: [{"task": value}]}
-                                elif mapped_field == "issues":
-                                    extracted = {mapped_field: [{"description": value}]}
-                                break
-
-        if "issues" in extracted:
-            # Process issues
-            session["command_history"].append(session["structured_data"].copy())
-            session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
-            session["structured_data"] = enrich_date(session["structured_data"])
-            save_session(session_data)
-            summary = summarize_report(session["structured_data"])
-            send_message(chat_id, f"✅ Added issue to your report.\n\n{summary}")
-            return "ok", 200
-
-        if "companies" in extracted:
-            # Process companies
-            session["command_history"].append(session["structured_data"].copy())
-            session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
-            session["structured_data"] = enrich_date(session["structured_data"])
-            save_session(session_data)
-            summary = summarize_report(session["structured_data"])
-            send_message(chat_id, f"✅ Added company to your report.\n\n{summary}")
-            return "ok", 200
-
-        if "delete" in extracted:
-            # Process deletions
-            session["command_history"].append(session["structured_data"].copy())
-            session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
-            session["structured_data"] = enrich_date(session["structured_data"])
-            save_session(session_data)
-            summary = summarize_report(session["structured_data"])
-            send_message(chat_id, f"✅ Deleted information from your report.\n\n{summary}")
-            return "ok", 200
-            
-        # Handle error from field extraction
-        if "error" in extracted:
-            send_message(chat_id, f"⚠️ Error processing your request: {extracted['error']}")
-            return "ok", 200
-            
-        # Skip empty inputs
-        if not extracted:
-            # If this looks like a free-form report, provide more helpful feedback
-            if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
-                # Get key information from the report to confirm what was heard
-                key_words = []
-                
-                # Try to extract site name
-                site_match = re.search(r'\b(?:site|project)\s+([a-zA-Z0-9\s]+?)(?:,|\.|$)', text, re.IGNORECASE)
-                if site_match:
-                    key_words.append(f"Site: {site_match.group(1).strip()}")
-                    
-                # Try to extract company names
-                companies_match = re.search(r'\b(?:companies|company)[:\s]+([^,.]+)', text, re.IGNORECASE)
-                if companies_match:
-                    key_words.append(f"Companies: {companies_match.group(1).strip()}")
-                
-                # Try to extract some people
-                people_match = re.search(r'\b(?:team included|people|persons)[:\s]+([^,.]+)', text, re.IGNORECASE)
-                if people_match:
-                    key_words.append(f"People: {people_match.group(1).strip()}")
-                
-                if key_words:
-                    message = "I heard your report including:\n" + "\n".join(key_words) + "\n\nPlease enter information for one category at a time, like:\n- site Riverside Heights\n- people Anna, Thomas, Maria\n- companies Apex Build, Roof Masters"
-                else:
-                    message = "I heard your report but couldn't extract specific information. Please try entering one category at a time, for example:\n- site Riverside Heights\n- segment 10B\n- companies Apex Build, Roof Masters"
-                
-                send_message(chat_id, message)
-            else:
-                # Add more diagnostics about why the command wasn't understood
-                debug_results = debug_command_matching(text)
-                matched_fields = [r["field"] for r in debug_results if r.get("matched")]
-                if matched_fields:
-                    send_message(chat_id, f"I recognized {', '.join(matched_fields)} but couldn't process the command. Please try rephrasing.")
-                else:
-                    send_message(chat_id, "I didn't understand that command. Type 'help' for assistance.")
-            return "ok", 200
-        
-        # Save current state for undo
-        session["command_history"].append(session["structured_data"].copy())
-        
-        # Update context tracking for references
-        context = session.get("context", {
-            "last_mentioned_person": None,
-            "last_mentioned_item": None,
-            "last_field": None,
-        })
-        
-        # Track mentioned people
-        if "people" in extracted and extracted["people"]:
-            context["last_mentioned_person"] = extracted["people"][0]
-            context["last_field"] = "people"
-        elif "roles" in extracted and extracted["roles"]:
-            for role in extracted["roles"]:
-                if isinstance(role, dict) and "name" in role:
-                    context["last_mentioned_person"] = role["name"]
-                    context["last_field"] = "roles"
-                    break
-        
-        # Track mentioned items
-        if "issues" in extracted and extracted["issues"]:
-            for issue in extracted["issues"]:
-                if isinstance(issue, dict) and "description" in issue:
-                    context["last_mentioned_item"] = issue["description"]
-                    context["last_field"] = "issues"
-                    break
-        elif "activities" in extracted and extracted["activities"]:
-            context["last_mentioned_item"] = extracted["activities"][0]
-            context["last_field"] = "activities"
-        elif "tools" in extracted and extracted["tools"]:
-            for tool in extracted["tools"]:
-                if isinstance(tool, dict) and "item" in tool:
-                    context["last_mentioned_item"] = tool["item"]
-                    context["last_field"] = "tools"
-                    break
-        elif "services" in extracted and extracted["services"]:
-            for service in extracted["services"]:
-                if isinstance(service, dict) and "task" in service:
-                    context["last_mentioned_item"] = service["task"]
-                    context["last_field"] = "services"
-                    break
-        
-        session["context"] = context
-        
-        # Merge the extracted data with existing data
-        session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
-        
-        # Make sure date field is properly set
-        session["structured_data"] = enrich_date(session["structured_data"])
-        
-        # Save session data
-        save_session(session_data)
-        
-        # Provide feedback to user
-        changed_fields = [field for field in extracted.keys() 
-                         if field not in ["help", "reset", "undo", "status", "export_pdf", 
-                                         "summary", "detailed", "undo_last", "error",
-                                         "sharepoint_export", "sharepoint_status"]]
-                
-        if changed_fields:
-            # Prepare a confirmation message based on what was changed
-            if "delete" in extracted or any(field.endswith("delete") for field in extracted.keys()):
-                message = "✅ Deleted information from your report."
-            elif "correct" in extracted:
-                message = "✅ Corrected information in your report."
-            elif "context_add" in extracted:
-                message = "✅ Added information using context."
-            else:
-                message = "✅ Added information to your report."
-
-            # Check for potentially missed fields in free-form reports
-            if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
-                # List of key fields users often mention in reports
-                expected_fields = ["site_name", "segment", "category", "companies", "people", 
-                                "tools", "services", "activities", "issues", 
-                                "time", "weather", "impression"]
-                
-                # Only inform about fields that might be in the text but weren't extracted
-                likely_missed = []
-                for field in expected_fields:
-                    field_terms = {
-                        "companies": r'\b(?:company|companies|contractor)\b',
-                        "services": r'\b(?:service|services|task|tasks)\b',
-                        "tools": r'\b(?:tool|tools|equipment|gear)\b', 
-                        "activities": r'\b(?:activities|activity|work|task|tasks|job|jobs)\b',
-                        "issues": r'\b(?:issue|issues|problem|problems|delay|delays)\b',
-                        "time": r'\b(?:time|duration|hours)\b',
-                        "weather": r'\b(?:weather|conditions|sunny|rain|cloudy)\b',
-                        "impression": r'\b(?:impression|assessment|progress|overview)\b'
-                    }
-                    
-                    search_term = field_terms.get(field, r'\b' + field + r'\b')
-                    
-                    # If the term appears in the text but wasn't extracted, add to likely missed
-                    if (re.search(search_term, text, re.IGNORECASE) and 
-                        field not in extracted and 
-                        (field not in session["structured_data"] or 
-                        (isinstance(session["structured_data"].get(field), list) and not session["structured_data"][field]) or
-                        (not isinstance(session["structured_data"].get(field), list) and not session["structured_data"].get(field)))):
-                        likely_missed.append(field)
-                
-                if likely_missed:
-                    message += f"\n\n⚠️ I may have missed information about: {', '.join(likely_missed)}. Please add these details if needed (e.g., 'companies: AXIS Construction')."
-
-            # Add a summary of the report
-            summary = summarize_report(session["structured_data"])
-            send_message(chat_id, f"{message}\n\n{summary}")
-
-        else:
-            send_message(chat_id, "⚠️ No changes were made to your report.")
-        
-        return "ok", 200
         
     except Exception as e:
         log_event("handle_command_error", chat_id=chat_id, text=text, error=str(e))
