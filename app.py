@@ -363,16 +363,33 @@ def extract_with_nlp(text: str) -> Tuple[Dict[str, Any], float]:
             
         # Call OpenAI API with the enhanced construction-focused prompt
         log_event("nlp_extraction_start", text_length=len(text))
-        response = client.chat.completions.create(
-            model=CONFIG["NLP_MODEL"],
-            messages=[
-                {"role": "system", "content": NLP_EXTRACTION_PROMPT},
-                {"role": "user", "content": text}
-            ],
-            temperature=0.1,  # Lower temperature for more consistent extraction
-            max_tokens=CONFIG["NLP_MAX_TOKENS"],
-            response_format={"type": "json_object"} if "gpt-4" in CONFIG["NLP_MODEL"] else None
-        )
+        try:
+            # First try with JSON format for newer models
+            response = client.chat.completions.create(
+                model=CONFIG["NLP_MODEL"],
+                messages=[
+                    {"role": "system", "content": NLP_EXTRACTION_PROMPT},
+                    {"role": "user", "content": text}
+                ],
+                temperature=0.1,  # Lower temperature for more consistent extraction
+                max_tokens=CONFIG["NLP_MAX_TOKENS"],
+                response_format={"type": "json_object"}
+            )
+        except Exception as e:
+            # If the model doesn't support JSON format, try without it
+            if "response_format" in str(e):
+                log_event("nlp_extraction_format_error", error=str(e))
+                response = client.chat.completions.create(
+                    model=CONFIG["NLP_MODEL"],
+                    messages=[
+                        {"role": "system", "content": NLP_EXTRACTION_PROMPT + "\nRespond ONLY with valid JSON."},
+                        {"role": "user", "content": text}
+                    ],
+                    temperature=0.1,
+                    max_tokens=CONFIG["NLP_MAX_TOKENS"]
+                )
+            else:
+                raise
         content = response.choices[0].message.content.strip()
         log_event("nlp_extraction_completed", response_length=len(content))
         
@@ -3906,10 +3923,10 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         
         # Handle confirmation for reset command
         if session.get("awaiting_reset_confirmation", False):
-            if re.match(FIELD_PATTERNS["yes_confirm"], text, re.IGNORECASE):
+            if text.lower() in ["yes", "y", "yeah", "yep", "sure", "ok", "okay"] or re.match(FIELD_PATTERNS["yes_confirm"], text, re.IGNORECASE):
                 COMMAND_HANDLERS["reset"](chat_id, session)
                 return "ok", 200
-            elif re.match(FIELD_PATTERNS["no_confirm"], text, re.IGNORECASE):
+            elif text.lower() in ["no", "n", "nope", "nah"] or re.match(FIELD_PATTERNS["no_confirm"], text, re.IGNORECASE):
                 session["awaiting_reset_confirmation"] = False
                 save_session(session_data)
                 send_message(chat_id, "Reset cancelled. Your report was not changed.")
