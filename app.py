@@ -218,7 +218,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
         log_event("fields_extracted", result_fields=len(result))
         return result
     except Exception as e:
-        log_event("extract_fields_error", input=text[:100], error=str(e))
+        log_event("extract_fields_error", input=text[:100], error=str(e), traceback=traceback.format_exc())
         print(f"ERROR in extract_fields: {str(e)}")
         return {"error": str(e)}
     
@@ -237,8 +237,7 @@ def summarize_report(data: Dict[str, Any]) -> str:
 # Define is_free_form_report function (stub version)
 def is_free_form_report(text: str) -> bool:
     """Detect if the text looks like a free-form report"""
-    print("WARNING: Using stub is_free_form_report function - real function not loaded!")
-    return False
+    return len(text) > CONFIG["FREEFORM_MIN_LENGTH"]
 
 # Define send_message function (stub version)
 def send_message(chat_id: str, text: str) -> None:
@@ -1553,8 +1552,8 @@ def validate_patterns() -> None:
 validate_patterns()
 
 
-def debug_command_matching(text):
-    """Debug function to test all regex patterns against input"""
+def debug_command_matching(text: str, chat_id: str) -> List[Dict[str, Any]]:
+    """Debug command matching to identify why a command wasn't understood"""
     results = []
     for field, pattern in FIELD_PATTERNS.items():
         try:
@@ -1563,15 +1562,34 @@ def debug_command_matching(text):
                 results.append({
                     "field": field,
                     "matched": True,
-                    "groups": [g for g in match.groups() if g is not None]
+                    "groups": [g for g in match.groups() if g is not None],
+                    "pattern": str(pattern)
+                })
+            else:
+                results.append({
+                    "field": field,
+                    "matched": False,
+                    "groups": [],
+                    "pattern": str(pattern)
                 })
         except Exception as e:
             results.append({
                 "field": field,
-                "error": str(e)
+                "matched": False,
+                "error": str(e),
+                "pattern": str(pattern),
+                "traceback": traceback.format_exc()
             })
     
     log_event("debug_command_matching", text=text, matches=results)
+    matched_fields = [r["field"] for r in results if r.get("matched", False)]
+    if matched_fields:
+        log_event("matched_but_failed_extraction", fields=matched_fields)
+        try:
+            send_message(chat_id, f"I recognized patterns for {', '.join(matched_fields)} but couldn't process the input. Please clarify (e.g., 'add {matched_fields[0]} <value>').")
+        except Exception as e:
+            log_event("debug_send_message_error", chat_id=chat_id, error=str(e))
+    
     return results
 
 def string_similarity(a: str, b: str) -> float:
@@ -2952,11 +2970,8 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         # Handle spelling correction confirmations
         if session.get("awaiting_spelling_correction", {}).get("active", False):
             if re.match(FIELD_PATTERNS["yes_confirm"], text, re.IGNORECASE):
-                # Ask for the correct spelling
                 field = session["awaiting_spelling_correction"]["field"]
                 old_value = session["awaiting_spelling_correction"]["old_value"]
-                
-                # Update the awaiting state
                 session["awaiting_spelling_correction"] = {
                     "active": True,
                     "field": field,
@@ -2964,33 +2979,22 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     "awaiting_new_value": True
                 }
                 save_session(session_data)
-                
                 send_message(chat_id, f"Please enter the correct spelling for '{old_value}' in {field}:")
                 return "ok", 200
             elif re.match(FIELD_PATTERNS["no_confirm"], text, re.IGNORECASE):
-                # Cancel the correction
                 session["awaiting_spelling_correction"] = {"active": False, "field": None, "old_value": None}
                 save_session(session_data)
                 send_message(chat_id, "Correction cancelled.")
                 return "ok", 200
             else:
-                # Assume the user provided the corrected value
                 field = session["awaiting_spelling_correction"]["field"]
                 old_value = session["awaiting_spelling_correction"]["old_value"]
                 new_value = text.strip()
-                
-                # Reset the awaiting state
                 session["awaiting_spelling_correction"] = {"active": False, "field": None, "old_value": None}
-                
-                # Create a correction command
                 extracted = {"correct": [{"field": field, "old": old_value, "new": new_value}]}
-                
-                # Apply the correction
                 session["command_history"].append(session["structured_data"].copy())
                 session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
                 save_session(session_data)
-                
-                # Provide feedback
                 summary = summarize_report(session["structured_data"])
                 send_message(chat_id, f"✅ Corrected {field} from '{old_value}' to '{new_value}'.\n\n{summary}")
                 return "ok", 200
@@ -3001,18 +3005,31 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             COMMAND_HANDLERS[clean_text](chat_id, session)
             return "ok", 200
         
-        # If this looks like a free-form report and we have free-form extraction enabled,
-        # notify the user that we're processing their report
+        # Notify user for free-form reports
         if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
             send_message(chat_id, "I noticed you sent a detailed report. I'll try to extract all the information from it...")
         
         # Extract fields from input
         extracted = extract_fields(text)
-                
-        # Handle special commands
-        # Process extracted fields
-        if extracted:
-            # Handle special commands
+        
+        # Handle empty or invalid extractions
+        if not extracted or "error" in extracted:
+            debug_results = debug_command_matching(text, chat_id)
+            if debug_results:
+                matched_fields = [r["field"] for r in debug_results if r["matched"]]
+                if matched_fields:
+                    send_message(chat_id, f"I recognized patterns for {', '.join(matched_fields)} but couldn't process the input. Please clarify (e.g., 'add {matched_fields[0]} <value>').")
+                else:
+                    send_message(chat_id, "I didn't understand that command. Debug info: no patterns matched. Type 'help' for assistance.")
+            else:
+                send_message(chat_id, "I didn't understand that. Type 'help' for assistance or try saying one category at a time.")
+            return "ok", 200
+        
+        # Process special commands
+        if any(key in extracted for key in ["reset", "undo", "status", "help", "summary", 
+                                          "detailed", "export_pdf", "undo_last",
+                                          "sharepoint", "sharepoint_status",
+                                          "yes_confirm", "no_confirm", "spelling_correction"]):
             if "reset" in extracted:
                 handle_reset(chat_id, session)
             elif "undo" in extracted:
@@ -3050,63 +3067,63 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                 }
                 save_session(session_data)
                 send_message(chat_id, f"Please enter the correct spelling for '{old_value}' in {field}:")
-            else:
-                # Handle field updates
-                session["command_history"].append(session["structured_data"].copy())
-                session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
-                session["structured_data"] = enrich_date(session["structured_data"])
-                save_session(session_data)
-
-                # Prepare feedback
-                changed_fields = [field for field in extracted.keys() 
-                                if field not in ["help", "reset", "undo", "status", "export_pdf", 
-                                                "summary", "detailed", "undo_last", "error",
-                                                "sharepoint", "sharepoint_status",
-                                                "yes_confirm", "no_confirm", "spelling_correction"]]
-                
-                if changed_fields:
-                    message = "✅ Updated report."
-                    if "delete" in extracted:
-                        message = "✅ Deleted information from your report."
-                    elif "delete_entire" in extracted:
-                        message = "✅ Cleared entire field from your report."
-                    elif "correct" in extracted:
-                        message = "✅ Corrected information in your report."
-
-                    # Check for missed fields in free-form reports
-                    if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
-                        expected_fields = ["site_name", "segment", "category", "companies", "people", 
-                                        "tools", "services", "activities", "issues", "time", "weather", 
-                                        "impression", "comments"]
-                        likely_missed = []
-                        field_terms = {
-                            "companies": r'\b(?:company|companies|contractor)\b',
-                            "services": r'\b(?:service|services|task|tasks)\b',
-                            "tools": r'\b(?:tool|tools|equipment|gear)\b', 
-                            "activities": r'\b(?:activities|activity|work|task|tasks|job|jobs)\b',
-                            "issues": r'\b(?:issue|issues|problem|problems|delay|delays|spotted|crack)\b',
-                            "time": r'\b(?:time|duration|hours)\b',
-                            "weather": r'\b(?:weather|conditions|sunny|rain|cloudy)\b',
-                            "impression": r'\b(?:impression|assessment|progress|overview|on\s+track)\b',
-                            "comments": r'\b(?:comments|notes|thanks)\b'
-                        }
-                        for field in expected_fields:
-                            search_term = field_terms.get(field, r'\b' + field + r'\b')
-                            if (re.search(search_term, text, re.IGNORECASE) and 
-                                field not in extracted and 
-                                (field not in session["structured_data"] or 
-                                (isinstance(session["structured_data"].get(field), list) and not session["structured_data"][field]) or
-                                (not isinstance(session["structured_data"].get(field), list) and not session["structured_data"].get(field)))):
-                                likely_missed.append(field)
-                        if likely_missed:
-                            message += f"\n\n⚠️ I may have missed information about: {', '.join(likely_missed)}. Please add these details if needed (e.g., 'companies: AXIS Construction')."
-
-                    summary = summarize_report(session["structured_data"])
-                    send_message(chat_id, f"{message}\n\n{summary}")
-                else:
-                    send_message(chat_id, "⚠️ No changes were made to your report.")
-
             return "ok", 200
+
+        # Handle field updates
+        session["command_history"].append(session["structured_data"].copy())
+        session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
+        session["structured_data"] = enrich_date(session["structured_data"])
+        save_session(session_data)
+
+        # Prepare feedback
+        changed_fields = [field for field in extracted.keys() 
+                         if field not in ["help", "reset", "undo", "status", "export_pdf", 
+                                         "summary", "detailed", "undo_last", "error",
+                                         "sharepoint", "sharepoint_status",
+                                         "yes_confirm", "no_confirm", "spelling_correction"]]
+        
+        if changed_fields:
+            message = "✅ Updated report."
+            if "delete" in extracted:
+                message = "✅ Deleted information from your report."
+            elif "delete_entire" in extracted:
+                message = "✅ Cleared entire field from your report."
+            elif "correct" in extracted:
+                message = "✅ Corrected information in your report."
+
+            if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
+                expected_fields = ["site_name", "segment", "category", "companies", "people", 
+                                  "tools", "services", "activities", "issues", "time", "weather", 
+                                  "impression", "comments"]
+                likely_missed = []
+                field_terms = {
+                    "companies": r'\b(?:company|companies|contractor)\b',
+                    "services": r'\b(?:service|services|task|tasks)\b',
+                    "tools": r'\b(?:tool|tools|equipment|gear)\b', 
+                    "activities": r'\b(?:activities|activity|work|task|tasks|job|jobs)\b',
+                    "issues": r'\b(?:issue|issues|problem|problems|delay|delays|spotted|crack)\b',
+                    "time": r'\b(?:time|duration|hours)\b',
+                    "weather": r'\b(?:weather|conditions|sunny|rain|cloudy)\b',
+                    "impression": r'\b(?:impression|assessment|progress|overview|on\sỗtrack)\b',
+                    "comments": r'\b(?:comments|notes|thanks)\b'
+                }
+                for field in expected_fields:
+                    search_term = field_terms.get(field, r'\b' + field + r'\b')
+                    if (re.search(search_term, text, re.IGNORECASE) and 
+                        field not in extracted and 
+                        (field not in session["structured_data"] or 
+                        (isinstance(session["structured_data"].get(field), list) and not session["structured_data"][field]) or
+                        (not isinstance(session["structured_data"].get(field), list) and not session["structured_data"].get(field)))):
+                        likely_missed.append(field)
+                if likely_missed:
+                    message += f"\n\n⚠️ I may have missed information about: {', '.join(likely_missed)}. Please add these details if needed (e.g., 'companies: AXIS Construction')."
+
+            summary = summarize_report(session["structured_data"])
+            send_message(chat_id, f"{message}\n\n{summary}")
+        else:
+            send_message(chat_id, "⚠️ No changes were made to your report.")
+
+        return "ok", 200
         
     except Exception as e:
         log_event("handle_command_error", chat_id=chat_id, text=text, error=str(e))
@@ -3123,16 +3140,22 @@ def webhook() -> tuple[str, int]:
     """Handle incoming webhook from Telegram"""
     try:
         data = request.get_json()
+        if not data:
+            log_event("webhook_invalid_data", error="No JSON data received")
+            return "error", 400
+
         log_event("webhook_received", data=data)
         
         # Ignore messages without a message object
         if "message" not in data:
+            log_event("webhook_no_message", data=data)
             return "ok", 200
             
         message = data["message"]
         
         # Ignore messages without a chat
         if "chat" not in message:
+            log_event("webhook_no_chat", message=message)
             return "ok", 200
             
         chat_id = str(message["chat"]["id"])
@@ -3166,16 +3189,12 @@ def webhook() -> tuple[str, int]:
             }
             save_session(session_data)
         
-        # Handle voice messages with improved error handling
+        # Handle voice messages
         if "voice" in message:
             try:
-                # Extract file ID for the voice
                 file_id = message["voice"]["file_id"]
-                
-                # Transcribe voice to text
                 text, confidence = transcribe_voice(file_id)
                 
-                # Check if text is empty or confidence is too low
                 if not text or (confidence < 0.5 and not any(re.match(pattern, text, re.IGNORECASE) for pattern in [
                     r'^(?:site|segment|category|companies|people|tools|services|activities|issues|time|weather|impression)\b',
                     r'^(?:kategorie|baustelle|unternehmen|firma)\b'
@@ -3189,11 +3208,9 @@ def webhook() -> tuple[str, int]:
                     send_message(chat_id, error_message)
                     return "ok", 200
                 
-                # For free-form reports, notify the user
                 if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
                     send_message(chat_id, "Processing your detailed report...")
                 
-                # Process transcription directly
                 log_event("processing_voice_command", text=text, confidence=confidence)
                 return handle_command(chat_id, text, session_data[chat_id])
                 
@@ -3201,7 +3218,6 @@ def webhook() -> tuple[str, int]:
                 log_event("voice_processing_error", error=str(e))
                 send_message(chat_id, "⚠️ There was an error processing your voice message. Please try again or type your message.")
                 return "ok", 200
-
     
         # Handle text messages
         if "text" in message:
@@ -3210,7 +3226,6 @@ def webhook() -> tuple[str, int]:
             # Handle reset confirmation
             if session_data[chat_id].get("awaiting_reset_confirmation", False):
                 if re.match(FIELD_PATTERNS["yes_confirm"], text, re.IGNORECASE):
-                    # User confirms reset
                     session_data[chat_id]["awaiting_reset_confirmation"] = False
                     session_data[chat_id]["structured_data"] = blank_report()
                     session_data[chat_id]["command_history"].clear()
@@ -3225,7 +3240,6 @@ def webhook() -> tuple[str, int]:
                     send_message(chat_id, f"**Report reset**\n\n{summary}\n\nSpeak or type your first category (e.g., 'add site Downtown Project').")
                     return "ok", 200
                 elif re.match(FIELD_PATTERNS["no_confirm"], text, re.IGNORECASE):
-                    # User cancels reset
                     session_data[chat_id]["awaiting_reset_confirmation"] = False
                     save_session(session_data)
                     send_message(chat_id, "Reset cancelled. Your report was not changed.")
@@ -3237,11 +3251,7 @@ def webhook() -> tuple[str, int]:
                 old_value = session_data[chat_id]["awaiting_spelling_correction"]["old_value"]
                 new_value = text.strip()
                 
-                # Reset the awaiting state
                 session_data[chat_id]["awaiting_spelling_correction"] = {"active": False, "field": None, "old_value": None}
-                save_session(session_data)
-                
-                # Create and apply the correction
                 extracted = {"correct": [{"field": field, "old": old_value, "new": new_value}]}
                 session_data[chat_id]["command_history"].append(session_data[chat_id]["structured_data"].copy())
                 session_data[chat_id]["structured_data"] = merge_data(
@@ -3264,6 +3274,13 @@ def webhook() -> tuple[str, int]:
         
     except Exception as e:
         log_event("webhook_error", error=str(e))
+        try:
+            if 'chat_id' in locals():
+                send_message(chat_id, "⚠️ An error occurred while processing your request. Please try again.")
+            else:
+                log_event("webhook_no_chat_id", error="Cannot send error message due to missing chat_id")
+        except Exception as send_error:
+            log_event("webhook_send_error", error=str(send_error))
         return "error", 500
 
 # Health check endpoint
