@@ -3957,6 +3957,22 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
             send_message(chat_id, "I noticed you sent a detailed report. I'll try to extract all the information from it...")
         
+        # For free-form reports, make sure to use NLP extraction
+        if CONFIG["ENABLE_NLP_EXTRACTION"]:
+            nlp_data, confidence = extract_with_nlp(text)
+            if confidence >= CONFIG["NLP_EXTRACTION_CONFIDENCE_THRESHOLD"]:
+                log_event("free_form_nlp_extraction", confidence=confidence)
+                session_data[chat_id]["command_history"].append(session_data[chat_id]["structured_data"].copy())
+                session_data[chat_id]["structured_data"] = merge_data(
+                    session_data[chat_id]["structured_data"], 
+                    nlp_data, 
+                    chat_id
+                )
+                save_session(session_data)
+                summary = summarize_report(session_data[chat_id]["structured_data"])
+                send_message(chat_id, f"✅ I've extracted the following information from your report:\n\n{summary}")
+                return "ok", 200
+
         # Extract fields from input
         extracted = extract_fields(text)
         
@@ -4160,6 +4176,8 @@ def webhook() -> tuple[str, int]:
                 log_event("processing_voice_command", text=text, confidence=confidence)
                 return handle_command(chat_id, text, session_data[chat_id])
                 
+                
+
             except Exception as e:
                 log_event("voice_processing_error", error=str(e))
                 send_message(chat_id, "⚠️ There was an error processing your voice message. Please try again or type your message.")
