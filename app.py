@@ -7,6 +7,7 @@ import re
 import requests
 import logging
 import signal
+import traceback
 from datetime import datetime
 from time import time
 from typing import Dict, Any, List, Optional, Callable, Tuple, Set, Union
@@ -14,6 +15,7 @@ from flask import Flask, request, jsonify
 from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from difflib import SequenceMatcher
+from collections import defaultdict
 from collections import deque
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
@@ -265,6 +267,7 @@ FIELD_PATTERNS = {}
 
 
 # --- Configuration ---
+# --- Configuration - Add NLP extraction settings ---
 CONFIG = {
     "SESSION_FILE": config("SESSION_FILE", default="/opt/render/project/src/session_data.json"),
     "PAUSE_THRESHOLD": config("PAUSE_THRESHOLD", default=300, cast=int),
@@ -284,8 +287,524 @@ CONFIG = {
         "PASSWORD": config("SHAREPOINT_PASSWORD", default=""),
         "LIST_NAME": config("SHAREPOINT_LIST_NAME", default="ConstructionReports"),
         "REPORTS_FOLDER": config("SHAREPOINT_REPORTS_FOLDER", default="Shared Documents/ConstructionReports"),
-    }
+    },
+    # New NLP extraction settings
+    "ENABLE_NLP_EXTRACTION": config("ENABLE_NLP_EXTRACTION", default=True, cast=bool),
+    "NLP_MODEL": config("NLP_MODEL", default="gpt-4", cast=str),
+    "NLP_EXTRACTION_CONFIDENCE_THRESHOLD": config("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", default=0.7, cast=float),
+    "NLP_MAX_TOKENS": config("NLP_MAX_TOKENS", default=2000, cast=int),
+    "NLP_FALLBACK_TO_REGEX": config("NLP_FALLBACK_TO_REGEX", default=True, cast=bool),
+    "NLP_COMMAND_PATTERN_WEIGHT": config("NLP_COMMAND_PATTERN_WEIGHT", default=0.7, cast=float),
+    "NLP_FREE_FORM_WEIGHT": config("NLP_FREE_FORM_WEIGHT", default=0.3, cast=float),
 }
+
+# --- Enhanced GPT Prompt for Construction Site Reports ---
+NLP_EXTRACTION_PROMPT = """
+You are a specialized AI for extracting structured data from construction site reports. 
+You understand specific construction terminology, abbreviations, and common misspellings.
+
+CRITICAL: You're processing input from a construction site worker who might be using voice recognition in a noisy environment, 
+so account for audio transcription errors and construction-specific terminology.
+
+Extract information into these fields (only include fields that are explicitly mentioned):
+
+- site_name: string - physical location or project name (e.g., "Downtown Project", "Building 7")
+- segment: string - specific section or area within the site (e.g., "5", "North Wing", "Foundation")
+- category: string - classification of work or report (e.g., "Bestand", "Safety", "Progress", "Mängelerfassung")
+- companies: list of objects with company names [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}]
+- people: list of strings with names of individuals on site ["Anna Keller", "John Smith"]
+- roles: list of objects associating people with roles [{"name": "Anna Keller", "role": "Supervisor"}]
+- tools: list of objects with equipment/tools [{"item": "mobile crane"}, {"item": "welding equipment"}]
+- services: list of objects with services provided [{"task": "electrical wiring"}, {"task": "HVAC installation"}]
+- activities: list of strings describing work performed ["laying foundations", "setting up scaffolding"]
+- issues: list of objects with problems and their attributes [{"description": "power outage at 10 AM", "has_photo": false}]
+- time: string - duration or time period (e.g., "morning", "full day", "8 hours")
+- weather: string - weather conditions (e.g., "cloudy with intermittent rain")
+- impression: string - overall assessment (e.g., "productive despite setbacks")
+- comments: string - additional notes or observations
+- date: string - in dd-mm-yyyy format
+
+Special commands to detect (return these as single-field objects, do not combine with other fields):
+- reset: boolean (true) - if input contains commands like "new", "new report", or "reset"
+- yes_confirm: boolean (true) - for responses like "yes", "yeah", "okay", "sure", "confirm"
+- no_confirm: boolean (true) - for responses like "no", "nope", "nah", "negative"
+- summary: boolean (true) - for requests like "summarize", "summary", "short report", "overview"
+- detailed: boolean (true) - for requests like "detailed report", "full report", "comprehensive report"
+- export_pdf: boolean (true) - for requests like "export", "export pdf", "generate report"
+- undo_last: boolean (true) - for commands like "undo last", "undo last change"
+- sharepoint_export: boolean (true) - for requests like "export to sharepoint", "sync to sharepoint"
+- sharepoint_status: boolean (true) - for requests like "sharepoint status", "connection status"
+- help: string - extract specific help topic if mentioned after "help"
+
+Deletion commands (parse these accurately):
+- If input is "delete X from Y" or "remove X from Y": return {"delete": {"target": "X", "field": "Y"}}
+- If input is "delete all X" or "clear X": return {"X": {"delete": true}} where X is the field name
+
+Correction commands:
+- If input is "correct X in Y to Z" or similar: return {"correct": [{"field": "Y", "old": "X", "new": "Z"}]}
+
+For voice inputs, handle common transcription errors like:
+- "site vs. sight", "weather vs. whether", "crews vs. cruise", "concrete vs. concert", "form vs. foam"
+- Misheard numbers: "to buy for" → "2x4", "for buy ate" → "4x8"
+- Run-together words: "concretework" → "concrete work", "siteinspection" → "site inspection"
+
+ONLY return a valid JSON object with the extracted fields, nothing else.
+"""
+
+# --- NLP-enhanced Field Extraction Functions ---
+
+def extract_with_nlp(text: str) -> Tuple[Dict[str, Any], float]:
+    """Use NLP to extract structured data from text with confidence score"""
+    try:
+        # Skip NLP for obvious command patterns to save time and resources
+        if re.match(r'^(?:yes|no|help|new|reset|undo|export|summarize|detailed)\b', text.lower()):
+            log_event("nlp_extraction_skipped", reason="obvious_command")
+            return {}, 0.0
+            
+        # Call OpenAI API with the enhanced construction-focused prompt
+        log_event("nlp_extraction_start", text_length=len(text))
+        response = client.chat.completions.create(
+            model=CONFIG["NLP_MODEL"],
+            messages=[
+                {"role": "system", "content": NLP_EXTRACTION_PROMPT},
+                {"role": "user", "content": text}
+            ],
+            temperature=0.1,  # Lower temperature for more consistent extraction
+            max_tokens=CONFIG["NLP_MAX_TOKENS"],
+            response_format={"type": "json_object"} if "gpt-4" in CONFIG["NLP_MODEL"] else None
+        )
+        content = response.choices[0].message.content.strip()
+        log_event("nlp_extraction_completed", response_length=len(content))
+        
+        # Extract JSON from the response
+        try:
+            # First check if the entire response is JSON
+            data = json.loads(content)
+            
+            # Post-process the extracted data
+            data = standardize_nlp_output(data)
+            
+            # Calculate confidence based on fields present and structure
+            confidence = calculate_extraction_confidence(data, text)
+            
+            return data, confidence
+            
+        except json.JSONDecodeError:
+            # Try to extract JSON from the response if not pure JSON
+            json_pattern = r'```(?:json)?\s*(.*?)```'
+            json_match = re.search(json_pattern, content, re.DOTALL)
+            
+            if json_match:
+                json_str = json_match.group(1)
+                try:
+                    data = json.loads(json_str)
+                    data = standardize_nlp_output(data)
+                    confidence = calculate_extraction_confidence(data, text) * 0.9  # Slight penalty for not being pure JSON
+                    return data, confidence
+                except json.JSONDecodeError:
+                    log_event("nlp_json_parse_error", error="Extracted JSON invalid")
+            
+            log_event("nlp_response_parse_error", content_sample=content[:100])
+            return {}, 0.0
+            
+    except Exception as e:
+        log_event("nlp_extraction_error", error=str(e), traceback=traceback.format_exc())
+        return {}, 0.0
+
+def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure NLP extracted data conforms to expected structure"""
+    result = {}
+    
+    # Handle simple fields
+    for field in SCALAR_FIELDS:
+        if field in data:
+            if data[field] is None:
+                result[field] = ""
+            else:
+                result[field] = str(data[field])
+    
+    # Handle special command fields (return as is)
+    for cmd in ["reset", "yes_confirm", "no_confirm", "summary", "detailed", 
+                "export_pdf", "undo_last", "sharepoint_export", "sharepoint_status"]:
+        if cmd in data and data[cmd]:
+            result[cmd] = True
+    
+    # Handle help command
+    if "help" in data:
+        result["help"] = data["help"]
+    
+    # Handle deletion commands
+    if "delete" in data:
+        result["delete"] = data["delete"]
+    
+    # Handle field deletion commands
+    for field in LIST_FIELDS:
+        if field in data and isinstance(data[field], dict) and "delete" in data[field]:
+            result[field] = {"delete": True}
+    
+    # Handle correction commands
+    if "correct" in data:
+        result["correct"] = data["correct"]
+    
+    # Handle structured list fields
+    # Companies
+    if "companies" in data:
+        if isinstance(data["companies"], list):
+            result["companies"] = []
+            for company in data["companies"]:
+                if isinstance(company, dict) and "name" in company:
+                    result["companies"].append({"name": company["name"]})
+                elif isinstance(company, str):
+                    result["companies"].append({"name": company})
+    
+    # People
+    if "people" in data:
+        if isinstance(data["people"], list):
+            result["people"] = []
+            for person in data["people"]:
+                if isinstance(person, str):
+                    result["people"].append(person)
+                elif isinstance(person, dict) and "name" in person:
+                    result["people"].append(person["name"])
+    
+    # Roles
+    if "roles" in data:
+        if isinstance(data["roles"], list):
+            result["roles"] = []
+            for role in data["roles"]:
+                if isinstance(role, dict) and "name" in role and "role" in role:
+                    result["roles"].append({"name": role["name"], "role": role["role"]})
+    
+    # Tools
+    if "tools" in data:
+        if isinstance(data["tools"], list):
+            result["tools"] = []
+            for tool in data["tools"]:
+                if isinstance(tool, dict) and "item" in tool:
+                    result["tools"].append({"item": tool["item"]})
+                elif isinstance(tool, str):
+                    result["tools"].append({"item": tool})
+    
+    # Services
+    if "services" in data:
+        if isinstance(data["services"], list):
+            result["services"] = []
+            for service in data["services"]:
+                if isinstance(service, dict) and "task" in service:
+                    result["services"].append({"task": service["task"]})
+                elif isinstance(service, str):
+                    result["services"].append({"task": service})
+    
+    # Activities
+    if "activities" in data:
+        if isinstance(data["activities"], list):
+            result["activities"] = []
+            for activity in data["activities"]:
+                if isinstance(activity, str):
+                    result["activities"].append(activity)
+    
+    # Issues
+    if "issues" in data:
+        if isinstance(data["issues"], list):
+            result["issues"] = []
+            for issue in data["issues"]:
+                if isinstance(issue, dict) and "description" in issue:
+                    issue_obj = {"description": issue["description"]}
+                    if "has_photo" in issue:
+                        issue_obj["has_photo"] = bool(issue["has_photo"])
+                    else:
+                        # Check for photo reference in description
+                        has_photo = "photo" in issue["description"].lower() or "picture" in issue["description"].lower()
+                        issue_obj["has_photo"] = has_photo
+                    result["issues"].append(issue_obj)
+                elif isinstance(issue, str):
+                    has_photo = "photo" in issue.lower() or "picture" in issue.lower()
+                    result["issues"].append({"description": issue, "has_photo": has_photo})
+    
+    # Handle date field
+    if "date" in data:
+        # Ensure date is in dd-mm-yyyy format
+        date_str = str(data["date"])
+        try:
+            # Try to parse the date in various formats
+            for fmt in ["%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%d.%m.%Y", "%m.%d.%Y"]:
+                try:
+                    date_obj = datetime.strptime(date_str, fmt)
+                    result["date"] = date_obj.strftime("%d-%m-%Y")
+                    break
+                except ValueError:
+                    continue
+        except Exception:
+            # If date parsing fails, use today's date
+            result["date"] = datetime.now().strftime("%d-%m-%Y")
+    
+    return result
+
+def calculate_extraction_confidence(data: Dict[str, Any], original_text: str) -> float:
+    """Calculate confidence score for NLP extraction"""
+    if not data:
+        return 0.0
+    
+    # Base confidence starts at 0.5
+    confidence = 0.5
+    
+    # Check for special commands which should have high confidence
+    if any(key in data for key in ["reset", "yes_confirm", "no_confirm", "summary", 
+                                  "detailed", "export_pdf", "undo_last", 
+                                  "sharepoint_export", "sharepoint_status", "help"]):
+        return 0.95
+    
+    # Check for correction or deletion commands which should have high confidence
+    if "delete" in data or any(field in data and isinstance(data[field], dict) and "delete" in data[field] 
+                               for field in LIST_FIELDS):
+        return 0.9
+    
+    if "correct" in data:
+        return 0.9
+    
+    # Count fields with data
+    field_count = sum(1 for field in SCALAR_FIELDS if field in data and data[field])
+    field_count += sum(1 for field in LIST_FIELDS if field in data and data[field] and 
+                       (isinstance(data[field], list) and len(data[field]) > 0))
+    
+    # Adjust confidence based on field count (more fields = higher confidence)
+    field_factor = min(0.3, 0.05 * field_count)
+    confidence += field_factor
+    
+    # Check for key field matches in original text
+    text_lower = original_text.lower()
+    keyword_matches = 0
+    
+    for field in data:
+        field_keywords = {
+            "site_name": ["site", "project", "location"],
+            "segment": ["segment", "section", "area"],
+            "category": ["category", "type"],
+            "companies": ["company", "companies", "contractors", "firms"],
+            "people": ["people", "persons", "workers", "staff", "crew"],
+            "roles": ["role", "position", "supervisor", "manager", "worker"],
+            "tools": ["tool", "equipment", "machinery", "gear"],
+            "services": ["service", "task", "job"],
+            "activities": ["activity", "activities", "work", "tasks", "progress"],
+            "issues": ["issue", "problem", "delay", "difficulties", "challenge"],
+            "time": ["time", "duration", "hours", "period"],
+            "weather": ["weather", "conditions", "sunny", "cloudy", "rain"],
+            "impression": ["impression", "assessment", "progress", "rating"],
+            "comments": ["comment", "note", "additional", "remark", "observation"]
+        }
+        
+        if field in field_keywords:
+            for keyword in field_keywords[field]:
+                if keyword in text_lower:
+                    keyword_matches += 1
+                    break
+    
+    # Adjust confidence based on keyword matches
+    keyword_factor = min(0.2, 0.02 * keyword_matches)
+    confidence += keyword_factor
+    
+    # Check for common command patterns that might reduce confidence
+    command_patterns = [
+        r'^(?:can you|please|would you|could you)\b',
+        r'^(?:what|who|where|when|why|how)\b.*\?$',
+        r'^(?:tell me|show me|give me)\b'
+    ]
+    
+    if any(re.search(pattern, original_text, re.IGNORECASE) for pattern in command_patterns):
+        confidence -= 0.1
+    
+    # Check for excessive field values that don't match patterns
+    field_value_counts = defaultdict(int)
+    
+    for field in SCALAR_FIELDS:
+        if field in data and data[field]:
+            value = str(data[field]).lower()
+            for keyword in ["what", "where", "who", "tell me", "show me", "how to"]:
+                if keyword in value:
+                    field_value_counts[field] += 1
+    
+    # Reduce confidence for any field values that look like questions
+    confidence -= min(0.2, 0.05 * sum(field_value_counts.values()))
+    
+    # Final confidence score bounded between 0 and 1
+    return max(0.0, min(1.0, confidence))
+
+def hybrid_field_extraction(text: str, chat_id: str = None) -> Dict[str, Any]:
+    """
+    Extract fields using both NLP and regex approaches for maximum accuracy.
+    Uses NLP for complex text and falls back to regex for simpler commands.
+    """
+    try:
+        # 1. First try regex pattern matching for command-like inputs
+        if re.match(r'^(?:add|site|category|segment|people|companies|tools|services|activities|issues|weather|time|impression|reset|new|yes|no|export|summary|detailed|help)\b', text.lower()):
+            # For command-like text, use regex extraction first
+            log_event("hybrid_extraction_regex_first", chat_id=chat_id)
+            regex_data = extract_fields_with_regex(text, chat_id)
+            
+            # If regex extraction found something substantial, use it
+            if regex_data and not (len(regex_data) == 1 and ("error" in regex_data or 
+                                                           (len(regex_data) == 2 and 
+                                                            ("error" in regex_data and "site_name" in regex_data) and
+                                                            not regex_data.get("site_name")))):
+                return regex_data
+        
+        # 2. For non-command text or if regex failed, check if NLP is enabled
+        if CONFIG["ENABLE_NLP_EXTRACTION"]:
+            log_event("hybrid_extraction_nlp", chat_id=chat_id)
+            nlp_data, confidence = extract_with_nlp(text)
+            
+            # If confidence meets threshold, use NLP results
+            if confidence >= CONFIG["NLP_EXTRACTION_CONFIDENCE_THRESHOLD"]:
+                # Add confidence metadata for logging
+                nlp_data["_extraction_metadata"] = {
+                    "method": "nlp",
+                    "confidence": confidence,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                # Clean up before returning
+                if "_extraction_metadata" in nlp_data:
+                    metadata = nlp_data.pop("_extraction_metadata")
+                    log_event("nlp_extraction_successful", 
+                             confidence=metadata["confidence"], 
+                             fields=list(nlp_data.keys()),
+                             chat_id=chat_id)
+                
+                return nlp_data
+        
+        # 3. Fallback to regex extraction if NLP failed or is disabled
+        if CONFIG["NLP_FALLBACK_TO_REGEX"] or not CONFIG["ENABLE_NLP_EXTRACTION"]:
+            log_event("hybrid_extraction_regex_fallback", chat_id=chat_id)
+            return extract_fields_with_regex(text, chat_id)
+        
+        # 4. If all methods failed, return empty result
+        log_event("hybrid_extraction_failed", chat_id=chat_id)
+        return {}
+        
+    except Exception as e:
+        log_event("hybrid_extraction_error", error=str(e), traceback=traceback.format_exc(), chat_id=chat_id)
+        return {"error": str(e)}
+
+def extract_fields_with_regex(text: str, chat_id: str = None) -> Dict[str, Any]:
+    """The original regex-based field extraction (your existing code)"""
+    try:
+        # Print marker to confirm this function is being used
+        print("REGEX extract_fields RUNNING")
+        log_event("extract_fields_regex", input=text[:100])
+        
+        result: Dict[str, Any] = {}
+        normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
+
+        # Check for basic commands first
+        for command in ["yes_confirm", "no_confirm", "reset", "undo_last", "summary", "detailed", "export_pdf", "help", "sharepoint", "sharepoint_status"]:
+            if re.match(FIELD_PATTERNS[command], normalized_text, re.IGNORECASE):
+                result[command] = True
+                return result
+
+        # Handle structured commands using FIELD_PATTERNS
+        for field, pattern in FIELD_PATTERNS.items():
+            match = re.match(pattern, normalized_text, re.IGNORECASE)
+            if match:
+                if field in ["site_name", "segment", "category", "impression", "weather", "time", "comments"]:
+                    result[field] = match.group(1).strip()
+                elif field == "company":
+                    companies_text = match.group(1).strip()
+                    companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text) if c.strip()]
+                    result["companies"] = [{"name": company} for company in companies]
+                elif field == "people":
+                    people_text = match.group(1).strip()
+                    people = [p.strip() for p in re.split(r',|\s+and\s+', people_text) if p.strip()]
+                    result["people"] = people
+                    if match.group(2):  # Role specified
+                        role = match.group(2).strip()
+                        result["roles"] = [{"name": p, "role": role} for p in people]
+                elif field == "role":
+                    if match.group(1) and match.group(2):  # Name and role
+                        name = match.group(1).strip()
+                        role = match.group(2).strip()
+                        result["people"] = result.get("people", []) + [name]
+                        result["roles"] = result.get("roles", []) + [{"name": name, "role": role}]
+                    elif match.group(3):  # Role only
+                        role = match.group(3).strip()
+                        result["roles"] = result.get("roles", []) + [{"name": "Unknown", "role": role}]
+                elif field == "supervisor":
+                    name = match.group(1).strip()
+                    result["people"] = result.get("people", []) + [name]
+                    result["roles"] = result.get("roles", []) + [{"name": name, "role": "Supervisor"}]
+                elif field == "tool":
+                    tools_text = match.group(1).strip()
+                    tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text) if t.strip()]
+                    result["tools"] = [{"item": tool} for tool in tools]
+                elif field == "service":
+                    services_text = match.group(1).strip()
+                    services = [s.strip() for s in re.split(r',|\s+and\s+', services_text) if s.strip()]
+                    result["services"] = [{"task": service} for service in services]
+                elif field == "activity":
+                    activities_text = match.group(1).strip()
+                    activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text) if a.strip()]
+                    result["activities"] = activities
+                elif field == "issue":
+                    issues_text = match.group(1).strip()
+                    issues = [i.strip() for i in re.split(r';|,|\s+and\s+', issues_text) if i.strip()]
+                    result["issues"] = [{"description": issue, "has_photo": "photo" in issue.lower()} for issue in issues]
+                elif field == "delete":
+                    target = match.group(1).strip()
+                    field_name = match.group(2).strip()
+                    result["delete"] = {"target": target, "field": FIELD_MAPPING.get(field_name, field_name)}
+                elif field == "delete_entire":
+                    field_name = match.group(1).strip()
+                    result["delete_entire"] = {"field": FIELD_MAPPING.get(field_name, field_name)}
+                elif field == "correct":
+                    old_value = match.group(1).strip()
+                    field_name = match.group(2).strip()
+                    new_value = match.group(3).strip()
+                    result["correct"] = [{"field": FIELD_MAPPING.get(field_name, field_name), "old": old_value, "new": new_value}]
+                return result
+
+        # Handle free-form reports
+        if len(text) > 50 and CONFIG["ENABLE_FREEFORM_EXTRACTION"]:
+            log_event("detected_free_form_report", length=len(text))
+            
+            # Your existing free-form extraction code...
+            # This should integrate with the existing extract_fields function
+            
+        log_event("fields_extracted_regex", result_fields=len(result))
+        return result
+    except Exception as e:
+        log_event("extract_fields_regex_error", input=text[:100], error=str(e), traceback=traceback.format_exc())
+        print(f"ERROR in extract_fields_regex: {str(e)}")
+        return {"error": str(e)}
+
+# --- REPLACE your main extract_fields function ---
+def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
+    """
+    Extract fields from text input with enhanced NLP capabilities
+    This is the main entry point for field extraction that other functions should call
+    """
+    try:
+        print("MAIN extract_fields FUNCTION RUNNING")
+        log_event("extract_fields_main", input=text[:100], chat_id=chat_id)
+        
+        # Use the hybrid extraction approach that combines NLP and regex
+        result = hybrid_field_extraction(text, chat_id)
+        
+        # Handle additional post-processing if needed
+        if result and not "error" in result:
+            # For scalar fields, ensure they're strings
+            for field in SCALAR_FIELDS:
+                if field in result and not isinstance(result[field], str):
+                    result[field] = str(result[field]) if result[field] is not None else ""
+            
+            # Make sure date is properly formatted
+            if not "date" in result:
+                result["date"] = datetime.now().strftime("%d-%m-%Y")
+        
+        log_event("extract_fields_completed", result_fields=len(result))
+        return result
+    except Exception as e:
+        log_event("extract_fields_error", input=text[:100], error=str(e), traceback=traceback.format_exc())
+        print(f"ERROR in extract_fields: {str(e)}")
+        return {"error": str(e)}
 
 REQUIRED_ENV_VARS = ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"]
 
@@ -759,6 +1278,51 @@ def transcribe_voice(file_id: str) -> Tuple[str, float]:
         # Normalize text - handle common non-English transcriptions
         text = normalize_transcription(text)
         
+        # Better confidence calculation based on multiple factors
+        confidence = 0.0
+
+         # Base confidence from length - longer coherent sentences tend to be more accurate
+        length_confidence = min(0.7, (len(text) / 250) * 0.5)
+
+        # Keyword confidence - if it contains key construction terms
+        construction_keywords = [
+            "site", "project", "concrete", "scaffold", "tools", "safety", 
+            "worker", "supervisor", "engineer", "contractor", "weather",
+            "issue", "delay", "material", "equipment", "schedule", "inspection"
+        ]
+        
+        keyword_matches = sum(1 for word in construction_keywords if word in text.lower())
+        keyword_confidence = min(0.3, keyword_matches * 0.05)
+        
+        # Command confidence - if it matches command patterns
+        command_patterns = [
+            r'\b(add|delete|update|correct|site|category|people|companies|tools|activities|issues)\b',
+            r'\b(new|reset|undo|export|summary|help)\b'
+        ]
+        
+        command_matches = any(re.search(pattern, text, re.IGNORECASE) for pattern in command_patterns)
+        command_confidence = 0.3 if command_matches else 0.0
+        
+        # Combine confidences with different weights
+        confidence = length_confidence + keyword_confidence + command_confidence
+        
+        # Minimum threshold
+        confidence = max(0.1, min(confidence, 0.95))
+        
+        # Bonus for exact command matches
+        if any(text.lower().startswith(cmd) for cmd in ["yes", "no", "new", "reset", "add", "site", "undo"]):
+            confidence = 0.95
+            
+        # Log the confidence calculation components
+        log_event("transcription_confidence_details", 
+                text=text, 
+                length_confidence=length_confidence,
+                keyword_confidence=keyword_confidence,
+                command_confidence=command_confidence,
+                final_confidence=confidence)
+        
+        return text, confidence
+
         # Bypass confidence check for exact command matches or field-like patterns
         known_commands = ["new", "new report", "yes", "no", "reset", "status", "export", "summary", "detailed", "help"]
         field_patterns = [
@@ -784,8 +1348,60 @@ def transcribe_voice(file_id: str) -> Tuple[str, float]:
         log_event("transcription_failed", error=str(e))
         return "", 0.0
     
+# REPLACE the normalize_transcription function with this enhanced version:
 def normalize_transcription(text: str) -> str:
-    """Normalize transcription text to handle common issues with construction site terms"""
+    """Normalize transcription text with enhanced construction vocabulary recognition"""
+    # Construction-specific vocabulary for common misrecognitions
+    construction_replacements = {
+        # Common misheard terms
+        r'\bside\s+([a-z]+)\b': r'site \1',  
+        r'\bproject\s+section\b': r'project',
+        r'\belse\s+true\s+fix\b': r'electro fix',
+        r'\bbuild\s+a\b': r'builder',
+        r'\broof\s+master\b': r'roof masters',
+        
+        # Additional construction-specific corrections
+        r'\bsee\s+meant\b': r'cement', 
+        r'\bscaffold\s+ink\b': r'scaffolding',
+        r'\bwire\s+ink\b': r'wiring',
+        r'\bfoam\s+work\b': r'form work',
+        r'\brein\s+force\s+meant\b': r'reinforcement',
+        r'\bcon\s+crete\b': r'concrete',
+        r'\bweld\s+in\b': r'welding',
+        r'\bheavy\s+coupe\s+meant\b': r'heavy equipment',
+        r'\bpower\s+out\s+edge\b': r'power outage',
+        r'\btool\s+box\s+talk\b': r'toolbox talk',
+        r'\bsafe\s+tea\b': r'safety',
+        r'\binspect\s+shun\b': r'inspection',
+        r'\breg\s+you\s+late\s+shuns\b': r'regulations',
+        
+        # Numbers and units
+        r'\btwo\s+by\s+four\b': r'2x4',
+        r'\bfour\s+by\s+four\b': r'4x4',
+        r'\bsquare\s+meter\b': r'square meter',
+        r'\bsquare\s+foot\b': r'square foot',
+        r'\bcubic\s+yard\b': r'cubic yard',
+    }
+    
+    # Process all construction-specific terms
+    for pattern, replacement in construction_replacements.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+        
+    # Process common command words with typos
+    command_corrections = {
+        r'\b(ad|ed|odd|at)\b': 'add',
+        r'\b(delet|deleet|dell eat|dell it)\b': 'delete',
+        r'\b(new|nu|knew)\b': 'new',
+        r'\b(reset|re set|resat)\b': 'reset',
+        r'\b(expor|export|expoart)\b': 'export',
+        r'\b(summery|summary|some mary)\b': 'summary',
+        r'\b(komment|coment|comment)\b': 'comment',
+    }
+    
+    for pattern, replacement in command_corrections.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    
+    # Rest of the original function's code...
     # Convert common non-English transcriptions to English equivalents
     non_english_to_english = {
         # Russian/Cyrillic
@@ -820,20 +1436,6 @@ def normalize_transcription(text: str) -> str:
         
     if re.match(r'^new\s+report[.!?]*$', text_lower):
         text = "new report"
-        
-    # Fix common construction terms that may be misheard
-    construction_replacements = {
-        r'\bside\s+([a-z]+)\b': r'site \1',  # "side riverside" -> "site riverside"
-        r'\bcan\s+be\b': r'',  # Remove "can be" which might be inserted incorrectly
-        r'\bproject\s+section\b': r'project',  # Fix common mishearing
-        r'\belse\s+true\s+fix\b': r'electro fix',  # Fix company name mishearing
-        r'\bbuild\s+a\b': r'builder',  # Misheard company names
-        r'\broof\s+master\b': r'roof masters',  # Fix company name
-        r'\bkategorie\s+abnahme\b': r'category acceptance',  # German category
-    }
-    
-    for pattern, replacement in construction_replacements.items():
-        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     
     return text.strip()
 
@@ -1105,34 +1707,220 @@ def sync_to_sharepoint(chat_id: str, report_data: Dict[str, Any]) -> Dict[str, A
     
     # Part 7 Report Generation
     # --- Report Generation ---
+@lru_cache(maxsize=32)
+def get_pdf_styles():
+    """Cache PDF styles to improve performance"""
+    styles = getSampleStyleSheet()
+    
+    # Create custom styles
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Title'],
+        fontSize=16,
+        spaceAfter=12
+    )
+    
+    heading_style = ParagraphStyle(
+        'Heading',
+        parent=styles['Heading2'],
+        fontSize=12,
+        spaceAfter=6
+    )
+    
+    normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontSize=10,
+        spaceAfter=3
+    )
+    
+    metadata_style = ParagraphStyle(
+        'Metadata',
+        parent=styles['Normal'],
+        fontSize=7,
+        textColor=colors.gray
+    )
+    
+    return {
+        'title': title_style,
+        'heading': heading_style,
+        'normal': normal_style,
+        'metadata': metadata_style
+    }
+
 def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed") -> Optional[io.BytesIO]:
-    """Generate PDF report with enhanced formatting and layout"""
+    """Generate PDF report with enhanced performance"""
     try:
+        # Generate a cache key for this report
+        cache_key = f"{hash(json.dumps(report_data, sort_keys=True))}-{report_type}"
+        
+        # Check if we have a cached version
+        if hasattr(generate_pdf, 'cache') and cache_key in generate_pdf.cache:
+            log_event("pdf_cached_version_used", report_type=report_type)
+            buffer = generate_pdf.cache[cache_key]
+            buffer.seek(0)
+            return buffer
+            
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter)
-        styles = getSampleStyleSheet()
+        styles = get_pdf_styles()
         
-        # Create custom styles
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Title'],
-            fontSize=16,
-            spaceAfter=12
-        )
+        # Start building the document
+        story = []
         
-        heading_style = ParagraphStyle(
-            'Heading',
-            parent=styles['Heading2'],
-            fontSize=12,
-            spaceAfter=6
-        )
+        # Add title and date
+        title = f"Construction Site Report - {report_data.get('site_name', '') or 'Unknown Site'}"
+        story.append(Paragraph(title, styles['title']))
+        story.append(Paragraph(f"Date: {report_data.get('date', datetime.now().strftime('%d-%m-%Y'))}", styles['normal']))
+        story.append(Spacer(1, 12))
         
-        normal_style = ParagraphStyle(
-            'CustomNormal',
-            parent=styles['Normal'],
-            fontSize=10,
-            spaceAfter=3
-        )
+        # Basic site information section
+        story.append(Paragraph("Site Information", styles['heading']))
+        site_info = [
+            ("Site", report_data.get("site_name", "")),
+            ("Segment", report_data.get("segment", "")),
+            ("Category", report_data.get("category", ""))
+        ]
+        
+        # Only show non-empty fields in summary mode
+        site_info = [(label, value) for label, value in site_info if value or report_type == "detailed"]
+        
+        for label, value in site_info:
+            if value:
+                story.append(Paragraph(f"<b>{label}:</b> {value}", styles['normal']))
+        
+        if site_info:
+            story.append(Spacer(1, 6))
+        
+        # Personnel section
+        if report_data.get("people") or report_data.get("companies") or report_data.get("roles"):
+            story.append(Paragraph("Personnel & Companies", styles['heading']))
+            
+            if report_data.get("companies"):
+                companies_str = ", ".join(c.get("name", "") for c in report_data.get("companies", []) if c.get("name"))
+                if companies_str:
+                    story.append(Paragraph(f"<b>Companies:</b> {companies_str}", styles['normal']))
+            
+            if report_data.get("people"):
+                people_str = ", ".join(report_data.get("people", []))
+                if people_str:
+                    story.append(Paragraph(f"<b>People:</b> {people_str}", styles['normal']))
+            
+            if report_data.get("roles"):
+                roles_list = []
+                for r in report_data.get("roles", []):
+                    if isinstance(r, dict) and r.get("name") and r.get("role"):
+                        roles_list.append(f"{r['name']} ({r['role']})")
+                
+                if roles_list:
+                    story.append(Paragraph(f"<b>Roles:</b> {', '.join(roles_list)}", styles['normal']))
+            
+            story.append(Spacer(1, 6))
+        
+        # Equipment and services section
+        if report_data.get("tools") or report_data.get("services"):
+            story.append(Paragraph("Equipment & Services", styles['heading']))
+            
+            if report_data.get("tools"):
+                tools_str = ", ".join(t.get("item", "") for t in report_data.get("tools", []) if t.get("item"))
+                if tools_str:
+                    story.append(Paragraph(f"<b>Tools:</b> {tools_str}", styles['normal']))
+            
+            if report_data.get("services"):
+                services_str = ", ".join(s.get("task", "") for s in report_data.get("services", []) if s.get("task"))
+                if services_str:
+                    story.append(Paragraph(f"<b>Services:</b> {services_str}", styles['normal']))
+            
+            story.append(Spacer(1, 6))
+        
+        # Activities section
+        if report_data.get("activities"):
+            story.append(Paragraph("Activities", styles['heading']))
+            activities = report_data.get("activities", [])
+            
+            if report_type == "detailed":
+                # In detailed mode, list each activity with a bullet
+                for activity in activities:
+                    story.append(Paragraph(f"• {activity}", styles['normal']))
+            else:
+                # In summary mode, just list them with commas
+                activities_str = ", ".join(activities)
+                story.append(Paragraph(activities_str, styles['normal']))
+            
+            story.append(Spacer(1, 6))
+        
+        # Issues section
+        if report_data.get("issues"):
+            story.append(Paragraph("Issues & Problems", styles['heading']))
+            issues = report_data.get("issues", [])
+            
+            if issues:
+                if report_type == "detailed":
+                    # In detailed mode, list each issue separately
+                    for issue in issues:
+                        if isinstance(issue, dict):
+                            desc = issue.get("description", "")
+                            by = issue.get("caused_by", "")
+                            photo = " (Photo Available)" if issue.get("has_photo") else ""
+                            extra = f" (by {by})" if by else ""
+                            story.append(Paragraph(f"• {desc}{extra}{photo}", styles['normal']))
+                else:
+                    # In summary mode, just list them with semicolons
+                    issues_str = "; ".join(i.get("description", "") for i in issues if isinstance(i, dict) and i.get("description"))
+                    story.append(Paragraph(issues_str, styles['normal']))
+            
+            story.append(Spacer(1, 6))
+        
+        # Conditions section
+        if report_data.get("time") or report_data.get("weather") or report_data.get("impression"):
+            story.append(Paragraph("Conditions", styles['heading']))
+            
+            if report_data.get("time"):
+                story.append(Paragraph(f"<b>Time:</b> {report_data.get('time', '')}", styles['normal']))
+            
+            if report_data.get("weather"):
+                story.append(Paragraph(f"<b>Weather:</b> {report_data.get('weather', '')}", styles['normal']))
+            
+            if report_data.get("impression"):
+                story.append(Paragraph(f"<b>Impression:</b> {report_data.get('impression', '')}", styles['normal']))
+            
+            story.append(Spacer(1, 6))
+        
+        # Comments section
+        if report_data.get("comments"):
+            story.append(Paragraph("Additional Comments", styles['heading']))
+            story.append(Paragraph(report_data.get("comments", ""), styles['normal']))
+        
+        # Add SharePoint metadata if enabled
+        if CONFIG["ENABLE_SHAREPOINT"]:
+            story.append(Spacer(1, 20))
+            footer_text = f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')} | SharePoint ID: "
+            story.append(Paragraph(footer_text, styles['metadata']))
+        
+        # Build the document
+        doc.build(story)
+        buffer.seek(0)
+        
+        # Cache the result before returning
+        if not hasattr(generate_pdf, 'cache'):
+            generate_pdf.cache = {}
+        
+        # Limit cache size
+        if len(generate_pdf.cache) > 50:
+            # Remove random item
+            generate_pdf.cache.pop(next(iter(generate_pdf.cache)))
+            
+        generate_pdf.cache[cache_key] = buffer
+        
+        buffer.seek(0)
+        log_event("pdf_generated", 
+                size_bytes=buffer.getbuffer().nbytes, 
+                report_type=report_type, 
+                site=report_data.get("site_name", "Unknown"))
+        return buffer
+    except Exception as e:
+        log_event("pdf_generation_error", error=str(e))
+        return None
         
         # Start building the document
         story = []
@@ -1378,64 +2166,61 @@ def extract_with_gpt(text: str) -> Dict[str, Any]:
         return {}
 
 def is_free_form_report(text: str) -> bool:
-    """Detect if the text looks like a free-form report with enhanced construction site awareness"""
+    """Enhanced detection of free-form construction reports"""
     # If text is very short, it's definitely not a report
     if len(text) < CONFIG["FREEFORM_MIN_LENGTH"]:
         return False
-    # If text starts with a command keyword, it's not a free-form report
+        
+    # Check for command-like patterns first
     if re.match(r'^(?:add|insert|delete|remove|category|site|segment|people|companies|roles|tools|services|activities|issues|weather|time|impression|correct)\b', text.lower()):
         return False
         
-    # Construction site specific report patterns
-    construction_patterns = [
-        # Project/site identification
-        r'\b(?:at|on|from|reporting\s+from)\s+(?:the\s+)?(?:site|project|location)\b',
-        r'\b(?:site|project)(?:\s+name)?\s*[:=\s]+\w+',
+    # Look for comprehensive site report indicators
+    report_indicators = [
+        # Reporting phrases
+        r'\b(?:this\s+is|here\s+is|I\s+am\s+providing|I\s+am\s+submitting|sending|reporting)\s+(?:the|a|my)\s+(?:report|update|daily\s+report)\b',
+        r'\b(?:daily|weekly|progress|site|inspection)\s+report\b',
         
-        # Team/people mentions 
-        r'\b(?:team|crew|personnel|staff)\s+(?:included|consisted\s+of|were|was)\b',
-        r'\b(?:included\s+myself|with\s+me)[,\s]+(?:\w+\s+)+(?:as\s+(?:the\s+)?(?:supervisor|inspector|manager))',
+        # Date/time markers
+        r'\b(?:today|this\s+morning|this\s+afternoon|yesterday|on\s+site\s+today)\b',
         
-        # Tools and equipment
-        r'\b(?:tools?|equipment)\s+(?:used|utilized|needed|available)\s+(?:were|was|included)\b',
-        r'\b(?:crane|mixer|drill|scaffold|truck|digger|excavator)\b',
+        # Report categories together (multiple categories suggest a comprehensive report)
+        r'\b(?:site|location)\b.*\b(?:weather|conditions)\b.*\b(?:work|activities)\b',
+        r'\b(?:personnel|workers|people)\b.*\b(?:materials|equipment|tools)\b',
         
-        # Companies
-        r'\b(?:compan(?:y|ies)|contractor[s]?)\s+(?:on\s+site|involved|present)\s+(?:were|was|included)\b',
+        # Paragraph structure with multiple sentences
+        r'[.!?][^\n.!?]{20,}[.!?][^\n.!?]{20,}[.!?]',
         
-        # Activities reporting
-        r'\b(?:work|tasks?|activities)\s+(?:(?:carried|done)\s+out|performed|completed|included)\b',
-        
-        # Weather and conditions
-        r'\b(?:weather|conditions?)\s+(?:were|was)\s+(?:good|bad|rainy|sunny|cloudy|windy|cold|hot|warm)\b',
-        
-        # Issues and problems
-        r'\b(?:issues?|problems?|concerns?|incident[s]?|accident[s]?)\s+(?:encountered|occurred|happened|reported)\b'
+        # Multiple data points
+        r'\b(?:we|I)\s+(?:have|had)\s+\d+\s+(?:workers|people|contractors)\b',
+        r'\b(?:completed|finished|started|began|continued)\s+(?:the|with|on)\s+[^.!?]+',
     ]
     
-    # Count how many construction patterns match
-    construction_matches = sum(1 for pattern in construction_patterns 
-                            if re.search(pattern, text, re.IGNORECASE))
+    # Count matching indicators
+    indicator_count = sum(1 for pattern in report_indicators if re.search(pattern, text, re.IGNORECASE))
     
-    # Check for common report structure indicators
-    structure_indicators = [
-        # Multiple sentences (reports tend to have several sentences)
-        len(re.findall(r'[.!?]+', text)) >= 3,
-        
-        # Contains multiple commas (listing things)
-        len(re.findall(r',', text)) >= 3,
-        
-        # Contains a date or time reference
-        bool(re.search(r'\b(?:today|yesterday|this\s+morning|on\s+\w+day|\d{1,2}(?::|am|pm)|\d{1,2}[-/]\d{1,2})\b', 
-                    text, re.IGNORECASE)),
-        
-        # Contains content with measurements or numbers
-        bool(re.search(r'\b\d+\s*(?:m|cm|mm|ft|feet|inch|meters?|hours?|mins?|minutes?)\b', text, re.IGNORECASE)),
-        
-        # Likely to be a greeting followed by content
-        bool(re.search(r'^(?:hi|hello|hey|good\s+(?:morning|afternoon|evening)),?\s+(?:this\s+is|I\'m|I\s+am)', 
-                    text, re.IGNORECASE))
-    ]
+    # Analyze text structure
+    sentence_count = len(re.findall(r'[.!?]+', text))
+    comma_count = len(re.findall(r',', text))
+    word_count = len(text.split())
+    
+    # Calculate a confidence score based on multiple factors
+    structure_score = min(1.0, (sentence_count / 5) * 0.5 + (comma_count / 8) * 0.3 + (word_count / 100) * 0.2)
+    indicator_score = min(1.0, indicator_count * 0.25)
+    
+    # Combined score
+    report_confidence = (structure_score * 0.6) + (indicator_score * 0.4)
+    
+    log_event("free_form_detection", 
+             length=len(text), 
+             sentence_count=sentence_count, 
+             indicator_count=indicator_count,
+             structure_score=structure_score,
+             indicator_score=indicator_score,
+             report_confidence=report_confidence)
+             
+    # Return true if confidence exceeds threshold
+    return report_confidence > 0.65
     
 def custom_extract_fields(text: str) -> Dict[str, Any]:
     """Extract fields from common natural language patterns"""
@@ -1458,6 +2243,42 @@ def custom_extract_fields(text: str) -> Dict[str, Any]:
     # Extract companies from inputs like "Companies are X, Y and Z"
     company_pattern = r'compan(?:y|ies)\s+(?:is|are)\s+(.*?)(?:\.|\s*$)'
     company_match = re.search(company_pattern, text, re.IGNORECASE)
+
+def suggest_missing_fields(data: Dict[str, Any]) -> List[str]:
+    """Intelligently suggest missing fields based on report context"""
+    suggestions = []
+    
+    # Basic required fields
+    if not data.get("site_name"):
+        suggestions.append("site name")
+        
+    # Context-based suggestions
+    if data.get("activities") and not data.get("time"):
+        suggestions.append("time spent")
+        
+    if data.get("activities") and not data.get("companies") and not data.get("people"):
+        suggestions.append("people or companies involved")
+        
+    if data.get("issues") and not data.get("impression"):
+        suggestions.append("overall impression")
+        
+    if data.get("site_name") and not data.get("weather") and not data.get("activities"):
+        suggestions.append("activities performed")
+        
+    if len(data.get("activities", [])) > 2 and not data.get("tools"):
+        suggestions.append("tools used")
+        
+    # Site context suggestions
+    if data.get("site_name") and "install" in " ".join(data.get("activities", [])).lower():
+        if not data.get("services"):
+            suggestions.append("services provided")
+            
+    if data.get("site_name") and any(issue.get("description", "").lower().find("delay") >= 0 
+                                     for issue in data.get("issues", [])):
+        if not data.get("comments"):
+            suggestions.append("comments on how to address delays")
+            
+    return suggestions[:3]  # Limit to 3 suggestions
 
 # --- Data Processing ---
 def clean_value(value: Optional[str], field: str) -> Optional[str]:
@@ -1624,6 +2445,57 @@ def string_similarity(a: str, b: str) -> float:
     except Exception as e:
         log_event("string_similarity_error", error=str(e))
         return 0.0
+
+
+def fuzzy_command_match(command: str, chat_id: str) -> Optional[str]:
+    """Match a user input to a command using fuzzy matching"""
+    command = command.lower().strip()
+    
+    # Check for direct matches first
+    if command in COMMAND_HANDLERS:
+        return command
+        
+    # Try cleaning up common prefixes
+    cleaned_command = re.sub(r'^(please|can you|could you|would you|i want to|i need to)\s+', '', command)
+    cleaned_command = cleaned_command.strip()
+    
+    if cleaned_command in COMMAND_HANDLERS:
+        return cleaned_command
+        
+    # Try fuzzy matching
+    best_match = None
+    best_score = CONFIG["COMMAND_SIMILARITY_THRESHOLD"]
+    
+    for cmd in COMMAND_HANDLERS.keys():
+        score = string_similarity(command, cmd)
+        if score > best_score:
+            best_score = score
+            best_match = cmd
+            
+    if best_match:
+        log_event("fuzzy_command_match", 
+                 original=command, 
+                 matched=best_match, 
+                 score=best_score,
+                 chat_id=chat_id)
+        return best_match
+        
+    # Try partial matching for multi-word commands
+    for cmd in COMMAND_HANDLERS.keys():
+        if ' ' in cmd:
+            cmd_parts = cmd.split()
+            command_parts = command.split()
+            
+            # If first word matches and has similar length
+            if (cmd_parts[0] == command_parts[0] and 
+                abs(len(' '.join(cmd_parts)) - len(' '.join(command_parts))) < 5):
+                log_event("partial_command_match", 
+                         original=command, 
+                         matched=cmd,
+                         chat_id=chat_id)
+                return cmd
+                
+    return None
 
 def find_name_match(name: str, name_list: List[str]) -> Optional[str]:
     """Find the best match for a name in a list of names"""
@@ -1863,7 +2735,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
         return {}
     
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
-def extract_fields(text: str) -> Dict[str, Any]:
+def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
     """Extract fields from text input with enhanced error handling and field validation"""
     try:
         # Print marker to confirm this function is being used
@@ -1872,6 +2744,40 @@ def extract_fields(text: str) -> Dict[str, Any]:
         
         result: Dict[str, Any] = {}
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
+        
+        # GET CONTEXT if chat_id is provided
+        context = None
+        if chat_id and chat_id in session_data:
+            context = session_data[chat_id].get("context", {})
+            existing_data = session_data[chat_id].get("structured_data", {})
+
+        # NEW SECTION: Handle context references
+        if context and re.search(r'\b(it|this|that|him|her|they|them)\b', normalized_text, re.IGNORECASE):
+            # Pronoun resolution
+            pronoun_type = None
+            if re.search(r'\b(him|her|he|she|they|them)\b', normalized_text, re.IGNORECASE):
+                pronoun_type = "person"
+                last_person = context.get("last_mentioned_person")
+                
+                # Replace pronouns with the actual name if possible
+                if last_person:
+                    normalized_text = re.sub(r'\b(him|her|he|she|they|them)\b', last_person, normalized_text, flags=re.IGNORECASE)
+                    log_event("resolved_person_pronoun", 
+                             original=text, 
+                             resolved=normalized_text,
+                             person=last_person)
+            
+            elif re.search(r'\b(it|this|that)\b', normalized_text, re.IGNORECASE):
+                pronoun_type = "item"
+                last_item = context.get("last_mentioned_item")
+                
+                # Replace pronouns with the actual item if possible
+                if last_item:
+                    normalized_text = re.sub(r'\b(it|this|that)\b', last_item, normalized_text, flags=re.IGNORECASE)
+                    log_event("resolved_item_pronoun", 
+                             original=text, 
+                             resolved=normalized_text,
+                             item=last_item)
 
         # Check for basic commands first
         if normalized_text.lower() in ("yes", "y", "ya", "yeah", "yep", "yup", "okay", "ok"):
@@ -2646,6 +3552,34 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
     return result
     
     # Part 11 Command Handlers
+# ADD the format_response function here:
+def format_response(message_type: str, message: str, data: Dict[str, Any] = None) -> str:
+    """Format response messages consistently"""
+    
+    # Define emojis for each message type
+    emojis = {
+        "success": "✅",
+        "error": "⚠️",
+        "info": "ℹ️",
+        "question": "❓",
+        "warning": "⚠️",
+        "reset": "🔄",
+        "export": "📤",
+        "help": "📚",
+        "summary": "📋"
+    }
+    
+    emoji = emojis.get(message_type, "")
+    
+    # Format the message with emoji
+    formatted_message = f"{emoji} {message}"
+    
+    # Add structured data if provided
+    if data and "structured_data" in data:
+        summary = summarize_report(data["structured_data"])
+        formatted_message = f"{formatted_message}\n\n{summary}"
+        
+    return formatted_message
 
     # --- Command Handlers ---
 COMMAND_HANDLERS: Dict[str, Callable[[str, Dict[str, Any]], None]] = {}
@@ -2933,6 +3867,20 @@ def handle_help(chat_id: str, session: Dict[str, Any], topic: str = "general") -
     # Get the appropriate help text
     message = help_text.get(topic.lower(), help_text["general"])
     send_message(chat_id, message)
+@command("start")
+def handle_start(chat_id: str, session: Dict[str, Any]) -> None:
+    """Help new users get started"""
+    message = (
+        "👋 Welcome to the Construction Site Report Bot!\n\n"
+        "Here's how to create a report:\n"
+        "1️⃣ Say 'site: [location]' to set your site\n"
+        "2️⃣ Add people with 'people: [names]'\n"
+        "3️⃣ Add companies with 'companies: [names]'\n"
+        "4️⃣ Continue adding other details\n"
+        "5️⃣ Say 'export pdf' when you're done\n\n"
+        "Type 'help' any time for more information."
+    )
+    send_message(chat_id, message)
 
 # Add aliases for existing commands
 COMMAND_HANDLERS["new"] = handle_reset
@@ -3091,37 +4039,18 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             elif "correct" in extracted:
                 message = "✅ Corrected information in your report."
 
-            if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
-                expected_fields = ["site_name", "segment", "category", "companies", "people", 
-                                "tools", "services", "activities", "issues", "time", "weather", 
-                                "impression", "comments"]
-                likely_missed = []
-                field_terms = {
-                    "companies": r'\b(?:company|companies|contractor)\b',
-                    "services": r'\b(?:service|services|task|tasks)\b',
-                    "tools": r'\b(?:tool|tools|equipment|gear)\b', 
-                    "activities": r'\b(?:activities|activity|work|task|tasks|job|jobs)\b',
-                    "issues": r'\b(?:issue|issues|problem|problems|delay|delays|spotted|crack)\b',
-                    "time": r'\b(?:time|duration|hours)\b',
-                    "weather": r'\b(?:weather|conditions|sunny|rain|cloudy)\b',
-                    "impression": r'\b(?:impression|assessment|progress|overview|on\sỗtrack)\b',
-                    "comments": r'\b(?:comments|notes|thanks)\b'
-                }
-                for field in expected_fields:
-                    search_term = field_terms.get(field, r'\b' + field + r'\b')
-                    if (re.search(search_term, text, re.IGNORECASE) and 
-                        field not in extracted and 
-                        (field not in session["structured_data"] or 
-                        (isinstance(session["structured_data"].get(field), list) and not session["structured_data"][field]) or
-                        (not isinstance(session["structured_data"].get(field), list) and not session["structured_data"].get(field)))):
-                        likely_missed.append(field)
-                if likely_missed:
-                    message += f"\n\n⚠️ I may have missed information about: {', '.join(likely_missed)}. Please add these details if needed (e.g., 'companies: AXIS Construction')."
+            # ... keep any other existing code here ...
 
             summary = summarize_report(session["structured_data"])
             send_message(chat_id, f"{message}\n\n{summary}")
-        else:
-            send_message(chat_id, "⚠️ No changes were made to your report.")
+            
+            # Add intelligent suggestions
+            missing_suggestions = suggest_missing_fields(session["structured_data"])
+            if missing_suggestions:
+                suggestion_text = "You might also want to add: " + ", ".join(missing_suggestions)
+                send_message(chat_id, suggestion_text)
+            else:
+                send_message(chat_id, "⚠️ No changes were made to your report.")
 
         return "ok", 200
         
@@ -3132,6 +4061,23 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         except Exception:
             pass
         return "error", 500
+
+def process_chained_commands(text: str, chat_id: str) -> List[Dict[str, Any]]:
+    """Process multiple commands in a single message"""
+    # Split text on semicolons and periods that aren't part of numbers
+    command_texts = re.split(r'(?<!\d)[;.]\s+', text)
+    
+    results = []
+    for cmd_text in command_texts:
+        if not cmd_text.strip():
+            continue
+            
+        extracted = extract_fields(cmd_text, chat_id)
+        if extracted and "error" not in extracted:
+            results.append(extracted)
+            log_event("chained_command_extracted", text=cmd_text, fields=list(extracted.keys()))
+    
+    return results
 
 # Part 13 Construction Site Report Bot
 
@@ -3202,9 +4148,9 @@ def webhook() -> tuple[str, int]:
                     log_event("low_confidence_transcription", text=text, confidence=confidence)
                     error_message = "⚠️ I couldn't clearly understand your voice message."
                     if text:
-                        error_message += f" I heard: '{text}'. Please speak clearly or type your message."
-                    else:
-                        error_message += " Please speak clearly or type your message."
+                        error_message += f" I heard: '{text}'."
+                    
+                    error_message += "\n\nWhen recording, try to:\n• Speak clearly and slowly\n• Reduce background noise\n• Keep the phone close to your mouth"
                     send_message(chat_id, error_message)
                     return "ok", 200
                 
@@ -3225,46 +4171,38 @@ def webhook() -> tuple[str, int]:
             
             # Handle reset confirmation
             if session_data[chat_id].get("awaiting_reset_confirmation", False):
-                if re.match(FIELD_PATTERNS["yes_confirm"], text, re.IGNORECASE):
-                    session_data[chat_id]["awaiting_reset_confirmation"] = False
-                    session_data[chat_id]["structured_data"] = blank_report()
-                    session_data[chat_id]["command_history"].clear()
-                    session_data[chat_id]["last_change_history"].clear()
-                    session_data[chat_id]["context"] = {
-                        "last_mentioned_person": None,
-                        "last_mentioned_item": None,
-                        "last_field": None,
-                    }
-                    save_session(session_data)
-                    summary = summarize_report(session_data[chat_id]["structured_data"])
-                    send_message(chat_id, f"**Report reset**\n\n{summary}\n\nSpeak or type your first category (e.g., 'add site Downtown Project').")
-                    return "ok", 200
-                elif re.match(FIELD_PATTERNS["no_confirm"], text, re.IGNORECASE):
-                    session_data[chat_id]["awaiting_reset_confirmation"] = False
-                    save_session(session_data)
-                    send_message(chat_id, "Reset cancelled. Your report was not changed.")
-                    return "ok", 200
+                # ... keep existing reset confirmation code ...
+                return "ok", 200
             
             # Handle spelling correction
             if session_data[chat_id].get("awaiting_spelling_correction", {}).get("active", False):
-                field = session_data[chat_id]["awaiting_spelling_correction"]["field"]
-                old_value = session_data[chat_id]["awaiting_spelling_correction"]["old_value"]
-                new_value = text.strip()
-                
-                session_data[chat_id]["awaiting_spelling_correction"] = {"active": False, "field": None, "old_value": None}
-                extracted = {"correct": [{"field": field, "old": old_value, "new": new_value}]}
-                session_data[chat_id]["command_history"].append(session_data[chat_id]["structured_data"].copy())
-                session_data[chat_id]["structured_data"] = merge_data(
-                    session_data[chat_id]["structured_data"], 
-                    extracted, 
-                    chat_id
-                )
-                save_session(session_data)
-                
-                summary = summarize_report(session_data[chat_id]["structured_data"])
-                send_message(chat_id, f"✅ Corrected {field} from '{old_value}' to '{new_value}'.\n\n{summary}")
+                # ... keep existing spelling correction code ...
                 return "ok", 200
             
+            # Check for command chaining
+            if ";" in text or re.search(r'(?<!\d)\.\s+[A-Za-z]', text):
+                chained_commands = process_chained_commands(text, chat_id)
+                
+                if chained_commands:
+                    # Process each command
+                    for i, extracted in enumerate(chained_commands):
+                        # Skip the first save_state to avoid duplicating
+                        if i == 0:
+                            session_data[chat_id]["command_history"].append(session_data[chat_id]["structured_data"].copy())
+                        
+                        session_data[chat_id]["structured_data"] = merge_data(
+                            session_data[chat_id]["structured_data"], 
+                            extracted, 
+                            chat_id
+                        )
+                    
+                    session_data[chat_id]["structured_data"] = enrich_date(session_data[chat_id]["structured_data"])
+                    save_session(session_data)
+                    
+                    send_message(chat_id, f"✅ Processed {len(chained_commands)} commands.\n\n{summarize_report(session_data[chat_id]['structured_data'])}")
+                    return "ok", 200
+            
+            # Regular single command processing
             log_event("processing_text_command", text=text)
             return handle_command(chat_id, text, session_data[chat_id])
         
