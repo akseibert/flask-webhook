@@ -63,8 +63,11 @@ def extract_fields(text: str) -> Dict[str, Any]:
                     result[field] = match.group(1).strip()
                 elif field == "company":
                     companies_text = match.group(1).strip()
-                    companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text) if c.strip()]
-                    result["companies"] = [{"name": company} for company in companies]
+                    # Remove any "add" prefix that might be included in the captured text
+                    companies_text = re.sub(r'^add\s+', '', companies_text, flags=re.IGNORECASE)
+                    companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
+                    result["companies"] = [{"name": company} for company in companies if company]
+                    return result
                 elif field == "people":
                     people_text = match.group(1).strip()
                     people = [p.strip() for p in re.split(r',|\s+and\s+', people_text) if p.strip()]
@@ -934,9 +937,10 @@ list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*|section\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
-    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\s*(?:is|are|:)?\\s*|category\s+)(.+?)(?:\\s*(?:,|\\.|$))',
+    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\s*(?:is|are|:)?\s*|category\s+)(.+?)(?:\s*(?:,|\.|$))',
     "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?|pople)\s+|(?:peoples?|persons?|pople)\s*[:,]?\s*(?:are|is|were|include[ds]?|on\s+site\s+are|:)?\s*)(.+?)(?:\s+as\s+(.+?))?(?:\s*(?:,|\.|$))',
+    "person_as_role": r'^(.+?)\s+as\s+(.+?)(?:\s*(?:,|\.|$))',
     "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(\w+\s+\w+|\w+)\s+(?:as|is)\s+(.+?)(?:\s*(?:,|\.|$))',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
     "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)(?:\'s)?\s+|compan(?:y|ies)(?:\'s)?\s*[:,]?\s*(?:are|is|were|include[ds]?|:)?\s*)(.+?)(?:\s*(?:,|\.|$))',
@@ -2917,6 +2921,14 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         # Assign the role to all people in the list
                         result["roles"] = [{"name": person, "role": role_text} for person in people]
                     
+                    return result
+                # Add a new handler for "Person as Role" syntax
+                elif field == "person_as_role":
+                    name = match.group(1).strip()
+                    role = match.group(2).strip()
+                    if name and role:
+                        result["people"] = [name]
+                        result["roles"] = [{"name": name, "role": role}]
                     return result
                 elif field == "role":
                     # This pattern has multiple group captures for different variations
