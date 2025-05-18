@@ -925,7 +925,7 @@ list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*|section\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
-    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\s*(?:is|are|:)?\\s*)(.+?)(?:\\s*(?:,|\\.|$))'
+    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\s*(?:is|are|:)?\\s*)(.+?)(?:\\s*(?:,|\\.|$))',
     "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?|pople)\s+|(?:peoples?|persons?|pople)\s*[:,]?\s*(?:are|is|were|include[ds]?|on\s+site\s+are|:)?\s*)(.+?)(?:\s+as\s+(.+?))?(?:\s*(?:,|\.|$))',
     "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(\w+\s+\w+|\w+)\s+(?:as|is)\s+(.+?)(?:\s*(?:,|\.|$))',
