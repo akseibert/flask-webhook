@@ -925,7 +925,7 @@ list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*|section\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
-    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\s*(?:is|are|:)?\s*)(.+?)(?:\s*(?:,|\.|$))',
+    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\s*(?:is|are|:)?\\s*)(.+?)(?:\\s*(?:,|\\.|$))'
     "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?|pople)\s+|(?:peoples?|persons?|pople)\s*[:,]?\s*(?:are|is|were|include[ds]?|on\s+site\s+are|:)?\s*)(.+?)(?:\s+as\s+(.+?))?(?:\s*(?:,|\.|$))',
     "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(\w+\s+\w+|\w+)\s+(?:as|is)\s+(.+?)(?:\s*(?:,|\.|$))',
@@ -940,7 +940,7 @@ FIELD_PATTERNS = {
     "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*(?:none|delete|clear|remove|reset)$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": r'^(?:delete|remove|none)\s+(.+?)\s+from\s+(.+?)(?:\s*(?:,|\.|$))',
+    "delete": r'^(?:delete|remove|none)\s+(.+?)\s+from\s+(.+?)(?:\\s*(?:,|\\.|$))|^delete\s+(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?)(?:\\s*(?:,|\\.|$))'
     "delete_entire": r'^(?:delete|remove|clear)\s+(?:entire|all)\s+(.+?)(?:\s*(?:,|\.|$))',
     "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+(.+?)\s+in\s+(.+?)\s+to\s+(.+?)(?:\s*(?:,|\.|$))',
     "help": r'^help(?:\s+on\s+([a-z_]+))?$|^\/help(?:\s+([a-z_]+))?$',
@@ -1303,8 +1303,11 @@ def transcribe_voice(file_id: str) -> Tuple[str, float]:
         # Better confidence calculation based on multiple factors
         confidence = 0.0
 
-         # Base confidence from length - longer coherent sentences tend to be more accurate
-        length_confidence = min(0.7, (len(text) / 250) * 0.5)
+        # Base confidence from length - longer coherent sentences tend to be more accurate
+        if len(text.split()) < 5:
+            length_confidence = 0.4  # Give short commands a higher base confidence
+        else:
+            length_confidence = min(0.7, (len(text) / 250) * 0.5)
 
         # Keyword confidence - if it contains key construction terms
         construction_keywords = [
@@ -4181,9 +4184,14 @@ def webhook() -> tuple[str, int]:
                 file_id = message["voice"]["file_id"]
                 text, confidence = transcribe_voice(file_id)
                 
-                if not text or (confidence < 0.5 and not any(re.match(pattern, text, re.IGNORECASE) for pattern in [
-                    r'^(?:site|segment|category|companies|people|tools|services|activities|issues|time|weather|impression)\b',
-                    r'^(?:kategorie|baustelle|unternehmen|firma)\b'
+                # For short commands (less than 5 words), lower the threshold
+                if len(text.split()) < 5 and any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export"]):
+                    confidence_threshold = 0.3
+                else:
+                    confidence_threshold = 0.5
+
+                if not text or (confidence < confidence_threshold and not any(re.match(pattern, text, re.IGNORECASE) for pattern in [
+                    # patterns
                 ])):
                     log_event("low_confidence_transcription", text=text, confidence=confidence)
                     error_message = "⚠️ I couldn't clearly understand your voice message."
