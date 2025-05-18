@@ -726,8 +726,13 @@ def extract_fields_with_regex(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result[field] = match.group(1).strip()
                 elif field == "company":
                     companies_text = match.group(1).strip()
-                    companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text) if c.strip()]
-                    result["companies"] = [{"name": company} for company in companies]
+                    
+                    # Remove any "add" prefix from the companies text
+                    companies_text = re.sub(r'^add\s+', '', companies_text, flags=re.IGNORECASE)
+                    
+                    companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
+                    result["companies"] = [{"name": company} for company in companies if company]
+                    return result
                 elif field == "people":
                     people_text = match.group(1).strip()
                     people = [p.strip() for p in re.split(r',|\s+and\s+', people_text) if p.strip()]
@@ -2439,7 +2444,11 @@ def string_similarity(a: str, b: str) -> float:
         a_lower = a.lower()
         b_lower = b.lower()
         
-        # Check for direct substring match first (for partial name matching)
+        # Check for exact match first
+        if a_lower == b_lower:
+            return 1.0
+            
+        # Check for direct substring match
         if a_lower in b_lower or b_lower in a_lower:
             # Calculate the ratio of the shorter string to the longer one
             shorter = min(len(a_lower), len(b_lower))
@@ -2449,14 +2458,7 @@ def string_similarity(a: str, b: str) -> float:
         # Otherwise use SequenceMatcher
         similarity = SequenceMatcher(None, a_lower, b_lower).ratio()
         
-        # Boost single-word matches in multi-word strings (for partial name matching)
-        if " " in a_lower or " " in b_lower:
-            a_words = set(a_lower.split())
-            b_words = set(b_lower.split())
-            # If any word matches exactly, boost similarity
-            if any(word in b_words for word in a_words):
-                similarity = min(0.95, similarity + 0.15)
-                
+        # Log for debugging
         log_event("string_similarity", a=a, b=b, similarity=similarity)
         return similarity
     except Exception as e:
@@ -2869,11 +2871,15 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     people_text = match.group(1).strip()
                     role_text = match.group(2).strip() if len(match.groups()) > 1 and match.group(2) else None
                     
+                    # Clean up the people text - remove any "add" at the beginning
+                    people_text = re.sub(r'^add\s+', '', people_text, flags=re.IGNORECASE)
+                    
                     people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
                     result["people"] = people
                     
                     if role_text:
-                        result["roles"] = [{"name": people[0], "role": role_text}]
+                        # Assign the role to all people in the list
+                        result["roles"] = [{"name": person, "role": role_text} for person in people]
                     
                     return result
                 elif field == "role":
@@ -3058,7 +3064,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     removed = False
                     for i, company in enumerate(result["companies"]):
                         if isinstance(company, dict) and "name" in company:
-                            if string_similarity(company["name"].lower(), value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                            if company["name"].lower() == value.lower() or string_similarity(company["name"].lower(), value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
                                 del result["companies"][i]
                                 changes.append(f"removed company '{company['name']}'")
                                 removed = True
@@ -4047,7 +4053,7 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     "old_value": old_value
                 }
                 save_session(session_data)
-                send_message(chat_id, f"Please enter the correct spelling for '{old_value}' in {field}:")
+                send_message(chat_id, f"Do you want to correct '{old_value}' in {field}? Please reply with 'yes' or 'no'.")
             return "ok", 200
 
         # Handle field updates
@@ -4077,11 +4083,12 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             summary = summarize_report(session["structured_data"])
             send_message(chat_id, f"{message}\n\n{summary}")
             
-            # Add intelligent suggestions
-            missing_suggestions = suggest_missing_fields(session["structured_data"])
-            if missing_suggestions:
-                suggestion_text = "You might also want to add: " + ", ".join(missing_suggestions)
-                send_message(chat_id, suggestion_text)
+            # Add intelligent suggestions only if changes were actually made
+            if changed_fields:
+                missing_suggestions = suggest_missing_fields(session["structured_data"])
+                if missing_suggestions:
+                    suggestion_text = "You might also want to add: " + ", ".join(missing_suggestions)
+                    send_message(chat_id, suggestion_text)
             else:
                 send_message(chat_id, "⚠️ No changes were made to your report.")
 
