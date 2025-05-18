@@ -3261,7 +3261,10 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
             
             # Try people if still not deleted
             if not deleted_something:
-                for person
+                for person in list(result["people"]):
+                    if string_similarity(person.lower(), value_lower) >= 0.6:
+                        session_data[chat_id]["last_change_history"].append(("people", existing_data["people"].copy()))
+                        result["people"].remove(person)
         
         if category and value:  # Both category and value provided
             # Save last state for undo
