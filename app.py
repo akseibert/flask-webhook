@@ -937,10 +937,10 @@ list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*|section\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
-    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\s*(?:is|are|:)?\s*|category\s+)(.+?)(?:\s*(?:,|\.|$))',
+    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\\s*(?:is|are|:)?\s*|category\s+)(.+?)(?:\s*(?:,|\.|$))',
     "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?|pople)\s+|(?:peoples?|persons?|pople)\s*[:,]?\s*(?:are|is|were|include[ds]?|on\s+site\s+are|:)?\s*)(.+?)(?:\s+as\s+(.+?))?(?:\s*(?:,|\.|$))',
-    "person_as_role": r'^(.+?)\s+as\s+(.+?)(?:\s*(?:,|\.|$))',
+    "person_as_role": r'^(\w+(?:\s+\w+)?)\s+as\s+(\w+(?:\s+\w+)?)(?:\s*(?:,|\.|$))',
     "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(\w+\s+\w+|\w+)\s+(?:as|is)\s+(.+?)(?:\s*(?:,|\.|$))',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
     "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)(?:\'s)?\s+|compan(?:y|ies)(?:\'s)?\s*[:,]?\s*(?:are|is|were|include[ds]?|:)?\s*)(.+?)(?:\s*(?:,|\.|$))',
@@ -953,7 +953,7 @@ FIELD_PATTERNS = {
     "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*(?:none|delete|clear|remove|reset)$|^(?:clear|empty|reset)\s+(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": r'^(?:delete|remove|none)\s+(.+?)\s+from\s+(.+?)(?:\s*(?:,|\.|$))|^delete\s+(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|impression)(?:\s*(?:,|\.|$))|^delete\s+(.+?)(?:\s*(?:,|\.|$))', 
+    "delete": r'^(?:delete|remove)\s+(.+?)(?:\s+from\s+(.+?))?(?:\s*(?:,|\.|$))',
     "delete_entire": r'^(?:delete|remove|clear)\s+(?:entire|all)\s+(.+?)(?:\s*(?:,|\.|$))',
     "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+(.+?)\s+in\s+(.+?)\s+to\s+(.+?)(?:\s*(?:,|\.|$))',
     "help": r'^help(?:\s+on\s+([a-z_]+))?$|^\/help(?:\s+([a-z_]+))?$',
@@ -2863,24 +2863,36 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return result
                 elif field == "company":
                     companies_text = match.group(1).strip()
+                    # Remove any "add" prefix that might have been captured
+                    companies_text = re.sub(r'^add\s+', '', companies_text, flags=re.IGNORECASE)
                     companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
                     result["companies"] = [{"name": company} for company in companies if company]
                     return result
+                
                 elif field == "tool":
+                    elif field == "company":
                     tools_text = match.group(1).strip()
-                    tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text)]
-                    result["tools"] = [{"item": tool} for tool in tools if tool]
+                    # Remove any "add" prefix that might have been captured
+                    tools_text = re.sub(r'^add\s+', '', tools_text, flags=re.IGNORECASE)
+                    tools = [c.strip() for c in re.split(r',|\s+and\s+', tools_text)]
+                    result["tools"] = [{"name": tool} for tool in tools if tool]
                     return result
+                
                 elif field == "service":
                     services_text = match.group(1).strip()
-                    services = [s.strip() for s in re.split(r',|\s+and\s+', services_text)]
-                    result["services"] = [{"task": service} for service in services if service]
+                    # Remove any "add" prefix that might have been captured
+                    services_text = re.sub(r'^add\s+', '', services_text, flags=re.IGNORECASE)
+                    services = [c.strip() for c in re.split(r',|\s+and\s+', services_text)]
+                    result["services"] = [{"name": service} for service in services if service]
+                    return result
+                
                     if chat_id and chat_id in session_data:
                         # Just return the new services, merging will be handled later
                         return {"services": [{"task": service} for service in services if service]}
                     else:
                         # Only return the complete result if we're not in a chat context
                         return result 
+                    
                 elif field == "activity":
                     activities_text = match.group(1).strip()
                     activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text)]
@@ -2954,10 +2966,10 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result["roles"] = [{"name": name, "role": "Supervisor"}]
                     return result
                 elif field == "delete":
-                    # Parse different delete syntax patterns
+                    # Get the matched groups
                     groups = match.groups()
-                    category = None
-                    value = None
+                    value = groups[0].strip() if groups[0] else None
+                    category = groups[1].strip().lower() if len(groups) > 1 and groups[1] else None
                     
                     if groups[0] and groups[1]:  # "delete value from category"
                         value = groups[0].strip()
@@ -2975,7 +2987,12 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     if category:
                         category = FIELD_MAPPING.get(category, category)
                     
+                    # If we have a value, create a delete command
+                    if value:
+                        return {"delete": {"value": value, "category": category}}
+                    
                     return {"delete": {"category": category, "value": value}}
+                
                 elif field == "delete_entire":
                     field_name = match.group(1).lower()
                     mapped_field = FIELD_MAPPING.get(field_name, field_name)
@@ -4096,9 +4113,6 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             COMMAND_HANDLERS[clean_text](chat_id, session)
             return "ok", 200
         
-        # Notify user for free-form reports
-        if CONFIG["ENABLE_FREEFORM_EXTRACTION"] and is_free_form_report(text):
-            send_message(chat_id, "I noticed you sent a detailed report. I'll try to extract all the information from it...")
         
         # For free-form reports, make sure to use NLP extraction
         if CONFIG["ENABLE_NLP_EXTRACTION"]:
