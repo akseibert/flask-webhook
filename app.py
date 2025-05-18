@@ -939,7 +939,7 @@ FIELD_PATTERNS = {
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?|pople)\s+|(?:peoples?|persons?|pople)\s*[:,]?\s*(?:are|is|were|include[ds]?|on\s+site\s+are|:)?\s*)(.+?)(?:\s+as\s+(.+?))?(?:\s*(?:,|\.|$))',
     "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(\w+\s+\w+|\w+)\s+(?:as|is)\s+(.+?)(?:\s*(?:,|\.|$))',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
-    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)(?:\'s)?\s+|compan(?:y|ies)(?:\'s)?\s*[:,]?\s*(?:are|is|were|include[ds]?|:)?\\s*)(.+?)(?:\\s*(?:,|\\.|$))',
+    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)(?:\'s)?\s+|compan(?:y|ies)(?:\'s)?\s*[:,]?\s*(?:are|is|were|include[ds]?|:)?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)(.+?)(?:\s*(?:,|\.|$))',
     "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)(.+?)(?:\s*(?:,|\.|$))',
     "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)(.+?)(?:\s*(?:,|\.|$))',
@@ -2871,7 +2871,12 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     services_text = match.group(1).strip()
                     services = [s.strip() for s in re.split(r',|\s+and\s+', services_text)]
                     result["services"] = [{"task": service} for service in services if service]
-                    return result
+                    if chat_id and chat_id in session_data:
+                        # Just return the new services, merging will be handled later
+                        return {"services": [{"task": service} for service in services if service]}
+                    else:
+                        # Only return the complete result if we're not in a chat context
+                        return result 
                 elif field == "activity":
                     activities_text = match.group(1).strip()
                     activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text)]
@@ -3049,6 +3054,16 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         print(f"ERROR in extract_fields: {str(e)}")
         # Return a minimal result to avoid breaking the app
         return {"error": str(e)}
+
+def preserve_existing_data(chat_id, new_data):
+    """Make sure we don't lose existing data when adding new items"""
+    if chat_id in session_data and "structured_data" in session_data[chat_id]:
+        existing_data = session_data[chat_id]["structured_data"]
+        # Preserve all existing fields that aren't in the new data
+        for field in existing_data:
+            if field not in new_data:
+                new_data[field] = existing_data[field]
+    return new_data
 
 # Part 10 - b Merge Data Function
 
