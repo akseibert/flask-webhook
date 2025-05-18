@@ -2870,7 +2870,6 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return result
                 
                 elif field == "tool":
-                    elif field == "company":
                     tools_text = match.group(1).strip()
                     # Remove any "add" prefix that might have been captured
                     tools_text = re.sub(r'^add\s+', '', tools_text, flags=re.IGNORECASE)
