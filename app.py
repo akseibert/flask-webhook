@@ -8,6 +8,7 @@ import requests
 import logging
 import signal
 import traceback
+import pytz
 from datetime import datetime
 from time import time
 from typing import Dict, Any, List, Optional, Callable, Tuple, Set, Union
@@ -27,6 +28,14 @@ from functools import lru_cache
 
 # Initialize Flask app
 app = Flask(__name__)
+
+
+# --- Timezone utility function ---
+def get_berlin_time():
+    """Get current time in Berlin timezone"""
+    berlin_tz = pytz.timezone('Europe/Berlin')
+    return datetime.now(berlin_tz)
+
 
 # --- Important function definitions (adding stubs to prevent "not defined" errors) ---
 
@@ -925,12 +934,12 @@ list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*|section\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
-    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\s*(?:is|are|:)?\\s*)(.+?)(?:\\s*(?:,|\\.|$))',
+    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\s*(?:is|are|:)?\\s*|category\s+)(.+?)(?:\\s*(?:,|\\.|$))',
     "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?|pople)\s+|(?:peoples?|persons?|pople)\s*[:,]?\s*(?:are|is|were|include[ds]?|on\s+site\s+are|:)?\s*)(.+?)(?:\s+as\s+(.+?))?(?:\s*(?:,|\.|$))',
     "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(\w+\s+\w+|\w+)\s+(?:as|is)\s+(.+?)(?:\s*(?:,|\.|$))',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
-    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)\s+|compan(?:y|ies)\s*[:,]?\s*(?:are|is|were|include[ds]?|:)?\s*)(.+?)(?:\s*(?:,|\.|$))',
+    "company": r'^(?:(?:add|insert)\s+compan(?:y|ies)(?:\'s)?\s+|compan(?:y|ies)(?:\'s)?\s*[:,]?\s*(?:are|is|were|include[ds]?|:)?\\s*)(.+?)(?:\\s*(?:,|\\.|$))',
     "service": r'^(?:(?:add|insert)\s+services?\s+|services?\s*[:,]?\s*|services?\s*(?:were|provided)\s+)(.+?)(?:\s*(?:,|\.|$))',
     "tool": r'^(?:(?:add|insert)\s+tools?\s+|tools?\s*[:,]?\s*|tools?\s*used\s*(?:included|were)\s+)(.+?)(?:\s*(?:,|\.|$))',
     "activity": r'^(?:(?:add|insert)\s+activit(?:y|ies)\s+|activit(?:y|ies)\s*[:,]?\s*|activit(?:y|ies)\s*(?:covered|included)?\s*)(.+?)(?:\s*(?:,|\.|$))',
@@ -938,9 +947,9 @@ FIELD_PATTERNS = {
     "weather": r'^(?:(?:add|insert)\s+weathers?\s+|weathers?\s*[:,]?\s*|weather\s+was\s+|good\s+weather\s*|bad\s+weather\s*|sunny\s*|cloudy\s*|rainy\s*)(.+?)(?:\s*(?:,|\.|$))',
     "time": r'^(?:(?:add|insert)\s+times?\s+|times?\s*[:,]?\s*|time\s+spent\s+|morning\s+time\s*|afternoon\s+time\s*|evening\s+time\s*)(.+?)(?:\s*(?:,|\.|$))',
     "comments": r'^(?:(?:add|insert)\s+comments?\s+|comments?\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
-    "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*(?:none|delete|clear|remove|reset)$',
+    "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*(?:none|delete|clear|remove|reset)$|^(?:clear|empty|reset)\s+(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)$',
     "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": r'^(?:delete|remove|none)\s+(.+?)\s+from\s+(.+?)(?:\\s*(?:,|\\.|$))|^delete\s+(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?)(?:\\s*(?:,|\\.|$))',
+    "delete": r'^(?:delete|remove|none)\s+(.+?)\s+from\s+(.+?)(?:\s*(?:,|\.|$))|^delete\s+(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|impression)(?:\s*(?:,|\.|$))|^delete\s+(.+?)(?:\s*(?:,|\.|$))', 
     "delete_entire": r'^(?:delete|remove|clear)\s+(?:entire|all)\s+(.+?)(?:\s*(?:,|\.|$))',
     "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+(.+?)\s+in\s+(.+?)\s+to\s+(.+?)(?:\s*(?:,|\.|$))',
     "help": r'^help(?:\s+on\s+([a-z_]+))?$|^\/help(?:\s+([a-z_]+))?$',
@@ -952,7 +961,10 @@ FIELD_PATTERNS = {
     "sharepoint": r'^(export|sync|upload|send|save)\s+(to|on|in|into)\s+sharepoint\s*[.!]?$',
     "sharepoint_status": r'^sharepoint\s+(status|info|information|connection|check)\s*[.!]?$',
     "yes_confirm": r'^(?:yes|ya|yep|yeah|yup|ok|okay|sure|confirm|confirmed|y|да|ню|нью)\s*[.!]?$',
-    "no_confirm": r'^(?:no|nope|nah|negative|n|нет)\s*[.!]?$'
+    "no_confirm": r'^(?:no|nope|nah|negative|n|нет)\s*[.!]?$',
+    "greeting": r'^(?:hi|hello|hey|greetings|good morning|good afternoon|good evening)\.?$',
+    "conversation": r'^(?:i want to|i need to|i would like to|can i|could i|can you|could you)\s+(.+)$'
+
 }
 # Extended regex patterns for more nuanced commands
 CONTEXTUAL_PATTERNS = {
@@ -1139,7 +1151,7 @@ def blank_report() -> Dict[str, Any]:
         "site_name": "", "segment": "", "category": "",
         "companies": [], "people": [], "roles": [], "tools": [], "services": [],
         "activities": [], "issues": [], "time": "", "weather": "",
-        "impression": "", "comments": "", "date": datetime.now().strftime("%d-%m-%Y")
+        "impression": "", "comments": "", "date": get_berlin_time().strftime("%d-%m-%Y")
     }
 
 # Part 4
@@ -1300,12 +1312,19 @@ def transcribe_voice(file_id: str) -> Tuple[str, float]:
         # Normalize text - handle common non-English transcriptions
         text = normalize_transcription(text)
         
-        # Better confidence calculation based on multiple factors
+    
+        # Calculate confidence based on multiple factors
         confidence = 0.0
 
-        # Base confidence from length - longer coherent sentences tend to be more accurate
-        if len(text.split()) < 5:
-            length_confidence = 0.4  # Give short commands a higher base confidence
+        # Adjust confidence based on text length
+        text_words = text.split()
+        if len(text_words) < 5:  # Short command
+            if any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export", "yes", "no"]):
+                length_confidence = 0.5  # Higher confidence for common short commands
+            else:
+                length_confidence = min(0.7, (len(text) / 250) * 0.5)
+        elif len(text_words) > 100:  # Long report
+            length_confidence = 0.6  # Higher confidence for long reports
         else:
             length_confidence = min(0.7, (len(text) / 250) * 0.5)
 
@@ -1361,6 +1380,11 @@ def transcribe_voice(file_id: str) -> Tuple[str, float]:
         
         # Extract and return confidence (approximate calculation)
         confidence = min(0.95, 0.5 + (len(text) / 200))
+
+        # Boost confidence for simple commands
+        if len(text.split()) < 5:
+            if any(cmd in text.lower() for cmd in ["delete", "add", "yes", "no", "export"]):
+                confidence = max(confidence, 0.6)
         
         # Log the transcription for debugging
         with open(f'/opt/render/project/src/voice_logs.txt', 'a') as f:
@@ -2192,9 +2216,13 @@ def extract_with_gpt(text: str) -> Dict[str, Any]:
 
 def is_free_form_report(text: str) -> bool:
     """Enhanced detection of free-form construction reports"""
-    # If text is very short, it's definitely not a report
-    if len(text) < CONFIG["FREEFORM_MIN_LENGTH"]:
+     # If text is very short, it's definitely not a report
+    if len(text) < 150:  # Lowered threshold
         return False
+        
+    # If text is very long, it's likely a report
+    if len(text) > 500:
+        return True
         
     # Check for command-like patterns first
     if re.match(r'^(?:add|insert|delete|remove|category|site|segment|people|companies|roles|tools|services|activities|issues|weather|time|impression|correct)\b', text.lower()):
@@ -3893,6 +3921,20 @@ def handle_help(chat_id: str, session: Dict[str, Any], topic: str = "general") -
     # Get the appropriate help text
     message = help_text.get(topic.lower(), help_text["general"])
     send_message(chat_id, message)
+
+@command("greeting")
+def handle_greeting(chat_id: str, session: Dict[str, Any]) -> None:
+    """Handle greeting messages"""
+    import random
+    greetings = [
+        "Hello! How can I help with your construction site report today?",
+        "Hi there! Need help with a construction report?",
+        "Hello! Would you like to create a new report or continue your existing one?",
+        "Hi! I'm your construction report assistant. What would you like to do today?"
+    ]
+    send_message(chat_id, random.choice(greetings))
+
+
 @command("start")
 def handle_start(chat_id: str, session: Dict[str, Any]) -> None:
     """Help new users get started"""
@@ -3923,6 +3965,31 @@ COMMAND_HANDLERS["summarize"] = handle_summary
 COMMAND_HANDLERS["export to sharepoint"] = handle_sharepoint_export
 COMMAND_HANDLERS["sharepoint status"] = handle_sharepoint_status
 
+def recognize_intent(text: str) -> Dict[str, Any]:
+    """Recognize user intent from conversational messages"""
+    # Check for reset/new report intent
+    reset_phrases = [
+        "create a new report", "start a new report", "make a new report",
+        "begin a new report", "start over", "start fresh"
+    ]
+    
+    for phrase in reset_phrases:
+        if phrase in text.lower():
+            return {"reset": True}
+    
+    delete_match = re.search(r"delete\s+(.+?)(?:\s+from\s+(.+))?", text.lower())
+    if delete_match:
+        category = delete_match.group(2)
+        value = delete_match.group(1)
+        if category:
+            return {"delete": {"category": category, "value": value}}
+        elif value in ["issues", "activities", "comments", "tools", "services", "companies", "people", "roles"]:
+            return {value: {"delete": True}}
+        else:
+            return {"delete": {"value": value}}
+    
+    return {}
+
 # Part 12 Handle Commands 
 def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[str, int]:
     """Process user command and update session data"""
@@ -3939,6 +4006,29 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                 session["awaiting_reset_confirmation"] = False
                 save_session(session_data)
                 send_message(chat_id, "Reset cancelled. Your report was not changed.")
+                return "ok", 200
+        # Handle greetings
+        if re.match(FIELD_PATTERNS["greeting"], text, re.IGNORECASE):
+            handle_greeting(chat_id, session)
+            return "ok", 200
+        
+        # Handle conversational intents
+        if re.match(FIELD_PATTERNS["conversation"], text, re.IGNORECASE):
+            conversation_match = re.match(FIELD_PATTERNS["conversation"], text, re.IGNORECASE)
+            intent_text = conversation_match.group(1)
+            intent = recognize_intent(intent_text)
+            if intent:
+                # For reset intent, send confirmation message
+                if "reset" in intent:
+                    send_message(chat_id, "You want to start a new report? Please confirm with 'yes'.")
+                    session["awaiting_reset_confirmation"] = True
+                    save_session(session_data)
+                    return "ok", 200
+                # For other intents, process them
+                extracted = intent
+                # Continue with regular command processing
+            else:
+                send_message(chat_id, "I'm not sure what you want to do. Try being more specific or use commands like 'add site Downtown Project'.")
                 return "ok", 200
                 
         # Handle spelling correction confirmations
@@ -4182,6 +4272,8 @@ def webhook() -> tuple[str, int]:
         if "voice" in message:
             try:
                 file_id = message["voice"]["file_id"]
+                if message["voice"].get("duration", 0) > 20:  # If longer than 20 seconds
+                    send_message(chat_id, "I'm processing your detailed report. This may take a moment...")
                 text, confidence = transcribe_voice(file_id)
                 
                 # For short commands (less than 5 words), lower the threshold
