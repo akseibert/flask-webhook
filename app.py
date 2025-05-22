@@ -301,8 +301,8 @@ CONFIG = {
         "REPORTS_FOLDER": config("SHAREPOINT_REPORTS_FOLDER", default="Shared Documents/ConstructionReports"),
     },
     # New NLP extraction settings
-    "ENABLE_NLP_EXTRACTION": config("ENABLE_NLP_EXTRACTION", default=True, cast=bool),
-    "NLP_MODEL": config("NLP_MODEL", default="gpt-3.5 turbo", cast=str),
+    "ENABLE_NLP_EXTRACTION": config("ENABLE_NLP_EXTRACTION", default=False, cast=bool),
+    "NLP_MODEL": config("NLP_MODEL", default="gpt-3.5-turbo", cast=str),
     "NLP_EXTRACTION_CONFIDENCE_THRESHOLD": config("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", default=0.7, cast=float),
     "NLP_MAX_TOKENS": config("NLP_MAX_TOKENS", default=2000, cast=int),
     "NLP_FALLBACK_TO_REGEX": config("NLP_FALLBACK_TO_REGEX", default=True, cast=bool),
@@ -2910,17 +2910,18 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     tools_text = match.group(1).strip()
                     # Remove any "add" prefix that might have been captured
                     tools_text = re.sub(r'^add\s+', '', tools_text, flags=re.IGNORECASE)
-                    tools = [c.strip() for c in re.split(r',|\s+and\s+', tools_text)]
-                    result["tools"] = [{"item": tool} for tool in tools if tool]
-
+                    # Split on commas, "and", or semicolons
+                    tools = [t.strip() for t in re.split(r',|\s+and\s+|;', tools_text) if t.strip()]
+                    result["tools"] = [{"item": tool} for tool in tools]
                     return result
                 
                 elif field == "service":
                     services_text = match.group(1).strip()
-                    # Remove any "add" prefix that might have been captured
+                    # Remove any "add" prefix
                     services_text = re.sub(r'^add\s+', '', services_text, flags=re.IGNORECASE)
-                    services = [c.strip() for c in re.split(r',|\s+and\s+', services_text)]
-                    result["services"] = [{"name": service} for service in services if service]
+                    # Split on commas, "and", or semicolons
+                    services = [s.strip() for s in re.split(r',|\s+and\s+|;', services_text) if s.strip()]
+                    result["services"] = [{"task": service} for service in services]
                     return result
                 
                     if chat_id and chat_id in session_data:
@@ -2932,16 +2933,21 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     
                 elif field == "activity":
                     activities_text = match.group(1).strip()
-                    activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text)]
+                    # Remove any "add" prefix
+                    activities_text = re.sub(r'^add\s+', '', activities_text, flags=re.IGNORECASE)
+                    # Split on commas, "and", or semicolons  
+                    activities = [a.strip() for a in re.split(r',|\s+and\s+|;', activities_text) if a.strip()]
                     result["activities"] = activities
                     return result
+
                 elif field == "issue":
                     issues_text = match.group(1).strip()
-                    issues = [i.strip() for i in re.split(r';|,|\s+and\s+', issues_text)]
+                    # Split on semicolons, commas, or "and"
+                    issues = [i.strip() for i in re.split(r';|,|\s+and\s+', issues_text) if i.strip()]
                     result["issues"] = []
                     for issue in issues:
                         if issue:
-                            has_photo = "photo" in issue.lower() or "picture" in issue.lower() or "took a" in issue.lower()
+                            has_photo = "photo" in issue.lower() or "picture" in issue.lower()
                             result["issues"].append({"description": issue, "has_photo": has_photo})
                     return result
                 elif field == "time":
@@ -3323,6 +3329,13 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     
                     if not removed:
                         changes.append(f"no company '{value}' found to remove")
+                # Send immediate feedback for delete operations
+                if deleted_something:
+                    log_event("delete_successful", chat_id=chat_id)
+                    return result  # Return immediately so main function can send success message
+                else:
+                    log_event("delete_failed", chat_id=chat_id, target=value)
+                    # Continue processing in case there are other changes
                 
                 elif category == "tools":
                     # Remove tool
@@ -4368,8 +4381,18 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
 
         # Handle field updates
         session["command_history"].append(session["structured_data"].copy())
+        old_data = session["structured_data"].copy()
         session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
         session["structured_data"] = enrich_date(session["structured_data"])
+        save_session(session_data)
+        
+        # Check if anything actually changed
+        data_changed = old_data != session["structured_data"]
+        if not data_changed and "delete" in extracted:
+            # Special handling for failed deletes
+            target = extracted.get("delete", {}).get("value", "item")
+            send_message(chat_id, f"⚠️ Could not find '{target}' to delete. Please check the exact name.")
+            return "ok", 200
         save_session(session_data)
 
         # Prepare feedback
