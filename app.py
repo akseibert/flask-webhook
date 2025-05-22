@@ -1011,7 +1011,7 @@ FIELD_PATTERNS = {
 
 
     # If no patterns matched, try natural language extraction
-    if not result:
+if not result:
     # Try to extract multiple fields from natural text
     text_lower = text.lower()
     result = {}
@@ -1188,7 +1188,7 @@ FIELD_PATTERNS = {
     if comments_found:
         result["comments"] = " ".join(comments_found)
     
-    return result if result else None
+return result if result else None
 
 # Extended regex patterns for more nuanced commands
 CONTEXTUAL_PATTERNS = {
