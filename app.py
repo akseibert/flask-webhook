@@ -1174,7 +1174,7 @@ FIELD_PATTERNS = {
             if comments_found:
                 result["comments"] = " ".join(comments_found)
             
-            return result if result else None
+        return result if result else None
 
 # Extended regex patterns for more nuanced commands
 CONTEXTUAL_PATTERNS = {
