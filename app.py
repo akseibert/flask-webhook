@@ -3337,7 +3337,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     log_event("delete_failed", chat_id=chat_id, target=value)
                     # Continue processing in case there are other changes
                 
-                elif category == "tools":
+                if category == "tools":
                     # Remove tool
                     removed = False
                     for i, tool in enumerate(result["tools"]):
