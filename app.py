@@ -4530,13 +4530,57 @@ def webhook() -> tuple[str, int]:
             
             # Handle reset confirmation
             if session_data[chat_id].get("awaiting_reset_confirmation", False):
-                # ... keep existing reset confirmation code ...
-                return "ok", 200
-            
+                if text.lower() in ["yes", "y", "yeah", "yep", "sure", "ok", "okay"] or re.match(FIELD_PATTERNS["yes_confirm"], text, re.IGNORECASE):
+                    session_data[chat_id]["awaiting_reset_confirmation"] = False
+                    session_data[chat_id]["structured_data"] = blank_report()
+                    session_data[chat_id]["command_history"].clear()
+                    session_data[chat_id]["last_change_history"].clear()
+                    session_data[chat_id]["context"] = {
+                        "last_mentioned_person": None,
+                        "last_mentioned_item": None,
+                        "last_field": None,
+                    }
+                    save_session(session_data)
+                    summary = summarize_report(session_data[chat_id]["structured_data"])
+                    send_message(chat_id, f"**Report reset**\n\n{summary}\n\nSpeak or type your first category (e.g., 'add site Downtown Project').")
+                    return "ok", 200
+                elif text.lower() in ["no", "n", "nope", "nah"] or re.match(FIELD_PATTERNS["no_confirm"], text, re.IGNORECASE):
+                    session_data[chat_id]["awaiting_reset_confirmation"] = False
+                    save_session(session_data)
+                    send_message(chat_id, "Reset cancelled. Your report was not changed.")
+                    return "ok", 200
+
             # Handle spelling correction
             if session_data[chat_id].get("awaiting_spelling_correction", {}).get("active", False):
-                # ... keep existing spelling correction code ...
-                return "ok", 200
+                if re.match(FIELD_PATTERNS["yes_confirm"], text, re.IGNORECASE):
+                    field = session_data[chat_id]["awaiting_spelling_correction"]["field"]
+                    old_value = session_data[chat_id]["awaiting_spelling_correction"]["old_value"]
+                    session_data[chat_id]["awaiting_spelling_correction"] = {
+                        "active": True,
+                        "field": field,
+                        "old_value": old_value,
+                        "awaiting_new_value": True
+                    }
+                    save_session(session_data)
+                    send_message(chat_id, f"Please enter the correct spelling for '{old_value}' in {field}:")
+                    return "ok", 200
+                elif re.match(FIELD_PATTERNS["no_confirm"], text, re.IGNORECASE):
+                    session_data[chat_id]["awaiting_spelling_correction"] = {"active": False, "field": None, "old_value": None}
+                    save_session(session_data)
+                    send_message(chat_id, "Correction cancelled.")
+                    return "ok", 200
+                else:
+                    field = session_data[chat_id]["awaiting_spelling_correction"]["field"]
+                    old_value = session_data[chat_id]["awaiting_spelling_correction"]["old_value"]
+                    new_value = text.strip()
+                    session_data[chat_id]["awaiting_spelling_correction"] = {"active": False, "field": None, "old_value": None}
+                    extracted = {"correct": [{"field": field, "old": old_value, "new": new_value}]}
+                    session_data[chat_id]["command_history"].append(session_data[chat_id]["structured_data"].copy())
+                    session_data[chat_id]["structured_data"] = merge_data(session_data[chat_id]["structured_data"], extracted, chat_id)
+                    save_session(session_data)
+                    summary = summarize_report(session_data[chat_id]["structured_data"])
+                    send_message(chat_id, f"✅ Corrected {field} from '{old_value}' to '{new_value}'.\n\n{summary}")
+                    return "ok", 200
             
             # Check for command chaining
             if ";" in text or re.search(r'(?<!\d)\.\s+[A-Za-z]', text):
