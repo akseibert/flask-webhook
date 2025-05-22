@@ -1191,6 +1191,9 @@ if not result:
     
     return result if result else None
 
+return None 
+
+
 # Extended regex patterns for more nuanced commands
 CONTEXTUAL_PATTERNS = {
     "reference_person": r'(he|she|they|him|her|them)\b',
