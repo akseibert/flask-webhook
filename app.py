@@ -1899,7 +1899,7 @@ def get_photo_from_telegram(file_id: str, chat_id: str) -> Optional[io.BytesIO]:
         logger.error(f"Failed to get photo from Telegram: {e}")
         return None
 
-def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", photos: Dict[str, List[str]] = None) -> Optional[io.BytesIO]:
+def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", photos: List[Dict] = None, chat_id: str = None) -> Optional[io.BytesIO]:
     """Generate enhanced PDF report with logo and photos"""
     try:
         buffer = io.BytesIO()
@@ -2029,19 +2029,29 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
                     issue_content.append(Paragraph(f"• {desc}", styles['normal']))
                     
                     # Add photo if available and has_photo is True
-                    if issue.get("has_photo") and photos and f"issue_{i}" in photos:
-                        for photo_id in photos[f"issue_{i}"]:
-                            photo_buffer = get_photo_from_telegram(photo_id, report_data.get("chat_id", ""))
-                            if photo_buffer:
-                                try:
-                                    img = Image(photo_buffer, 
-                                              width=CONFIG["MAX_PHOTO_WIDTH"]*inch,
-                                              height=CONFIG["MAX_PHOTO_HEIGHT"]*inch)
-                                    img.hAlign = 'LEFT'
-                                    issue_content.append(Spacer(1, 6))
-                                    issue_content.append(img)
-                                except Exception as e:
-                                    logger.error(f"Failed to add photo to PDF: {e}")
+                    
+                    if issue.get("has_photo") and photos and chat_id:
+                        # Find photos for this issue
+                        for photo_data in photos:
+                            # Match by issue index or description
+                            if (not photo_data.get("pending") and 
+                                (photo_data.get("issue_ref") == str(i+1) or 
+                                 (photo_data.get("caption") and 
+                                  desc.lower() in photo_data.get("caption", "").lower()))):
+                                
+                                photo_buffer = get_photo_from_telegram(photo_data["file_id"], chat_id)
+                                if photo_buffer:
+                                    try:
+                                        img = Image(photo_buffer, 
+                                                  width=CONFIG["MAX_PHOTO_WIDTH"]*inch,
+                                                  height=CONFIG["MAX_PHOTO_HEIGHT"]*inch)
+                                        img.hAlign = 'LEFT'
+                                        issue_content.append(Spacer(1, 6))
+                                        issue_content.append(img)
+                                        if photo_data.get("caption"):
+                                            issue_content.append(Paragraph(f"<i>{photo_data['caption']}</i>", styles['normal']))
+                                    except Exception as e:
+                                        logger.error(f"Failed to add photo to PDF: {e}")
                     
                     # Keep issue and its photo together
                     story.append(KeepTogether(issue_content))
@@ -2978,6 +2988,12 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         # Check for basic commands first
         if normalized_text.lower() in ("yes", "y", "ya", "yeah", "yep", "yup", "okay", "ok"):
             return {"yes_confirm": True}
+        
+        # Check for simple site patterns without command prefix
+        simple_site_pattern = r'^([A-Za-z0-9\s]+)\s+(?:site|project|location)$'
+        simple_site_match = re.match(simple_site_pattern, normalized_text, re.IGNORECASE)
+        if simple_site_match:
+            return {"site_name": simple_site_match.group(1).strip()}
             
         if normalized_text.lower() in ("no", "n", "nope", "nah"):
             return {"no_confirm": True}
@@ -3906,7 +3922,10 @@ def handle_export(chat_id: str, session: Dict[str, Any]) -> None:
     # Use detailed format by default
     report_type = session.get("report_format", "detailed")
     
-    pdf_buffer = generate_pdf(session["structured_data"], report_type)
+    # Pass photos if available
+    photos = session.get("photos", [])
+    pdf_buffer = generate_pdf(session["structured_data"], report_type, photos, chat_id)
+
     if pdf_buffer:
         if send_pdf(chat_id, pdf_buffer, report_type):
             send_message(chat_id, "PDF report sent successfully!")
@@ -4217,8 +4236,24 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                 return "ok", 200
                 
         # Handle spelling correction confirmations
+        
         if session.get("awaiting_spelling_correction", {}).get("active", False):
-            if re.match(FIELD_PATTERNS["yes_confirm"], text, re.IGNORECASE):
+            # Check if we're already waiting for the new value
+            if session["awaiting_spelling_correction"].get("awaiting_new_value"):
+                # User is providing the new spelling
+                field = session["awaiting_spelling_correction"]["field"]
+                old_value = session["awaiting_spelling_correction"]["old_value"]
+                new_value = text.strip()
+                session["awaiting_spelling_correction"] = {"active": False, "field": None, "old_value": None}
+                extracted = {"correct": [{"field": field, "old": old_value, "new": new_value}]}
+                session["command_history"].append(session["structured_data"].copy())
+                session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
+                save_session(session_data)
+                summary = summarize_report(session["structured_data"])
+                send_message(chat_id, f"✅ Corrected {field} from '{old_value}' to '{new_value}'.\n\n{summary}")
+                return "ok", 200
+            # Check for yes confirmation
+            elif re.match(FIELD_PATTERNS["yes_confirm"], text, re.IGNORECASE):
                 field = session["awaiting_spelling_correction"]["field"]
                 old_value = session["awaiting_spelling_correction"]["old_value"]
                 session["awaiting_spelling_correction"] = {
@@ -4230,22 +4265,15 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                 save_session(session_data)
                 send_message(chat_id, f"Please enter the correct spelling for '{old_value}' in {field}:")
                 return "ok", 200
+            # Check for no confirmation
             elif re.match(FIELD_PATTERNS["no_confirm"], text, re.IGNORECASE):
                 session["awaiting_spelling_correction"] = {"active": False, "field": None, "old_value": None}
                 save_session(session_data)
                 send_message(chat_id, "Correction cancelled.")
                 return "ok", 200
+            # Unknown response
             else:
-                field = session["awaiting_spelling_correction"]["field"]
-                old_value = session["awaiting_spelling_correction"]["old_value"]
-                new_value = text.strip()
-                session["awaiting_spelling_correction"] = {"active": False, "field": None, "old_value": None}
-                extracted = {"correct": [{"field": field, "old": old_value, "new": new_value}]}
-                session["command_history"].append(session["structured_data"].copy())
-                session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
-                save_session(session_data)
-                summary = summarize_report(session["structured_data"])
-                send_message(chat_id, f"✅ Corrected {field} from '{old_value}' to '{new_value}'.\n\n{summary}")
+                send_message(chat_id, "Please reply with 'yes' to correct the spelling or 'no' to cancel.")
                 return "ok", 200
                 
         # Check for exact command matches
@@ -4490,11 +4518,76 @@ def webhook() -> tuple[str, int]:
                 send_message(chat_id, "⚠️ There was an error processing your voice message. Please try again or type your message.")
                 return "ok", 200
         # Handle photo messages
+        # Handle photo messages
         if "photo" in message:
             try:
                 # Get the largest photo
                 photo = message["photo"][-1]
                 file_id = photo["file_id"]
+                
+                # Check if there's a caption
+                caption = message.get("caption", "")
+                
+                # Store photo reference in session
+                if "photos" not in session_data[chat_id]:
+                    session_data[chat_id]["photos"] = []
+                
+                # If caption mentions an issue, link it automatically
+                if caption:
+                    # Try to extract issue reference from caption
+                    issue_patterns = [
+                        r'issue\s*#?(\d+)',  # "issue 1" or "issue #1"
+                        r'problem\s*#?(\d+)',  # "problem 1"
+                        r'for\s+(.+)',  # "for crack in wall"
+                    ]
+                    
+                    matched = False
+                    for pattern in issue_patterns:
+                        match = re.search(pattern, caption, re.IGNORECASE)
+                        if match:
+                            # Store photo with issue reference
+                            session_data[chat_id]["photos"].append({
+                                "file_id": file_id,
+                                "issue_ref": match.group(1),
+                                "caption": caption
+                            })
+                            matched = True
+                            send_message(chat_id, f"📸 Photo attached to: {match.group(1)}")
+                            break
+                    
+                    if not matched:
+                        # Just store with caption
+                        session_data[chat_id]["photos"].append({
+                            "file_id": file_id,
+                            "caption": caption
+                        })
+                        send_message(chat_id, "📸 Photo saved with caption: " + caption)
+                else:
+                    # No caption, store as pending
+                    session_data[chat_id]["photos"].append({
+                        "file_id": file_id,
+                        "pending": True
+                    })
+                    
+                    # Check if there are any issues in the report
+                    issues = session_data[chat_id]["structured_data"].get("issues", [])
+                    if issues:
+                        issue_list = "\n".join([f"{i+1}. {issue.get('description', '')[:50]}" 
+                                               for i, issue in enumerate(issues)])
+                        send_message(chat_id, 
+                            f"📸 Photo received! Which issue does this belong to?\n\n{issue_list}\n\n"
+                            "Reply with the issue number (e.g., '1') or add a new issue with the photo.")
+                    else:
+                        send_message(chat_id, 
+                            "📸 Photo received! Add an issue description for this photo "
+                            "(e.g., 'issue: crack in wall on 3rd floor')")
+                
+                save_session(session_data)
+                return "ok", 200
+            except Exception as e:
+                log_event("photo_processing_error", error=str(e))
+                send_message(chat_id, "⚠️ Error processing photo. Please try again.")
+                return "ok", 200
                 
                 # Store photo reference in session
                 if "photos" not in session_data[chat_id]:
