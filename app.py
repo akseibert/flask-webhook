@@ -144,19 +144,78 @@ def extract_fields(text: str) -> Dict[str, Any]:
                         result["site_name"] = site_name
                         break
 
-            # Extract segment
-            segment_pattern = r'(?:segment|section)\s+([A-Za-z0-9\s]+?)(?=\s*(?:category|,|\.|$))'
-            segment_match = re.search(segment_pattern, text, re.IGNORECASE)
-            if segment_match:
-                result["segment"] = segment_match.group(1).strip()
+            
+            # Extract segment - handle various formats
+            segment_patterns = [
+                r'segment\s+([A-Za-z0-9]+)',
+                r'segment\s+(\w+)',
+                r',\s*segment\s+([A-Za-z0-9]+)',
+            ]
+            for pattern in segment_patterns:
+                segment_match = re.search(pattern, text, re.IGNORECASE)
+                if segment_match:
+                    result["segment"] = segment_match.group(1).strip()
+                    break
+
+            
+            # Extract category - special handling for German terms
+            if re.search(r'(?:category|kategorie)\s+(?:Mängelerfassung|Mengelerfassung)', text, re.IGNORECASE):
+                result["category"] = "Mängelerfassung"
+            else:
+                category_pattern = r'(?:category|kategorie)\s+([A-Za-z\u00C0-\u017F]+)'
+                category_match = re.search(category_pattern, text, re.IGNORECASE)
+                if category_match:
+                    result["category"] = category_match.group(1).strip()
 
             # Extract category
-            category_pattern = r'(?:category|kategorie|file\s+under)\s*(?:is\s+|[:,]?\s*)([A-Za-z\s]+)(?=\s*(?:,|\.|$))'
+            category_pattern = r'(?:category|kategorie|file\s+under)\s*(?:is\s+|[:,]?\s*)([A-Za-z\u00C0-\u017F]+)(?=\s*(?:,|\.|$))'
             category_match = re.search(category_pattern, text, re.IGNORECASE)
             if category_match:
                 result["category"] = category_match.group(1).strip()
+            
+            # NEUER CODE HIER EINFÜGEN:
+            # Handle comma-separated list format like "companies, X and Y"
+            list_pattern = r'(\w+)\s*,\s*([^,]+(?:\s+and\s+[^,]+)?)'
+            list_matches = re.findall(list_pattern, text)
 
-            # Extract companies
+            for field_name, values in list_matches:
+                field_lower = field_name.lower()
+                
+                if field_lower in ['companies', 'company']:
+                    # Extract companies from the values
+                    companies = re.findall(r'([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s+(?:Corp|AG|Ltd|Inc|LLC|GmbH|Build|Construction))', values)
+                    if companies:
+                        result["companies"] = [{"name": c.strip()} for c in companies]
+                
+                elif field_lower in ['people', 'person']:
+                    # Extract people and roles
+                    people_parts = re.split(r'\s*,\s*|\s+and\s+', values)
+                    people = []
+                    roles = []
+                    
+                    for part in people_parts:
+                        # Check for "Name as Role" pattern
+                        role_match = re.match(r'([A-Z][a-z]+)\s+as\s+(.+)', part.strip())
+                        if role_match:
+                            name = role_match.group(1).strip()
+                            role = role_match.group(2).strip()
+                            people.append(name)
+                            roles.append({"name": name, "role": role})
+                        else:
+                            # Just a name
+                            name = part.strip()
+                            if name and name[0].isupper():
+                                people.append(name)
+                    
+                    if people:
+                        result["people"] = people
+                    if roles:
+                        result["roles"] = roles
+            
+            # Extract companies - looks for company names (capitalized words ending in Corp, AG, Ltd, etc.)
+            company_matches = re.findall(r'([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s+(?:Corp|AG|Ltd|Inc|LLC|GmbH|Build))', text)
+
+            
             # Extract companies
             companies_patterns = [
                 r'([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s+(?:Corp|AG|Ltd|Inc|LLC|GmbH|Build|Construction))',
@@ -1560,6 +1619,11 @@ def normalize_transcription(text: str) -> str:
         r'\belse\s+true\s+fix\b': r'electro fix',
         r'\bbuild\s+a\b': r'builder',
         r'\broof\s+master\b': r'roof masters',
+        r'\bside\b': r'site',  # "side" -> "site"
+        r'\breverse\s+side\b': r'riverside',  # "reverse side" -> "riverside"
+        r'\bmengelerfassung\b': r'Mängelerfassung',  # German term correction
+        
+        
         
         # Additional construction-specific corrections
         r'\bsee\s+meant\b': r'cement', 
@@ -2379,7 +2443,13 @@ def is_free_form_report(text: str) -> bool:
     # Check for command-like patterns first
     if re.match(r'^(?:insert|delete|remove|correct)\s+', text.lower()):
         return False
-    if re.match(r'^(?:category|site|segment|people|companies|roles|tools|services|activities|issues|weather|time|impression)\s*:', text.lower()):
+    # But allow natural language that happens to start with these words
+    command_pattern = r'^(?:add|insert|delete|remove|correct)\s+(?:site|segment|category|people|companies|tools|services|activities|issues)\s+'
+    if re.match(command_pattern, text.lower()):
+        return False
+        
+    # Also check for field: value pattern
+    if re.match(r'^(?:site|segment|category|people|companies|tools|services|activities|issues|weather|time|impression)\s*:\s*', text.lower()):
         return False
         
     # Look for comprehensive site report indicators
