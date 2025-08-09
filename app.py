@@ -307,7 +307,7 @@ CONFIG = {
     },
     
     # New NLP extraction settings
-    "ENABLE_NLP_EXTRACTION": config("ENABLE_NLP_EXTRACTION", default=True, cast=bool),
+        "ENABLE_NLP_EXTRACTION": config("ENABLE_NLP_EXTRACTION", default=False, cast=bool),
     "NLP_MODEL": config("NLP_MODEL", default="gpt-4", cast=str),
     "NLP_EXTRACTION_CONFIDENCE_THRESHOLD": config("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", default=0.7, cast=float),
     "NLP_MAX_TOKENS": config("NLP_MAX_TOKENS", default=2000, cast=int),
@@ -677,17 +677,16 @@ def hybrid_field_extraction(text: str, chat_id: str = None) -> Dict[str, Any]:
     Uses NLP for complex text and falls back to regex for simpler commands.
     """
     try:
-        # 1. First try regex pattern matching for command-like inputs
-        if re.match(r'^(?:add|site|category|segment|people|companies|tools|services|activities|issues|weather|time|impression|reset|new|yes|no|export|summary|detailed|help)\b', text.lower()):
-            # For command-like text, use regex extraction first
-            log_event("hybrid_extraction_regex_first", chat_id=chat_id)
-            regex_data = extract_fields_with_regex(text, chat_id)
-            
-            # If regex extraction found something substantial, use it
-            if regex_data and not (len(regex_data) == 1 and ("error" in regex_data or 
-                                                           (len(regex_data) == 2 and 
-                                                            ("error" in regex_data and "site_name" in regex_data) and
-                                                            not regex_data.get("site_name")))):
+        # 1. ALWAYS try regex first for ANY command-like text
+        log_event("hybrid_extraction_regex_first", chat_id=chat_id)
+        regex_data = extract_fields_with_regex(text, chat_id)
+        
+        # If regex found something meaningful, use it
+        if regex_data and not (len(regex_data) == 1 and "error" in regex_data):
+            return regex_data
+        
+        # 2. Only use NLP for longer, complex text
+        if len(text) > 50 and CONFIG["ENABLE_NLP_EXTRACTION"]:
                 return regex_data
         
         # 2. For non-command text or if regex failed, check if NLP is enabled
@@ -832,8 +831,107 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         print("MAIN extract_fields FUNCTION RUNNING")
         log_event("extract_fields_main", input=text[:100], chat_id=chat_id)
         
-        # Use the hybrid extraction approach that combines NLP and regex
+        # OPTIMIZATION: Skip NLP for simple commands
+        simple_commands = ["yes", "no", "new", "reset", "export", "status", "help", "undo", 
+                          "summary", "detailed", "export pdf", "new report", "reset report"]
+        
+        if text.lower().strip() in simple_commands:
+            # Use regex extraction directly for simple commands
+            result = extract_fields_with_regex(text, chat_id)
+            if result:
+                return result
+def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
+    """
+    Extract fields from text input with enhanced NLP capabilities
+    This is the main entry point for field extraction that other functions should call
+    """
+    try:
+        print("MAIN extract_fields FUNCTION RUNNING")
+        log_event("extract_fields_main", input=text[:100], chat_id=chat_id)
+        
+        result: Dict[str, Any] = {}
+        normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
+        
+        # OPTIMIZATION: Skip NLP for simple commands
+        simple_commands = ["yes", "no", "new", "reset", "export", "status", "help", "undo", 
+                          "summary", "detailed", "export pdf", "new report", "reset report"]
+        
+        if text.lower().strip() in simple_commands:
+            # Use regex extraction directly for simple commands
+            result = extract_fields_with_regex(text, chat_id)
+            if result:
+                return result
+        
+        # FIX 2: Handle simple spelling corrections (ADD THIS HERE!)
+        correct_simple = re.match(r'^correct\s+spelling\s+(.+?)(?:\s*(?:,|\.|$))', normalized_text, re.IGNORECASE)
+        if correct_simple:
+            # Parse companies from the correction
+            companies_text = correct_simple.group(1).strip()
+            companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
+            result = {"companies": [{"name": company} for company in companies if company]}
+            return result
+        
+        # FIX 7: Check for simple site patterns without command prefix (ADD THIS HERE!)
+        simple_patterns = [
+            (r'^([A-Za-z0-9\s]+)\s+(?:site|project|location)$', 'site_name'),
+            (r'^time\s*[:=]?\s*(.+)$', 'time'),
+            (r'^weather\s*[:=]?\s*(.+)$', 'weather'),
+            (r'^impression\s*[:=]?\s*(.+)$', 'impression'),
+        ]
+        
+        for pattern, field in simple_patterns:
+            match = re.match(pattern, normalized_text, re.IGNORECASE)
+            if match:
+                return {field: match.group(1).strip()}
+        
+        # OPTIMIZATION: Skip NLP for short command-like text
+        if len(text.split()) <= 3 and any(text.lower().startswith(cmd) for cmd in 
+            ["add", "delete", "site", "segment", "category", "people", "companies", 
+             "tools", "services", "activities", "issues", "weather", "time"]):
+            # Use regex extraction for short commands
+            result = extract_fields_with_regex(text, chat_id)
+            if result:
+                return result
+        
+        # For longer text, use the hybrid approach
         result = hybrid_field_extraction(text, chat_id)
+        
+        # ... rest of the function continues ...
+        
+        # OPTIMIZATION: Skip NLP for short command-like text
+        if len(text.split()) <= 3 and any(text.lower().startswith(cmd) for cmd in 
+            ["add", "delete", "site", "segment", "category", "people", "companies", 
+             "tools", "services", "activities", "issues", "weather", "time"]):
+            # Use regex extraction for short commands
+            result = extract_fields_with_regex(text, chat_id)
+            if result:
+                return result
+        
+        
+        # For longer text, try regex first, then use hybrid only if needed
+        result = extract_fields_with_regex(text, chat_id)
+        if not result or "error" in result:
+            # Only use hybrid for very long free-form text
+            if len(text) > 100:
+                result = hybrid_field_extraction(text, chat_id)
+        
+        # Handle additional post-processing if needed
+        if result and not "error" in result:
+            # For scalar fields, ensure they're strings
+            for field in SCALAR_FIELDS:
+                if field in result and not isinstance(result[field], str):
+                    result[field] = str(result[field]) if result[field] is not None else ""
+            
+            # Make sure date is properly formatted
+            if not "date" in result:
+                result["date"] = datetime.now().strftime("%d-%m-%Y")
+        
+        log_event("extract_fields_completed", result_fields=len(result))
+        return result
+    except Exception as e:
+        log_event("extract_fields_error", input=text[:100], error=str(e), traceback=traceback.format_exc())
+        print(f"ERROR in extract_fields: {str(e)}")
+        return {"error": str(e)}
         
         # Handle additional post-processing if needed
         if result and not "error" in result:
@@ -950,7 +1048,7 @@ list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*|section\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
-    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\\s*(?:is|are|:)?\s*|category\s+)(.+?)(?:\s*(?:,|\.|$))',
+    "category": r'^(?:category\s*[:=]?\s*|kategorie\s*[:=]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?|pople)\s+|(?:peoples?|persons?|pople)\s*[:,]?\s*(?:are|is|were|include[ds]?|on\s+site\s+are|:)?\s*)(.+?)(?:\s+as\s+(.+?))?(?:\s*(?:,|\.|$))',
     "person_as_role": r'^(\w+(?:\s+\w+)?)\s+as\s+(\w+(?:\s+\w+)?)(?:\s*(?:,|\.|$))',
@@ -974,15 +1072,18 @@ FIELD_PATTERNS = {
     "context_add": r'^(?:add|include|insert)\s+(?:it|this|that|him|her|them)\s+(?:to|in|into|as)\s+(.+?)\s*[.!]?$',
     "summary": r'^(summarize|summary|short report|brief report|overview|compact report)\s*[.!]?$',
     "detailed": r'^(detailed|full|complete|comprehensive)\s+report\s*[.!]?$',
-    "export_pdf": r'^(export|export pdf|export report|generate pdf|generate report)\s*[.!]?$',
+    "export_pdf": r'^(?:export\s*pdf|export|pdf|generate\s*pdf|generate\s*report|export\s*report)\.?\s*$',
     "sharepoint": r'^(export|sync|upload|send|save)\s+(to|on|in|into)\s+sharepoint\s*[.!]?$',
     "sharepoint_status": r'^sharepoint\s+(status|info|information|connection|check)\s*[.!]?$',
     "yes_confirm": r'^(?:yes|ya|yep|yeah|yup|ok|okay|sure|confirm|confirmed|y|да|ню|нью)\s*[.!]?$',
     "no_confirm": r'^(?:no|nope|nah|negative|n|нет)\s*[.!]?$',
     "greeting": r'^(?:hi|hello|hey|greetings|good morning|good afternoon|good evening)\.?$',
-    "conversation": r'^(?:i want to|i need to|i would like to|can i|could i|can you|could you)\s+(.+)$'
+    "conversation": r'^(?:i want to|i need to|i would like to|can i|could i|can you|could you)\s+(.+)$',
+    "correct_simple": r'^correct\s+spelling\s+(.+?)(?:\s*(?:,|\.|$))'
 
 }
+
+
 # Extended regex patterns for more nuanced commands
 CONTEXTUAL_PATTERNS = {
     "reference_person": r'(he|she|they|him|her|them)\b',
@@ -1336,7 +1437,7 @@ def transcribe_voice(file_id: str) -> Tuple[str, float]:
         # Adjust confidence based on text length
         text_words = text.split()
         if len(text_words) < 5:  # Short command
-            if any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export", "yes", "no"]):
+            if any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export", "yes", "no", "time", "correct", "weather", "impression"]):
                 length_confidence = 0.5  # Higher confidence for common short commands
             else:
                 length_confidence = min(0.7, (len(text) / 250) * 0.5)
@@ -3534,6 +3635,11 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     matched = False
                     for i, company in enumerate(result[field]):
                         if (isinstance(company, dict) and company.get("name") and 
+                            string_similarity(company["name"].lower(), old_value.lower()) >= 0.95):  # <-- Change from 0.7 to 0.95
+                    
+                    matched = False
+                    for i, company in enumerate(result[field]):
+                        if (isinstance(company, dict) and company.get("name") and 
                             string_similarity(company["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
                             company["name"] = new_value
                             matched = True
@@ -4475,7 +4581,7 @@ def webhook() -> tuple[str, int]:
                     "field": None,
                     "old_value": None
                 },
-                "photos": {},
+                "photos": [],
             }
             save_session(session_data)
         
