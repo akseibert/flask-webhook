@@ -9,6 +9,7 @@ import logging
 import signal
 import traceback
 import pytz
+
 from datetime import datetime
 from time import time
 from typing import Dict, Any, List, Optional, Callable, Tuple, Set, Union
@@ -25,6 +26,10 @@ from reportlab.lib.units import inch, cm
 from reportlab.lib import colors
 from decouple import config
 from functools import lru_cache
+from reportlab.platypus.flowables import HRFlowable
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.platypus import KeepTogether, PageBreak
+from reportlab.pdfgen import canvas
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -300,6 +305,7 @@ CONFIG = {
         "LIST_NAME": config("SHAREPOINT_LIST_NAME", default="ConstructionReports"),
         "REPORTS_FOLDER": config("SHAREPOINT_REPORTS_FOLDER", default="Shared Documents/ConstructionReports"),
     },
+    
     # New NLP extraction settings
     "ENABLE_NLP_EXTRACTION": config("ENABLE_NLP_EXTRACTION", default=True, cast=bool),
     "NLP_MODEL": config("NLP_MODEL", default="gpt-4", cast=str),
@@ -308,6 +314,13 @@ CONFIG = {
     "NLP_FALLBACK_TO_REGEX": config("NLP_FALLBACK_TO_REGEX", default=True, cast=bool),
     "NLP_COMMAND_PATTERN_WEIGHT": config("NLP_COMMAND_PATTERN_WEIGHT", default=0.7, cast=float),
     "NLP_FREE_FORM_WEIGHT": config("NLP_FREE_FORM_WEIGHT", default=0.3, cast=float),
+    
+    # ADD THESE NEW LINES HERE (PDF settings)
+    "PDF_LOGO_PATH": config("PDF_LOGO_PATH", default=""),  # Path to company logo
+    "PDF_LOGO_WIDTH": config("PDF_LOGO_WIDTH", default=2, cast=float),  # Logo width in inches
+    "ENABLE_PDF_PHOTOS": config("ENABLE_PDF_PHOTOS", default=True, cast=bool),
+    "MAX_PHOTO_WIDTH": config("MAX_PHOTO_WIDTH", default=4, cast=float),  # Max photo width in inches
+    "MAX_PHOTO_HEIGHT": config("MAX_PHOTO_HEIGHT", default=3, cast=float),  # Max photo height in inches
 }
 
 # --- Enhanced GPT Prompt for Construction Site Reports ---
@@ -1758,6 +1771,40 @@ def sync_to_sharepoint(chat_id: str, report_data: Dict[str, Any]) -> Dict[str, A
             "error": str(e)
         }
     
+ # ADD THIS NEW CLASS HERE
+class NumberedCanvas(canvas.Canvas):
+    """Canvas that adds page numbers"""
+    def __init__(self, *args, **kwargs):
+        canvas.Canvas.__init__(self, *args, **kwargs)
+        self._saved_page_states = []
+
+    def showPage(self):
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        """Add page number to each page."""
+        num_pages = len(self._saved_page_states)
+        for state in self._saved_page_states:
+            self.__dict__.update(state)
+            self.draw_page_number(num_pages)
+            canvas.Canvas.showPage(self)
+        canvas.Canvas.save(self)
+
+    def draw_page_number(self, page_count):
+        self.setFont("Helvetica", 9)
+        self.setFillColor(colors.gray)
+        self.drawRightString(
+            letter[0] - 0.5*inch,
+            0.5*inch,
+            f"Page {self._pageNumber} of {page_count}"
+        )
+
+# THEN YOUR EXISTING FUNCTION STAYS HERE
+def get_pdf_styles():
+    """Cache PDF styles to improve performance"""
+    styles = getSampleStyleSheet()
+
     # Part 7 Report Generation
     # --- Report Generation ---
 @lru_cache(maxsize=32)
@@ -1765,89 +1812,175 @@ def get_pdf_styles():
     """Cache PDF styles to improve performance"""
     styles = getSampleStyleSheet()
     
-    # Create custom styles
+    # Create custom styles with better formatting
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Title'],
-        fontSize=16,
-        spaceAfter=12
+        fontSize=20,
+        textColor=colors.HexColor('#1a237e'),
+        spaceAfter=16,
+        alignment=TA_CENTER,
+        fontName='Helvetica-Bold'
+    )
+    
+    subtitle_style = ParagraphStyle(
+        'Subtitle',
+        parent=styles['Normal'],
+        fontSize=12,
+        textColor=colors.HexColor('#424242'),
+        spaceAfter=12,
+        alignment=TA_CENTER,
+        fontName='Helvetica'
     )
     
     heading_style = ParagraphStyle(
         'Heading',
         parent=styles['Heading2'],
-        fontSize=12,
-        spaceAfter=6
+        fontSize=14,
+        textColor=colors.HexColor('#1976d2'),
+        spaceAfter=8,
+        spaceBefore=12,
+        fontName='Helvetica-Bold',
+        borderColor=colors.HexColor('#1976d2'),
+        borderWidth=0,
+        borderPadding=0
     )
     
     normal_style = ParagraphStyle(
         'CustomNormal',
         parent=styles['Normal'],
+        fontSize=11,
+        spaceAfter=6,
+        textColor=colors.HexColor('#212121')
+    )
+    
+    label_style = ParagraphStyle(
+        'Label',
+        parent=styles['Normal'],
         fontSize=10,
-        spaceAfter=3
+        textColor=colors.HexColor('#616161'),
+        fontName='Helvetica-Bold'
     )
     
     metadata_style = ParagraphStyle(
         'Metadata',
         parent=styles['Normal'],
-        fontSize=7,
-        textColor=colors.gray
+        fontSize=8,
+        textColor=colors.gray,
+        alignment=TA_CENTER
     )
     
     return {
         'title': title_style,
+        'subtitle': subtitle_style,
         'heading': heading_style,
         'normal': normal_style,
+        'label': label_style,
         'metadata': metadata_style
     }
 
-def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed") -> Optional[io.BytesIO]:
-    """Generate PDF report with enhanced performance"""
+def get_photo_from_telegram(file_id: str, chat_id: str) -> Optional[io.BytesIO]:
+    """Download photo from Telegram and return as BytesIO"""
     try:
-        # Generate a cache key for this report
-        cache_key = f"{hash(json.dumps(report_data, sort_keys=True))}-{report_type}"
+        # Get file path from Telegram
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
+        response = requests.get(url)
+        response.raise_for_status()
+        file_path = response.json()["result"]["file_path"]
         
-        # Check if we have a cached version
-        if hasattr(generate_pdf, 'cache') and cache_key in generate_pdf.cache:
-            log_event("pdf_cached_version_used", report_type=report_type)
-            buffer = generate_pdf.cache[cache_key]
-            buffer.seek(0)
-            return buffer
-            
+        # Download the file
+        file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+        photo_response = requests.get(file_url)
+        photo_response.raise_for_status()
+        
+        # Return as BytesIO
+        return io.BytesIO(photo_response.content)
+    except Exception as e:
+        logger.error(f"Failed to get photo from Telegram: {e}")
+        return None
+
+def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", photos: Dict[str, List[str]] = None) -> Optional[io.BytesIO]:
+    """Generate enhanced PDF report with logo and photos"""
+    try:
         buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        doc = SimpleDocTemplate(
+            buffer, 
+            pagesize=letter,
+            rightMargin=0.75*inch,
+            leftMargin=0.75*inch,
+            topMargin=1*inch,
+            bottomMargin=1*inch
+        )
         styles = get_pdf_styles()
         
         # Start building the document
         story = []
         
-        # Add title and date
-        title = f"Construction Site Report - {report_data.get('site_name', '') or 'Unknown Site'}"
-        story.append(Paragraph(title, styles['title']))
-        story.append(Paragraph(f"Date: {report_data.get('date', datetime.now().strftime('%d-%m-%Y'))}", styles['normal']))
-        story.append(Spacer(1, 12))
+        # Add logo if available
+        if CONFIG.get("PDF_LOGO_PATH") and os.path.exists(CONFIG["PDF_LOGO_PATH"]):
+            try:
+                logo = Image(CONFIG["PDF_LOGO_PATH"], 
+                           width=CONFIG["PDF_LOGO_WIDTH"]*inch, 
+                           height=None)
+                logo.hAlign = 'CENTER'
+                story.append(logo)
+                story.append(Spacer(1, 12))
+            except Exception as e:
+                logger.error(f"Failed to add logo: {e}")
         
-        # Basic site information section
-        story.append(Paragraph("Site Information", styles['heading']))
-        site_info = [
-            ("Site", report_data.get("site_name", "")),
-            ("Segment", report_data.get("segment", "")),
-            ("Category", report_data.get("category", ""))
+        # Add title with better styling
+        site_name = report_data.get('site_name', 'Unknown Site')
+        story.append(Paragraph(f"Construction Site Report", styles['title']))
+        story.append(Paragraph(f"{site_name}", styles['subtitle']))
+        
+        # Add report metadata in a nice table
+        report_date = report_data.get('date', datetime.now().strftime('%d-%m-%Y'))
+        metadata_data = [
+            ['Report Date:', report_date],
+            ['Report Type:', report_type.capitalize()],
+            ['Generated:', datetime.now().strftime('%d-%m-%Y %H:%M')]
         ]
         
-        # Only show non-empty fields in summary mode
-        site_info = [(label, value) for label, value in site_info if value or report_type == "detailed"]
+        metadata_table = Table(metadata_data, colWidths=[2*inch, 3*inch])
+        metadata_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#616161')),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        story.append(metadata_table)
+        story.append(Spacer(1, 12))
         
-        for label, value in site_info:
-            if value:
-                story.append(Paragraph(f"<b>{label}:</b> {value}", styles['normal']))
+        # Add a nice horizontal line
+        story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor('#1976d2')))
+        story.append(Spacer(1, 12))
         
-        if site_info:
-            story.append(Spacer(1, 6))
+        # Basic Information Section with better formatting
+        if any([report_data.get("segment"), report_data.get("category")]):
+            story.append(Paragraph("📍 Site Information", styles['heading']))
+            
+            info_data = []
+            if report_data.get("segment"):
+                info_data.append(['Segment:', report_data.get("segment", "")])
+            if report_data.get("category"):
+                info_data.append(['Category:', report_data.get("category", "")])
+            
+            if info_data:
+                info_table = Table(info_data, colWidths=[1.5*inch, 5*inch])
+                info_table.setStyle(TableStyle([
+                    ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 11),
+                    ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#616161')),
+                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ]))
+                story.append(info_table)
+                story.append(Spacer(1, 12))
         
-        # Personnel section
+        # Personnel & Companies Section
         if report_data.get("people") or report_data.get("companies") or report_data.get("roles"):
-            story.append(Paragraph("Personnel & Companies", styles['heading']))
+            story.append(Paragraph("👥 Personnel & Companies", styles['heading']))
             
             if report_data.get("companies"):
                 companies_str = ", ".join(c.get("name", "") for c in report_data.get("companies", []) if c.get("name"))
@@ -1857,22 +1990,67 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed") -> 
             if report_data.get("people"):
                 people_str = ", ".join(report_data.get("people", []))
                 if people_str:
-                    story.append(Paragraph(f"<b>People:</b> {people_str}", styles['normal']))
+                    story.append(Paragraph(f"<b>Personnel:</b> {people_str}", styles['normal']))
             
             if report_data.get("roles"):
                 roles_list = []
                 for r in report_data.get("roles", []):
                     if isinstance(r, dict) and r.get("name") and r.get("role"):
-                        roles_list.append(f"{r['name']} ({r['role']})")
+                        roles_list.append(f"• {r['name']} - <i>{r['role']}</i>")
                 
                 if roles_list:
-                    story.append(Paragraph(f"<b>Roles:</b> {', '.join(roles_list)}", styles['normal']))
+                    story.append(Paragraph("<b>Roles:</b>", styles['normal']))
+                    for role_str in roles_list:
+                        story.append(Paragraph(role_str, styles['normal']))
             
-            story.append(Spacer(1, 6))
+            story.append(Spacer(1, 12))
         
-        # Equipment and services section
+        # Activities Section
+        if report_data.get("activities"):
+            story.append(Paragraph("📋 Activities", styles['heading']))
+            activities = report_data.get("activities", [])
+            
+            for activity in activities:
+                story.append(Paragraph(f"• {activity}", styles['normal']))
+            
+            story.append(Spacer(1, 12))
+        
+        # Issues Section with Photos
+        if report_data.get("issues"):
+            story.append(Paragraph("⚠️ Issues & Problems", styles['heading']))
+            issues = report_data.get("issues", [])
+            
+            for i, issue in enumerate(issues):
+                if isinstance(issue, dict):
+                    desc = issue.get("description", "")
+                    
+                    # Create issue content
+                    issue_content = []
+                    issue_content.append(Paragraph(f"• {desc}", styles['normal']))
+                    
+                    # Add photo if available and has_photo is True
+                    if issue.get("has_photo") and photos and f"issue_{i}" in photos:
+                        for photo_id in photos[f"issue_{i}"]:
+                            photo_buffer = get_photo_from_telegram(photo_id, report_data.get("chat_id", ""))
+                            if photo_buffer:
+                                try:
+                                    img = Image(photo_buffer, 
+                                              width=CONFIG["MAX_PHOTO_WIDTH"]*inch,
+                                              height=CONFIG["MAX_PHOTO_HEIGHT"]*inch)
+                                    img.hAlign = 'LEFT'
+                                    issue_content.append(Spacer(1, 6))
+                                    issue_content.append(img)
+                                except Exception as e:
+                                    logger.error(f"Failed to add photo to PDF: {e}")
+                    
+                    # Keep issue and its photo together
+                    story.append(KeepTogether(issue_content))
+            
+            story.append(Spacer(1, 12))
+        
+        # Tools & Services Section
         if report_data.get("tools") or report_data.get("services"):
-            story.append(Paragraph("Equipment & Services", styles['heading']))
+            story.append(Paragraph("🔧 Equipment & Services", styles['heading']))
             
             if report_data.get("tools"):
                 tools_str = ", ".join(t.get("item", "") for t in report_data.get("tools", []) if t.get("item"))
@@ -1884,92 +2062,56 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed") -> 
                 if services_str:
                     story.append(Paragraph(f"<b>Services:</b> {services_str}", styles['normal']))
             
-            story.append(Spacer(1, 6))
+            story.append(Spacer(1, 12))
         
-        # Activities section
-        if report_data.get("activities"):
-            story.append(Paragraph("Activities", styles['heading']))
-            activities = report_data.get("activities", [])
-            
-            if report_type == "detailed":
-                # In detailed mode, list each activity with a bullet
-                for activity in activities:
-                    story.append(Paragraph(f"• {activity}", styles['normal']))
-            else:
-                # In summary mode, just list them with commas
-                activities_str = ", ".join(activities)
-                story.append(Paragraph(activities_str, styles['normal']))
-            
-            story.append(Spacer(1, 6))
-        
-        # Issues section
-        if report_data.get("issues"):
-            story.append(Paragraph("Issues & Problems", styles['heading']))
-            issues = report_data.get("issues", [])
-            
-            if issues:
-                if report_type == "detailed":
-                    # In detailed mode, list each issue separately
-                    for issue in issues:
-                        if isinstance(issue, dict):
-                            desc = issue.get("description", "")
-                            by = issue.get("caused_by", "")
-                            photo = " (Photo Available)" if issue.get("has_photo") else ""
-                            extra = f" (by {by})" if by else ""
-                            story.append(Paragraph(f"• {desc}{extra}{photo}", styles['normal']))
-                else:
-                    # In summary mode, just list them with semicolons
-                    issues_str = "; ".join(i.get("description", "") for i in issues if isinstance(i, dict) and i.get("description"))
-                    story.append(Paragraph(issues_str, styles['normal']))
-            
-            story.append(Spacer(1, 6))
-        
-        # Conditions section
+        # Conditions Section
         if report_data.get("time") or report_data.get("weather") or report_data.get("impression"):
-            story.append(Paragraph("Conditions", styles['heading']))
+            story.append(Paragraph("📊 Conditions", styles['heading']))
             
+            conditions_data = []
             if report_data.get("time"):
-                story.append(Paragraph(f"<b>Time:</b> {report_data.get('time', '')}", styles['normal']))
-            
+                conditions_data.append(['Time:', report_data.get("time", "")])
             if report_data.get("weather"):
-                story.append(Paragraph(f"<b>Weather:</b> {report_data.get('weather', '')}", styles['normal']))
-            
+                conditions_data.append(['Weather:', report_data.get("weather", "")])
             if report_data.get("impression"):
-                story.append(Paragraph(f"<b>Impression:</b> {report_data.get('impression', '')}", styles['normal']))
+                conditions_data.append(['Overall Impression:', report_data.get("impression", "")])
             
-            story.append(Spacer(1, 6))
+            if conditions_data:
+                conditions_table = Table(conditions_data, colWidths=[1.5*inch, 5*inch])
+                conditions_table.setStyle(TableStyle([
+                    ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 11),
+                    ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#616161')),
+                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ]))
+                story.append(conditions_table)
+            
+            story.append(Spacer(1, 12))
         
-        # Comments section
+        # Comments Section
         if report_data.get("comments"):
-            story.append(Paragraph("Additional Comments", styles['heading']))
+            story.append(Paragraph("💬 Additional Comments", styles['heading']))
             story.append(Paragraph(report_data.get("comments", ""), styles['normal']))
+            story.append(Spacer(1, 12))
         
-        # Add SharePoint metadata if enabled
+        # Add footer
+        story.append(Spacer(1, 24))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.gray))
+        footer_text = f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         if CONFIG["ENABLE_SHAREPOINT"]:
-            story.append(Spacer(1, 20))
-            footer_text = f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')} | SharePoint ID: "
-            story.append(Paragraph(footer_text, styles['metadata']))
+            footer_text += " | SharePoint Ready"
+        story.append(Paragraph(footer_text, styles['metadata']))
         
-        # Build the document
-        doc.build(story)
+        # Build the document with numbered pages
+        doc.build(story, canvasmaker=NumberedCanvas)
         buffer.seek(0)
         
-        # Cache the result before returning
-        if not hasattr(generate_pdf, 'cache'):
-            generate_pdf.cache = {}
-        
-        # Limit cache size
-        if len(generate_pdf.cache) > 50:
-            # Remove random item
-            generate_pdf.cache.pop(next(iter(generate_pdf.cache)))
-            
-        generate_pdf.cache[cache_key] = buffer
-        
-        buffer.seek(0)
-        log_event("pdf_generated", 
+        log_event("pdf_generated_enhanced", 
                 size_bytes=buffer.getbuffer().nbytes, 
                 report_type=report_type, 
-                site=report_data.get("site_name", "Unknown"))
+                site=site_name,
+                has_photos=bool(photos))
         return buffer
     except Exception as e:
         log_event("pdf_generation_error", error=str(e))
@@ -4304,7 +4446,8 @@ def webhook() -> tuple[str, int]:
                     "active": False,
                     "field": None,
                     "old_value": None
-                }
+                },
+                "photos": {},
             }
             save_session(session_data)
         
@@ -4346,7 +4489,26 @@ def webhook() -> tuple[str, int]:
                 log_event("voice_processing_error", error=str(e))
                 send_message(chat_id, "⚠️ There was an error processing your voice message. Please try again or type your message.")
                 return "ok", 200
-    
+        # Handle photo messages
+        if "photo" in message:
+            try:
+                # Get the largest photo
+                photo = message["photo"][-1]
+                file_id = photo["file_id"]
+                
+                # Store photo reference in session
+                if "photos" not in session_data[chat_id]:
+                    session_data[chat_id]["photos"] = {}
+                
+                # Ask which issue this photo belongs to
+                send_message(chat_id, "📸 Photo received! Which issue does this photo belong to? Reply with the issue number or description.")
+                session_data[chat_id]["pending_photo"] = file_id
+                save_session(session_data)
+                return "ok", 200
+            except Exception as e:
+                log_event("photo_processing_error", error=str(e))
+                send_message(chat_id, "⚠️ Error processing photo. Please try again.")
+                return "ok", 200    
         # Handle text messages
         if "text" in message:
             text = message["text"].strip()
