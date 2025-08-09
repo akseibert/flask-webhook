@@ -687,10 +687,6 @@ def hybrid_field_extraction(text: str, chat_id: str = None) -> Dict[str, Any]:
         
         # 2. Only use NLP for longer, complex text
         if len(text) > 50 and CONFIG["ENABLE_NLP_EXTRACTION"]:
-                return regex_data
-        
-        # 2. For non-command text or if regex failed, check if NLP is enabled
-        if CONFIG["ENABLE_NLP_EXTRACTION"]:
             log_event("hybrid_extraction_nlp", chat_id=chat_id)
             nlp_data, confidence = extract_with_nlp(text)
             
@@ -712,6 +708,19 @@ def hybrid_field_extraction(text: str, chat_id: str = None) -> Dict[str, Any]:
                              chat_id=chat_id)
                 
                 return nlp_data
+        
+        # 3. Fallback to regex extraction if NLP failed or is disabled
+        if CONFIG["NLP_FALLBACK_TO_REGEX"] or not CONFIG["ENABLE_NLP_EXTRACTION"]:
+            log_event("hybrid_extraction_regex_fallback", chat_id=chat_id)
+            return extract_fields_with_regex(text, chat_id)
+        
+        # 4. If all methods failed, return empty result
+        log_event("hybrid_extraction_failed", chat_id=chat_id)
+        return {}
+        
+    except Exception as e:  # <-- ADD THIS
+        log_event("hybrid_extraction_error", error=str(e), traceback=traceback.format_exc(), chat_id=chat_id)
+        return {"error": str(e)}
         
         # 3. Fallback to regex extraction if NLP failed or is disabled
         if CONFIG["NLP_FALLBACK_TO_REGEX"] or not CONFIG["ENABLE_NLP_EXTRACTION"]:
