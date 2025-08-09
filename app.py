@@ -352,7 +352,7 @@ CONFIG = {
     "REPORT_FORMAT": config("REPORT_FORMAT", default="detailed"),
     "MAX_SUGGESTIONS": config("MAX_SUGGESTIONS", default=3, cast=int),
     "ENABLE_FREEFORM_EXTRACTION": config("ENABLE_FREEFORM_EXTRACTION", default=True, cast=bool),
-    "FREEFORM_MIN_LENGTH": config("FREEFORM_MIN_LENGTH", default=200, cast=int),
+    "FREEFORM_MIN_LENGTH": config("FREEFORM_MIN_LENGTH", default=80, cast=int),
     "ENABLE_SHAREPOINT": config("ENABLE_SHAREPOINT", default=False, cast=bool),
     "SHAREPOINT": {
         "SITE_URL": config("SHAREPOINT_SITE_URL", default=""),
@@ -783,6 +783,23 @@ def extract_fields_with_regex(text: str, chat_id: str = None) -> Dict[str, Any]:
         log_event("extract_fields_regex", input=text[:100])
         
         result: Dict[str, Any] = {}
+        normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
+        # Handle "Site <name> Segment <value>" in one sentence
+        m = re.match(r'^(?:site|location|project)\s+(?P<site>.+?)\s+(?:segment|section)\s+(?P<seg>[^,.\n]+)', normalized_text, re.IGNORECASE)
+        if m:
+            result["site_name"] = m.group("site").strip().rstrip(",")
+            result["segment"] = m.group("seg").strip().rstrip(",")
+            # Defensive cleanup in case ASR glued "were on site" to the name
+            result["site_name"] = re.sub(r'\s+were\s+on\s+site$', '', result["site_name"], flags=re.IGNORECASE)
+            # Also grab companies if they're immediately after the comma: "... , A and B were on site"
+            m_cos = re.search(r',\s*(?P<cos>.+?)\s+(?:were|was|are|is)\s+on\s+site\b', normalized_text, re.IGNORECASE)
+            if m_cos:
+                cos_text = m_cos.group("cos")
+                names = [n.strip() for n in re.split(r'\s+and\s+|,', cos_text) if n.strip()]
+                if names:
+                    result["companies"] = [{"name": n} for n in names]
+            return result
+
         # Special case for direct delete commands with company names
         if normalized_text.lower().startswith(("delete ", "remove ")):
             direct_delete = handle_direct_delete_command(normalized_text)
@@ -795,6 +812,37 @@ def extract_fields_with_regex(text: str, chat_id: str = None) -> Dict[str, Any]:
             if re.match(FIELD_PATTERNS[command], normalized_text, re.IGNORECASE):
                 result[command] = True
                 return result
+
+        # Check for basic commands first
+        for command in ["yes_confirm", "no_confirm", "reset", "undo_last", "summary", "detailed", "export_pdf", "help", "sharepoint", "sharepoint_status"]:
+            if re.match(FIELD_PATTERNS[command], normalized_text, re.IGNORECASE):
+                result[command] = True
+                return result
+
+        # Handle "Site X Segment Y" format specifically
+        site_segment_pattern = r'^[Ss]ite\s+(.+?)\s+[Ss]egment\s+(\d+|[A-Z0-9]+)(?:\s*[,.]?\s*(.*))?$'
+        site_segment_match = re.match(site_segment_pattern, normalized_text)
+        if site_segment_match:
+            result["site_name"] = site_segment_match.group(1).strip()
+            result["segment"] = site_segment_match.group(2).strip()
+            
+            # Check if there's additional content after segment
+            additional_content = site_segment_match.group(3)
+            if additional_content:
+                # Process the rest for companies
+                companies_found = []
+                company_pattern = r'([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s+(?:Corp|AG|Ltd|Inc|LLC|GmbH|Build|Construction))'
+                company_matches = re.findall(company_pattern, additional_content)
+                for company in company_matches:
+                    companies_found.append({"name": company.strip()})
+                if companies_found:
+                    result["companies"] = companies_found
+            
+            return result
+
+        # Handle structured commands using FIELD_PATTERNS
+        for field, pattern in FIELD_PATTERNS.items():
+            match = re.match(pattern, normalized_text, re.IGNORECASE)
 
         # Handle structured commands using FIELD_PATTERNS
         for field, pattern in FIELD_PATTERNS.items():
@@ -1034,9 +1082,9 @@ list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 
 
 FIELD_PATTERNS = {
-    "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
+    "site_name": r'^(?:(?:add|insert)\s+sites?\s+|sites?\s*[:,]?\s*|location\s*[:,]?\s*|project\s*[:,]?\s*)(.+?)(?=\s+(?:segment|section)\b|\s*(?:,|\.|$))',
     "segment": r'^(?:(?:add|insert)\s+segments?\s+|segments?\s*[:,]?\s*|section\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
-    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\\s*(?:is|are|:)?\s*|category\s+)(.+?)(?:\s*(?:,|\.|$))',
+    "category": r'^(?:(?:add|insert)\s+(?:categories?|kategorie)\s+|(?:categories?|kategorie)\s*[:,]?\s*(?:is|are|:)?\s*|category\s+)(.+?)(?:\s*(?:,|\.|$))',
     "impression": r'^(?:(?:add|insert)\s+impressions?\s+|impressions?\s*[:,]?\s*)(.+?)(?:\s*(?:,|\.|$))',
     "people": r'^(?:(?:add|insert)\s+(?:peoples?|persons?|pople)\s+|(?:peoples?|persons?|pople)\s*[:,]?\s*(?:are|is|were|include[ds]?|on\s+site\s+are|:)?\s*)(.+?)(?:\s+as\s+(.+?))?(?:\s*(?:,|\.|$))',
     "person_as_role": r'^(\w+(?:\s+\w+)?)\s+as\s+(\w+(?:\s+\w+)?)(?:\s*(?:,|\.|$))',
@@ -2950,7 +2998,14 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
             match = re.match(pattern, normalized_text, re.IGNORECASE)
             if match:
                 if field == "site_name":
-                    result["site_name"] = match.group(1).strip()
+                    site_value = match.group(1).strip()
+                    # Check if segment is included in the site name
+                    segment_in_site = re.search(r'(.+?)\s+[Ss]egment\s+(\d+|[A-Z0-9]+)', site_value)
+                    if segment_in_site:
+                        result["site_name"] = segment_in_site.group(1).strip()
+                        result["segment"] = segment_in_site.group(2).strip()
+                    else:
+                        result["site_name"] = site_value
                     return result
                 elif field == "segment":
                     result["segment"] = match.group(1).strip()
@@ -4582,7 +4637,7 @@ def webhook() -> tuple[str, int]:
                 text, confidence = transcribe_voice(file_id)
                 
                 # For short commands (less than 5 words), lower the threshold
-                if len(text.split()) < 5 and any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export"]):
+                if len(text.split()) < 5 and any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export", "segment", "site"]):
                     confidence_threshold = 0.3
                 else:
                     confidence_threshold = 0.5
