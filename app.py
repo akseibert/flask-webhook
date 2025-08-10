@@ -241,34 +241,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
         print(f"ERROR in extract_fields: {str(e)}")
         return {"error": str(e)}
     
-# Define merge_data function (stub version)
-def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id: str) -> Dict[str, Any]:
-    """Merge new data with existing data, handling special cases"""
-    print("WARNING: Using stub merge_data function - real function not loaded!")
-    return existing_data.copy()
 
-# Define summarize_report function (stub version)
-def summarize_report(data: Dict[str, Any]) -> str:
-    """Generate a formatted text summary of the report data"""
-    print("WARNING: Using stub summarize_report function - real function not loaded!")
-    return "Report Summary"
-
-# Define is_free_form_report function (stub version)
-def is_free_form_report(text: str) -> bool:
-    """Detect if the text looks like a free-form report"""
-    return len(text) > CONFIG["FREEFORM_MIN_LENGTH"]
-
-# Define send_message function (stub version)
-def send_message(chat_id: str, text: str) -> None:
-    """Send message to Telegram with enhanced error handling"""
-    print("WARNING: Using stub send_message function - real function not loaded!")
-    pass
-
-# Define enrich_date function (stub version)
-def enrich_date(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate and standardize date format in report data"""
-    print("WARNING: Using stub enrich_date function - real function not loaded!")
-    return data
 
 # Declare COMMAND_HANDLERS dictionary (empty version)
 COMMAND_HANDLERS: Dict[str, Callable[[str, Dict[str, Any]], None]] = {}
@@ -305,6 +278,23 @@ CONFIG = {
         "LIST_NAME": config("SHAREPOINT_LIST_NAME", default="ConstructionReports"),
         "REPORTS_FOLDER": config("SHAREPOINT_REPORTS_FOLDER", default="Shared Documents/ConstructionReports"),
     },
+
+# Error message templates
+ERROR_MESSAGES = {
+    "voice_unclear": "I couldn't understand your voice message clearly. Please try:\n• Speaking more slowly\n• Reducing background noise\n• Holding the phone closer",
+    "invalid_field": "'{field}' is not a valid field. Available fields: site_name, segment, category, companies, people, roles, tools, services, activities, issues, time, weather, impression, comments",
+    "no_data": "Your report is empty. Start by adding a site name: 'site: [location]'",
+    "duplicate_entry": "'{value}' already exists in {field}",
+    "field_required": "The {field} field is required for this operation",
+    "invalid_command": "Command not recognized. Type 'help' for available commands",
+    "pdf_generation_failed": "Failed to generate PDF. Please check your report has valid data",
+    "sharepoint_not_enabled": "SharePoint integration is not enabled. Contact your administrator",
+}
+
+def get_error_message(error_type: str, **kwargs) -> str:
+    """Get formatted error message"""
+    template = ERROR_MESSAGES.get(error_type, "An error occurred")
+    return template.format(**kwargs)
     
     # New NLP extraction settings
         "ENABLE_NLP_EXTRACTION": config("ENABLE_NLP_EXTRACTION", default=False, cast=bool),
@@ -671,184 +661,6 @@ def calculate_extraction_confidence(data: Dict[str, Any], original_text: str) ->
     # Final confidence score bounded between 0 and 1
     return max(0.0, min(1.0, confidence))
 
-def hybrid_field_extraction(text: str, chat_id: str = None) -> Dict[str, Any]:
-    """
-    Extract fields using both NLP and regex approaches for maximum accuracy.
-    Uses NLP for complex text and falls back to regex for simpler commands.
-    """
-    try:
-        # 1. ALWAYS try regex first for ANY command-like text
-        log_event("hybrid_extraction_regex_first", chat_id=chat_id)
-        regex_data = extract_fields_with_regex(text, chat_id)
-        
-        # If regex found something meaningful, use it
-        if regex_data and not (len(regex_data) == 1 and "error" in regex_data):
-            return regex_data
-        
-        # 2. Only use NLP for longer, complex text
-        if len(text) > 50 and CONFIG["ENABLE_NLP_EXTRACTION"]:
-            log_event("hybrid_extraction_nlp", chat_id=chat_id)
-            nlp_data, confidence = extract_with_nlp(text)
-            
-            # If confidence meets threshold, use NLP results
-            if confidence >= CONFIG["NLP_EXTRACTION_CONFIDENCE_THRESHOLD"]:
-                # Add confidence metadata for logging
-                nlp_data["_extraction_metadata"] = {
-                    "method": "nlp",
-                    "confidence": confidence,
-                    "timestamp": datetime.now().isoformat()
-                }
-                
-                # Clean up before returning
-                if "_extraction_metadata" in nlp_data:
-                    metadata = nlp_data.pop("_extraction_metadata")
-                    log_event("nlp_extraction_successful", 
-                             confidence=metadata["confidence"], 
-                             fields=list(nlp_data.keys()),
-                             chat_id=chat_id)
-                
-                return nlp_data
-        
-        # 3. Fallback to regex extraction if NLP failed or is disabled
-        if CONFIG["NLP_FALLBACK_TO_REGEX"] or not CONFIG["ENABLE_NLP_EXTRACTION"]:
-            log_event("hybrid_extraction_regex_fallback", chat_id=chat_id)
-            return extract_fields_with_regex(text, chat_id)
-        
-        # 4. If all methods failed, return empty result
-        log_event("hybrid_extraction_failed", chat_id=chat_id)
-        return {}
-        
-    except Exception as e:  # <-- ADD THIS
-        log_event("hybrid_extraction_error", error=str(e), traceback=traceback.format_exc(), chat_id=chat_id)
-        return {"error": str(e)}
-        
-        # 3. Fallback to regex extraction if NLP failed or is disabled
-        if CONFIG["NLP_FALLBACK_TO_REGEX"] or not CONFIG["ENABLE_NLP_EXTRACTION"]:
-            log_event("hybrid_extraction_regex_fallback", chat_id=chat_id)
-            return extract_fields_with_regex(text, chat_id)
-        
-        # 4. If all methods failed, return empty result
-        log_event("hybrid_extraction_failed", chat_id=chat_id)
-        return {}
-        
-    except Exception as e:
-        log_event("hybrid_extraction_error", error=str(e), traceback=traceback.format_exc(), chat_id=chat_id)
-        return {"error": str(e)}
-
-def extract_fields_with_regex(text: str, chat_id: str = None) -> Dict[str, Any]:
-    """The original regex-based field extraction (your existing code)"""
-    try:
-        # Print marker to confirm this function is being used
-        print("REGEX extract_fields RUNNING")
-        log_event("extract_fields_regex", input=text[:100])
-        
-        result: Dict[str, Any] = {}
-        normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
-
-        # Check for basic commands first
-        for command in ["yes_confirm", "no_confirm", "reset", "undo_last", "summary", "detailed", "export_pdf", "help", "sharepoint", "sharepoint_status"]:
-            if re.match(FIELD_PATTERNS[command], normalized_text, re.IGNORECASE):
-                result[command] = True
-                return result
-
-        # Handle structured commands using FIELD_PATTERNS
-        for field, pattern in FIELD_PATTERNS.items():
-            match = re.match(pattern, normalized_text, re.IGNORECASE)
-            if match:
-                if field in ["site_name", "segment", "category", "impression", "weather", "time", "comments"]:
-                    result[field] = match.group(1).strip()
-                elif field == "company":
-                    companies_text = match.group(1).strip()
-                    
-                    # Remove any "add" prefix from the companies text
-                    companies_text = re.sub(r'^add\s+', '', companies_text, flags=re.IGNORECASE)
-                    
-                    companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
-                    result["companies"] = [{"name": company} for company in companies if company]
-                    return result
-                elif field == "people":
-                    people_text = match.group(1).strip()
-                    people = [p.strip() for p in re.split(r',|\s+and\s+', people_text) if p.strip()]
-                    result["people"] = people
-                    if match.group(2):  # Role specified
-                        role = match.group(2).strip()
-                        result["roles"] = [{"name": p, "role": role} for p in people]
-                elif field == "role":
-                    if match.group(1) and match.group(2):  # Name and role
-                        name = match.group(1).strip()
-                        role = match.group(2).strip()
-                        result["people"] = result.get("people", []) + [name]
-                        result["roles"] = result.get("roles", []) + [{"name": name, "role": role}]
-                    elif match.group(3):  # Role only
-                        role = match.group(3).strip()
-                        result["roles"] = result.get("roles", []) + [{"name": "Unknown", "role": role}]
-                elif field == "supervisor":
-                    name = match.group(1).strip()
-                    result["people"] = result.get("people", []) + [name]
-                    result["roles"] = result.get("roles", []) + [{"name": name, "role": "Supervisor"}]
-                elif field == "tool":
-                    tools_text = match.group(1).strip()
-                    tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text) if t.strip()]
-                    result["tools"] = [{"item": tool} for tool in tools]
-                elif field == "service":
-                    services_text = match.group(1).strip()
-                    services = [s.strip() for s in re.split(r',|\s+and\s+', services_text) if s.strip()]
-                    result["services"] = [{"task": service} for service in services]
-                elif field == "activity":
-                    activities_text = match.group(1).strip()
-                    activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text) if a.strip()]
-                    result["activities"] = activities
-                elif field == "issue":
-                    issues_text = match.group(1).strip()
-                    issues = [i.strip() for i in re.split(r';|,|\s+and\s+', issues_text) if i.strip()]
-                    result["issues"] = [{"description": issue, "has_photo": "photo" in issue.lower()} for issue in issues]
-                elif field == "delete":
-                    target = match.group(1).strip()
-                    field_name = match.group(2).strip()
-                    result["delete"] = {"target": target, "field": FIELD_MAPPING.get(field_name, field_name)}
-                elif field == "delete_entire":
-                    field_name = match.group(1).strip()
-                    result["delete_entire"] = {"field": FIELD_MAPPING.get(field_name, field_name)}
-                elif field == "correct":
-                    old_value = match.group(1).strip()
-                    field_name = match.group(2).strip()
-                    new_value = match.group(3).strip()
-                    result["correct"] = [{"field": FIELD_MAPPING.get(field_name, field_name), "old": old_value, "new": new_value}]
-                return result
-
-        # Handle free-form reports
-        if len(text) > 50 and CONFIG["ENABLE_FREEFORM_EXTRACTION"]:
-            log_event("detected_free_form_report", length=len(text))
-            
-            # Your existing free-form extraction code...
-            # This should integrate with the existing extract_fields function
-            
-        log_event("fields_extracted_regex", result_fields=len(result))
-        return result
-    except Exception as e:
-        log_event("extract_fields_regex_error", input=text[:100], error=str(e), traceback=traceback.format_exc())
-        print(f"ERROR in extract_fields_regex: {str(e)}")
-        return {"error": str(e)}
-
-# --- REPLACE your main extract_fields function ---
-def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
-    """
-    Extract fields from text input with enhanced NLP capabilities
-    This is the main entry point for field extraction that other functions should call
-    """
-    try:
-        print("MAIN extract_fields FUNCTION RUNNING")
-        log_event("extract_fields_main", input=text[:100], chat_id=chat_id)
-        
-        # OPTIMIZATION: Skip NLP for simple commands
-        simple_commands = ["yes", "no", "new", "reset", "export", "status", "help", "undo", 
-                          "summary", "detailed", "export pdf", "new report", "reset report"]
-        
-        if text.lower().strip() in simple_commands:
-            # Use regex extraction directly for simple commands
-            result = extract_fields_with_regex(text, chat_id)
-            if result:
-                return result
 def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
     """
     Extract fields from text input with enhanced NLP capabilities
@@ -1091,6 +903,49 @@ FIELD_PATTERNS = {
     "correct_simple": r'^correct\s+spelling\s+(.+?)(?:\s*(?:,|\.|$))'
 
 }
+
+class ConversationContext:
+    """Manage conversation context for better understanding"""
+    
+    def __init__(self):
+        self.last_mentioned_person = None
+        self.last_mentioned_item = None
+        self.last_field = None
+        self.last_command = None
+        self.pending_operations = []
+        
+    def update_from_extraction(self, extracted_data: Dict[str, Any]):
+        """Update context based on extracted data"""
+        if "people" in extracted_data and extracted_data["people"]:
+            self.last_mentioned_person = extracted_data["people"][-1]
+        
+        if "companies" in extracted_data and extracted_data["companies"]:
+            self.last_mentioned_item = extracted_data["companies"][-1].get("name")
+        elif "tools" in extracted_data and extracted_data["tools"]:
+            self.last_mentioned_item = extracted_data["tools"][-1].get("item")
+        
+        for field in extracted_data:
+            if field not in ["error", "delete", "correct"]:
+                self.last_field = field
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for storage"""
+        return {
+            "last_mentioned_person": self.last_mentioned_person,
+            "last_mentioned_item": self.last_mentioned_item,
+            "last_field": self.last_field,
+            "last_command": self.last_command
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ConversationContext':
+        """Create from dictionary"""
+        context = cls()
+        context.last_mentioned_person = data.get("last_mentioned_person")
+        context.last_mentioned_item = data.get("last_mentioned_item")
+        context.last_field = data.get("last_field")
+        context.last_command = data.get("last_command")
+        return context
 
 
 # Extended regex patterns for more nuanced commands
@@ -1413,19 +1268,16 @@ def get_telegram_file_path(file_id: str) -> str:
             
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def transcribe_voice(file_id: str) -> Tuple[str, float]:
-    """Transcribe voice message with confidence score and language normalization"""
+    """Transcribe voice message with enhanced confidence scoring"""
     try:
         audio_url = get_telegram_file_path(file_id)
         audio_response = requests.get(audio_url)
         audio_response.raise_for_status()
         audio = audio_response.content
+        
         log_event("audio_fetched", size_bytes=len(audio))
         
-        # Log the raw audio for debugging purposes
-        with open(f'/opt/render/project/src/voice_logs.txt', 'a') as f:
-            timestamp = datetime.now().isoformat()
-            f.write(f"{timestamp} - FILE_ID: {file_id} - SIZE: {len(audio)} bytes\n")
-        
+        # Get transcription
         response = client.audio.transcriptions.create(
             model="whisper-1",
             file=("voice.ogg", audio, "audio/ogg")
@@ -1435,6 +1287,49 @@ def transcribe_voice(file_id: str) -> Tuple[str, float]:
         if not text:
             log_event("transcription_empty")
             return "", 0.0
+        
+        # Normalize text
+        text = normalize_transcription(text)
+        
+        # Enhanced confidence calculation
+        confidence = calculate_enhanced_confidence(text, len(audio))
+        
+        log_event("transcription_success", text=text, confidence=confidence)
+        return text, confidence
+        
+    except Exception as e:
+        log_event("transcription_failed", error=str(e))
+        return "", 0.0
+
+def calculate_enhanced_confidence(text: str, audio_size: int) -> float:
+    """Calculate confidence with multiple factors"""
+    confidence = 0.5
+    
+    # Text length factor
+    words = text.split()
+    if 3 <= len(words) <= 100:
+        confidence += 0.2
+    elif len(words) > 100:
+        confidence += 0.15
+    
+    # Construction vocabulary check
+    construction_terms = {'site', 'concrete', 'scaffold', 'safety', 'contractor', 
+                         'building', 'foundation', 'equipment', 'supervisor', 'worker'}
+    text_lower = text.lower()
+    term_matches = sum(1 for term in construction_terms if term in text_lower)
+    confidence += min(0.3, term_matches * 0.05)
+    
+    # Command pattern check
+    if re.match(r'^(add|delete|site|segment|category|companies|people)', text_lower):
+        confidence += 0.15
+    
+    # Penalize suspicious patterns
+    if re.search(r'(\w)\1{4,}', text):  # Repeated characters
+        confidence -= 0.2
+    if len(set(words)) < len(words) * 0.3:  # Too many repeated words
+        confidence -= 0.1
+    
+    return max(0.1, min(1.0, confidence))
         
         # Normalize text - handle common non-English transcriptions
         text = normalize_transcription(text)
@@ -2762,6 +2657,34 @@ def string_similarity(a: str, b: str) -> float:
         log_event("string_similarity_error", error=str(e))
         return 0.0
 
+def validate_field_value(field: str, value: Any) -> Tuple[bool, str]:
+    """Validate field values before processing"""
+    if not value:
+        return True, ""  # Empty values are allowed
+        
+    if field == "date":
+        try:
+            datetime.strptime(value, "%d-%m-%Y")
+            return True, ""
+        except:
+            return False, "Invalid date format. Use DD-MM-YYYY"
+    
+    if field == "segment" and value:
+        if len(value) > 50:
+            return False, "Segment name is too long (max 50 characters)"
+    
+    if field == "site_name" and value:
+        if len(value) > 100:
+            return False, "Site name is too long (max 100 characters)"
+        if re.match(r'^[0-9]+$', value):
+            return False, "Site name cannot be only numbers"
+    
+    if field in ["companies", "people", "tools", "services"]:
+        if isinstance(value, list) and len(value) > 50:
+            return False, f"Too many items in {field} (max 50)"
+    
+    return True, ""
+
 
 def fuzzy_command_match(command: str, chat_id: str) -> Optional[str]:
     """Match a user input to a command using fuzzy matching"""
@@ -3367,6 +3290,19 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
     """Merge new data with existing data, handling special cases"""
     result = existing_data.copy()
     changes = []
+
+# Validate new data first
+    validation_errors = []
+    for field, value in new_data.items():
+        if field not in ["delete", "correct", "reset", "undo", "status", "help", "export_pdf"]:
+            is_valid, error_msg = validate_field_value(field, value)
+            if not is_valid:
+                validation_errors.append(f"{field}: {error_msg}")
+    
+    if validation_errors:
+        log_event("validation_errors", errors=validation_errors)
+        send_message(chat_id, "⚠️ Validation errors:\n" + "\n".join(validation_errors))
+        return existing_data  # Return unchanged data
     
     # Handle special operation: delete items
     if "delete" in new_data:
@@ -3640,11 +3576,6 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             changes.append(f"added person '{old_value}' with role '{new_value}'")
                 elif field == "companies":
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
-                    matched = False
-                    for i, company in enumerate(result[field]):
-                        if (isinstance(company, dict) and company.get("name") and 
-                            string_similarity(company["name"].lower(), old_value.lower()) >= 0.95):  # <-- Change from 0.7 to 0.95
                     
                     matched = False
                     for i, company in enumerate(result[field]):
@@ -4310,6 +4241,7 @@ def recognize_intent(text: str) -> Dict[str, Any]:
     return {}
 
 # Part 12 Handle Commands 
+@rate_limit(max_calls=30, time_window=60)  # 30 commands per minute
 def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[str, int]:
     """Process user command and update session data"""
     try:
