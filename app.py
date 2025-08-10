@@ -649,7 +649,7 @@ def extract_fields_with_regex(text: str, chat_id: str = None) -> Dict[str, Any]:
                     field_name = match.group(2).strip()
                     new_value = match.group(3).strip()
                     result["correct"] = [{"field": FIELD_MAPPING.get(field_name, field_name), "old": old_value, "new": new_value}]
-                return result
+                
 
         # Handle free-form reports
         if len(text) > 50 and CONFIG["ENABLE_FREEFORM_EXTRACTION"]:
@@ -2785,11 +2785,10 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return result
                 elif field == "company":
                     companies_text = match.group(1).strip()
-                    # Remove any "add" prefix that might have been captured
                     companies_text = re.sub(r'^add\s+', '', companies_text, flags=re.IGNORECASE)
                     companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
                     result["companies"] = [{"name": company} for company in companies if company]
-                    return result
+                    # DON'T RETURN HERE - continue checking other patterns
                 
                 elif field == "tool":
                     tools_text = match.group(1).strip()
@@ -2798,7 +2797,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     # Split on commas, "and", or semicolons
                     tools = [t.strip() for t in re.split(r',|\s+and\s+|;', tools_text) if t.strip()]
                     result["tools"] = [{"item": tool} for tool in tools]
-                    return result
+                    
                 
                 elif field == "service":
                     services_text = match.group(1).strip()
@@ -2807,7 +2806,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     # Split on commas, "and", or semicolons
                     services = [s.strip() for s in re.split(r',|\s+and\s+|;', services_text) if s.strip()]
                     result["services"] = [{"task": service} for service in services]
-                    return result
+                    
                 
                     if chat_id and chat_id in session_data:
                         # Just return the new services, merging will be handled later
@@ -2823,7 +2822,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     # Split on commas, "and", or semicolons  
                     activities = [a.strip() for a in re.split(r',|\s+and\s+|;', activities_text) if a.strip()]
                     result["activities"] = activities
-                    return result
+                   
 
                 elif field == "issue":
                     issues_text = match.group(1).strip()
@@ -2834,7 +2833,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         if issue:
                             has_photo = "photo" in issue.lower() or "picture" in issue.lower()
                             result["issues"].append({"description": issue, "has_photo": has_photo})
-                    return result
+                  
                 elif field == "time":
                     result["time"] = match.group(1).strip()
                     return result
@@ -2861,7 +2860,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         # Assign the role to all people in the list
                         result["roles"] = [{"name": person, "role": role_text} for person in people]
                     
-                    return result
+                    
                 # Add a new handler for "Person as Role" syntax
                 elif field == "person_as_role":
                     name = match.group(1).strip()
@@ -2869,7 +2868,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     if name and role:
                         result["people"] = [name]
                         result["roles"] = [{"name": name, "role": role}]
-                    return result
+                    
                 elif field == "role":
                     # This pattern has multiple group captures for different variations
                     name = None
@@ -2887,12 +2886,12 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         result["people"] = [name]
                         result["roles"] = [{"name": name, "role": role}]
                     
-                    return result
+                    
                 elif field == "supervisor":
                     name = match.group(1).strip()
                     result["people"] = [name]
                     result["roles"] = [{"name": name, "role": "Supervisor"}]
-                    return result
+                    
                 elif field == "delete":
                     # Get the matched groups
                     groups = match.groups()
@@ -2964,16 +2963,19 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return {"detailed": True}
                 elif field == "export_pdf":
                     return {"export_pdf": True}
-                elif field == "sharepoint":
-                    return {"sharepoint_export": True}
-                elif field == "sharepoint_status":
-                    return {"sharepoint_status": True}
                 elif field == "clear":
                     field_name = match.group(1).lower()
                     field_name = FIELD_MAPPING.get(field_name, field_name)
                     result[field_name] = [] if field_name in LIST_FIELDS else ""
                     return result
+        # If we found structured data through patterns, return it
+        if result and not any(field in result for field in ["error"]):
+            log_event("structured_extraction_success", found_fields=list(result.keys()))
+            result["date"] = datetime.now().strftime("%d-%m-%Y")
+            return result
         
+        
+
         # Handle direct "add issue X" commands
         issue_add_pattern = r'^(?:add|insert)\s+issues?\s+(.+)$'
         issue_add_match = re.match(issue_add_pattern, normalized_text, re.IGNORECASE)
