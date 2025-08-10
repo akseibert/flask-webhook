@@ -277,7 +277,7 @@ CONFIG = {
         "PASSWORD": config("SHAREPOINT_PASSWORD", default=""),
         "LIST_NAME": config("SHAREPOINT_LIST_NAME", default="ConstructionReports"),
         "REPORTS_FOLDER": config("SHAREPOINT_REPORTS_FOLDER", default="Shared Documents/ConstructionReports"),
-    },
+    }
 
 # Error message templates
 ERROR_MESSAGES = {
