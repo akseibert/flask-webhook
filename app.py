@@ -3306,19 +3306,102 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 return {"tools": [{"item": tool} for tool in tools if tool]}
         
         # Free-form report handling - only if we get here and no structured command matched
+       
         if len(text) > 50:
             log_event("detected_free_form_report", length=len(text))
             
-            # Extract site name
-            site_pattern = r'(?:from|at|on|reporting\s+(?:from|at))\s+(?:the\s+)?([A-Za-z0-9\s]+?)(?:\s*(?:project|site|location)(?:,|\.|$|\s+section|\s+segment))'
-            site_match = re.search(site_pattern, text, re.IGNORECASE)
-            if site_match:
-                result["site_name"] = site_match.group(1).strip()
+            # Look for "add" followed by site name
+            add_site_pattern = r'add\s+([A-Za-z0-9\s]+?)(?:,|\.|$|Section|section|Segment|segment)'
+            add_site_match = re.search(add_site_pattern, text, re.IGNORECASE)
+            if add_site_match:
+                result["site_name"] = add_site_match.group(1).strip()
             
-            # ... rest of free-form extraction logic ...
+            # Extract segment/section
+            segment_pattern = r'(?:Section|Segment)\s+([A-Za-z0-9]+)'
+            segment_match = re.search(segment_pattern, text, re.IGNORECASE)
+            if segment_match:
+                result["segment"] = segment_match.group(1).strip()
             
-            # If we found at least a site name or people, consider it a valid report
-            if result.get("site_name") or result.get("people"):
+            # Extract companies/firms
+            companies_pattern = r'(?:firms?|companies?)\s+(?:were|are|is)\s+([^.]+?)(?:\.|,\s*Supervisors|$)'
+            companies_match = re.search(companies_pattern, text, re.IGNORECASE)
+            if companies_match:
+                companies_text = companies_match.group(1).strip()
+                company_names = [name.strip() for name in re.split(r'\s+and\s+|,', companies_text) if name.strip()]
+                result["companies"] = [{"name": name} for name in company_names]
+            
+            # Extract supervisors
+            supervisor_pattern = r'Supervisors?\s+(?:were|are|is)\s+([^.]+?)(?:\.|,\s*Tools|$)'
+            supervisor_match = re.search(supervisor_pattern, text, re.IGNORECASE)
+            if supervisor_match:
+                supervisors_text = supervisor_match.group(1).strip()
+                supervisor_names = [name.strip() for name in re.split(r'\s+and\s+|,', supervisors_text) if name.strip()]
+                result["people"] = supervisor_names
+                result["roles"] = [{"name": name, "role": "Supervisor"} for name in supervisor_names]
+            
+            # Extract tools
+            tools_pattern = r'Tools[,:]?\s+([^.]+?)(?:\.|,\s*Services|$)'
+            tools_match = re.search(tools_pattern, text, re.IGNORECASE)
+            if tools_match:
+                tools_text = tools_match.group(1).strip()
+                tools = [tool.strip() for tool in re.split(r',|\s+and\s+', tools_text) if tool.strip()]
+                result["tools"] = [{"item": tool} for tool in tools]
+            
+            # Extract services
+            services_pattern = r'Services[,:]?\s+([^.]+?)(?:\.|,\s*Activities|$)'
+            services_match = re.search(services_pattern, text, re.IGNORECASE)
+            if services_match:
+                services_text = services_match.group(1).strip()
+                services = [service.strip() for service in re.split(r',|\s+and\s+', services_text) if service.strip()]
+                result["services"] = [{"task": service} for service in services]
+            
+            # Extract activities
+            activities_pattern = r'Activities[,:]?\s+([^.]+?)(?:\.|,\s*Issues|$)'
+            activities_match = re.search(activities_pattern, text, re.IGNORECASE)
+            if activities_match:
+                activities_text = activities_match.group(1).strip()
+                activities = [activity.strip() for activity in re.split(r',|\s+and\s+', activities_text) if activity.strip()]
+                result["activities"] = activities
+            
+            # Extract issues
+            issues_pattern = r'Issues[,:]?\s+([^.]+?)(?:\.|,\s*weather|,\s*time|$)'
+            issues_match = re.search(issues_pattern, text, re.IGNORECASE)
+            if issues_match:
+                issues_text = issues_match.group(1).strip()
+                # Split on "and" but be careful with phrases
+                issues = re.split(r',\s*(?:and\s+)?', issues_text)
+                result["issues"] = []
+                for issue in issues:
+                    if issue.strip():
+                        has_photo = "photo" in issue.lower() or "picture" in issue.lower()
+                        result["issues"].append({"description": issue.strip(), "has_photo": has_photo})
+            
+            # Extract weather
+            weather_pattern = r'weather\s+([^,]+)'
+            weather_match = re.search(weather_pattern, text, re.IGNORECASE)
+            if weather_match:
+                result["weather"] = weather_match.group(1).strip()
+            
+            # Extract time
+            time_pattern = r'time\s+(?:in\s+the\s+)?([^,]+)'
+            time_match = re.search(time_pattern, text, re.IGNORECASE)
+            if time_match:
+                result["time"] = time_match.group(1).strip()
+            
+            # Extract impression
+            impression_pattern = r'impression\s+([^,]+)'
+            impression_match = re.search(impression_pattern, text, re.IGNORECASE)
+            if impression_match:
+                result["impression"] = impression_match.group(1).strip()
+            
+            # Extract comments
+            comments_pattern = r'comments?\s+([^.]+)'
+            comments_match = re.search(comments_pattern, text, re.IGNORECASE)
+            if comments_match:
+                result["comments"] = comments_match.group(1).strip()
+            
+            # If we found any data, consider it a valid report
+            if result:
                 log_event("free_form_extraction_success", found_fields=list(result.keys()))
                 result["date"] = datetime.now().strftime("%d-%m-%Y")
                 return result
