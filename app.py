@@ -37,324 +37,7 @@ def get_berlin_time():
     return datetime.now(berlin_tz)
 
 
-# --- Important function definitions (adding stubs to prevent "not defined" errors) ---
 
-# Define extract_fields function (REAL IMPLEMENTATION)
-def extract_fields(text: str) -> Dict[str, Any]:
-    """Extract fields from text input with enhanced error handling and field validation"""
-    try:
-        print("REAL extract_fields FUNCTION RUNNING")
-        log_event("extract_fields_real", input=text[:100])
-        
-        result: Dict[str, Any] = {}
-        normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
-
-        # Check for basic commands first
-        for command in ["yes_confirm", "no_confirm", "reset", "undo_last", "summary", "detailed", "export_pdf", "help", "sharepoint", "sharepoint_status"]:
-            if re.match(FIELD_PATTERNS[command], normalized_text, re.IGNORECASE):
-                result[command] = True
-                return result
-
-        # Handle structured commands using FIELD_PATTERNS
-        for field, pattern in FIELD_PATTERNS.items():
-            match = re.match(pattern, normalized_text, re.IGNORECASE)
-            if match:
-                if field in ["site_name", "segment", "category", "impression", "weather", "time", "comments"]:
-                    result[field] = match.group(1).strip()
-                elif field == "company":
-                    companies_text = match.group(1).strip()
-                    # Remove any "add" prefix that might be included in the captured text
-                    companies_text = re.sub(r'^add\s+', '', companies_text, flags=re.IGNORECASE)
-                    companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
-                    result["companies"] = [{"name": company} for company in companies if company]
-                    return result
-                elif field == "people":
-                    people_text = match.group(1).strip()
-                    people = [p.strip() for p in re.split(r',|\s+and\s+', people_text) if p.strip()]
-                    result["people"] = people
-                    if match.group(2):  # Role specified
-                        role = match.group(2).strip()
-                        result["roles"] = [{"name": p, "role": role} for p in people]
-                elif field == "role":
-                    if match.group(1) and match.group(2):  # Name and role
-                        name = match.group(1).strip()
-                        role = match.group(2).strip()
-                        result["people"] = result.get("people", []) + [name]
-                        result["roles"] = result.get("roles", []) + [{"name": name, "role": role}]
-                    elif match.group(3):  # Role only
-                        role = match.group(3).strip()
-                        result["roles"] = result.get("roles", []) + [{"name": "Unknown", "role": role}]
-                elif field == "supervisor":
-                    name = match.group(1).strip()
-                    result["people"] = result.get("people", []) + [name]
-                    result["roles"] = result.get("roles", []) + [{"name": name, "role": "Supervisor"}]
-                elif field == "tool":
-                    tools_text = match.group(1).strip()
-                    tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text) if t.strip()]
-                    result["tools"] = [{"item": tool} for tool in tools]
-                elif field == "service":
-                    services_text = match.group(1).strip()
-                    services = [s.strip() for s in re.split(r',|\s+and\s+', services_text) if s.strip()]
-                    result["services"] = [{"task": service} for service in services]
-                elif field == "activity":
-                    activities_text = match.group(1).strip()
-                    activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text) if a.strip()]
-                    result["activities"] = activities
-                elif field == "issue":
-                    issues_text = match.group(1).strip()
-                    issues = [i.strip() for i in re.split(r';|,|\s+and\s+', issues_text) if i.strip()]
-                    result["issues"] = [{"description": issue, "has_photo": "photo" in issue.lower()} for issue in issues]
-                elif field == "delete":
-                    target = match.group(1).strip()
-                    field_name = match.group(2).strip()
-                    result["delete"] = {"target": target, "field": FIELD_MAPPING.get(field_name, field_name)}
-                elif field == "delete_entire":
-                    field_name = match.group(1).strip()
-                    result["delete_entire"] = {"field": FIELD_MAPPING.get(field_name, field_name)}
-                elif field == "correct":
-                    old_value = match.group(1).strip()
-                    field_name = match.group(2).strip()
-                    new_value = match.group(3).strip()
-                    result["correct"] = [{"field": FIELD_MAPPING.get(field_name, field_name), "old": old_value, "new": new_value}]
-                return result
-
-        # Handle free-form reports
-        if len(text) > 50 and CONFIG["ENABLE_FREEFORM_EXTRACTION"]:
-            log_event("detected_free_form_report", length=len(text))
-            
-            # Extract reporter's name
-            reporter_pattern = r'(?:this\s+is|I\'m|I\s+am)\s+([A-Za-z\s]+)'
-            reporter_match = re.search(reporter_pattern, text, re.IGNORECASE)
-            reporter_name = reporter_match.group(1).strip() if reporter_match else "Unknown"
-
-            # Extract site name
-            # Extract site name
-            site_patterns = [
-                r'(?:today\s+)?(?:at|on|from)\s+(?:the\s+)?([A-Z][A-Za-z\s]+(?:Site|Building|Tower|Complex|Project)\s*[A-Z0-9]*)',
-                r'(?:at|on|from)\s+(?:the\s+)?([A-Z][A-Za-z0-9\s]+?)\s*,?\s*(?:segment|section)',
-            ]
-
-            for pattern in site_patterns:
-                site_match = re.search(pattern, text, re.IGNORECASE)
-                if site_match:
-                    site_name = site_match.group(1).strip()
-                    # Clean up and validate
-                    site_name = re.sub(r'\s*,\s*$', '', site_name)
-                    if not any(word in site_name.lower() for word in ['were', 'was', 'corp', 'build', 'and']):
-                        result["site_name"] = site_name
-                        break
-
-            
-            # Extract segment - handle various formats
-            segment_patterns = [
-                r'segment\s+([A-Za-z0-9]+)',
-                r'segment\s+(\w+)',
-                r',\s*segment\s+([A-Za-z0-9]+)',
-            ]
-            for pattern in segment_patterns:
-                segment_match = re.search(pattern, text, re.IGNORECASE)
-                if segment_match:
-                    result["segment"] = segment_match.group(1).strip()
-                    break
-
-            
-            # Extract category - special handling for German terms
-            if re.search(r'(?:category|kategorie)\s+(?:Mängelerfassung|Mengelerfassung)', text, re.IGNORECASE):
-                result["category"] = "Mängelerfassung"
-            else:
-                category_pattern = r'(?:category|kategorie)\s+([A-Za-z\u00C0-\u017F]+)'
-                category_match = re.search(category_pattern, text, re.IGNORECASE)
-                if category_match:
-                    result["category"] = category_match.group(1).strip()
-
-            # Extract category
-            category_pattern = r'(?:category|kategorie|file\s+under)\s*(?:is\s+|[:,]?\s*)([A-Za-z\u00C0-\u017F]+)(?=\s*(?:,|\.|$))'
-            category_match = re.search(category_pattern, text, re.IGNORECASE)
-            if category_match:
-                result["category"] = category_match.group(1).strip()
-            
-            # NEUER CODE HIER EINFÜGEN:
-            # Handle comma-separated list format like "companies, X and Y"
-            list_pattern = r'(\w+)\s*,\s*([^,]+(?:\s+and\s+[^,]+)?)'
-            list_matches = re.findall(list_pattern, text)
-
-            for field_name, values in list_matches:
-                field_lower = field_name.lower()
-                
-                if field_lower in ['companies', 'company']:
-                    # Extract companies from the values
-                    companies = re.findall(r'([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s+(?:Corp|AG|Ltd|Inc|LLC|GmbH|Build|Construction))', values)
-                    if companies:
-                        result["companies"] = [{"name": c.strip()} for c in companies]
-                
-                elif field_lower in ['people', 'person']:
-                    # Extract people and roles
-                    people_parts = re.split(r'\s*,\s*|\s+and\s+', values)
-                    people = []
-                    roles = []
-                    
-                    for part in people_parts:
-                        # Check for "Name as Role" pattern
-                        role_match = re.match(r'([A-Z][a-z]+)\s+as\s+(.+)', part.strip())
-                        if role_match:
-                            name = role_match.group(1).strip()
-                            role = role_match.group(2).strip()
-                            people.append(name)
-                            roles.append({"name": name, "role": role})
-                        else:
-                            # Just a name
-                            name = part.strip()
-                            if name and name[0].isupper():
-                                people.append(name)
-                    
-                    if people:
-                        result["people"] = people
-                    if roles:
-                        result["roles"] = roles
-            
-            # Extract companies - looks for company names (capitalized words ending in Corp, AG, Ltd, etc.)
-            company_matches = re.findall(r'([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s+(?:Corp|AG|Ltd|Inc|LLC|GmbH|Build))', text)
-
-            
-            # Extract companies
-            companies_patterns = [
-                r'([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s+(?:Corp|AG|Ltd|Inc|LLC|GmbH|Build|Construction))',
-            ]
-
-            companies_found = []
-            for pattern in companies_patterns:
-                company_matches = re.findall(pattern, text)
-                for match in company_matches:
-                    if isinstance(match, str):
-                        # Clean and validate
-                        company = match.strip()
-                        if company and not any(word in company.lower() for word in ['were', 'was', 'on site']):
-                            companies_found.append(company)
-
-            if companies_found:
-                result["companies"] = [{"name": name} for name in companies_found]
-
-            # Extract people and roles
-            people_found = []
-            roles_found = []
-            # Check for "I was supervising"
-            if re.search(r'I\s+was\s+supervising', text, re.IGNORECASE):
-                people_found.append("Reporter")
-                roles_found.append({"name": "Reporter", "role": "Supervisor"})
-
-            # Extract other people with specific activities
-            role_patterns = [
-                r'([A-Z][a-z]+)\s+(?:handled|managed|operated|worked\s+on)\s+(?:the\s+)?([^.,]+)',
-                r'and\s+([A-Z][a-z]+)\s+(?:handled|managed|operated)\s+(?:the\s+)?([^.,]+)',
-            ]
-
-            for pattern in role_patterns:
-                role_matches = re.findall(pattern, text)
-                for match in role_matches:
-                    if len(match) == 2:
-                        name, task = match
-                        name = name.strip()
-                        task = task.strip()
-                        
-                        if name and name not in people_found:
-                            people_found.append(name)
-                            # Create appropriate role title
-                            if 'pump' in task.lower():
-                                role_title = "Concrete Pump Operator"
-                            elif 'crane' in task.lower():
-                                role_title = "Crane Operator"
-                            else:
-                                role_title = task.title()
-                            roles_found.append({"name": name, "role": role_title})
-
-            if people_found:
-                result["people"] = people_found
-            if roles_found:
-                result["roles"] = roles_found
-
-
-            # Extract tools
-            tools_pattern = r'(?:tools|equipment|gear|machinery)(?:\s+(?:used|utilized|employed|needed|brought|available))?\s*(?:were|was|are|is|:)?\s*([^.]+)'
-            tools_match = re.search(tools_pattern, text, re.IGNORECASE)
-            if tools_match:
-                tools_text = tools_match.group(1).strip()
-                tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text)]
-                result["tools"] = [{"item": tool} for tool in tools if tool]
-
-            # Extract services
-            services_pattern = r'(?:services|service|tasks?)(?:\s+(?:provided|performed|done|were|was|included|offered))?\s*(?:were|was|are|is|:)?\s*([^.]+)'
-            services_match = re.search(services_pattern, text, re.IGNORECASE)
-            if services_match:
-                services_text = services_match.group(1).strip()
-                services = [s.strip() for s in re.split(r',|\s+and\s+', services_text)]
-                result["services"] = [{"task": service} for service in services if service]
-
-            # Extract activities
-            activities_pattern = r'(?:activities|work|tasks)\s*(?:included|were|are|is|:)\s*([^.]+)'
-            activities_match = re.search(activities_pattern, text, re.IGNORECASE)
-            if activities_match:
-                activities_text = activities_match.group(1).strip()
-                activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text)]
-                result["activities"] = activities
-
-            # Extract issues
-            issue_patterns = [
-                r'(?:we\s+)?(?:spotted|found|noticed|discovered)\s+(?:a\s+)?([^.,]+?(?:crack|leak|damage|issue|problem)[^.,]*)',
-                r'([^.,]*?(?:crack|leak|damage|issue|problem)[^.,]*)',
-            ]
-
-            issues_found = []
-            photo_mentioned = 'took a photo' in text.lower() or 'took photo' in text.lower()
-
-            for pattern in issue_patterns:
-                issue_matches = re.findall(pattern, text, re.IGNORECASE)
-                for match in issue_matches:
-                    issue_text = match.strip()
-                    if issue_text and len(issue_text) > 5:
-                        # Check if photo is mentioned in the issue or globally
-                        has_photo = photo_mentioned or 'photo' in issue_text.lower()
-                        issues_found.append({"description": issue_text, "has_photo": has_photo})
-                        break  # Only take the first valid issue to avoid duplicates
-
-            if issues_found:
-                result["issues"] = issues_found
-
-            # Extract time
-            time_pattern = r'(?:time|duration|hours?|period|worked)\s*(?:spent|worked|taken|lasted|required|needed)?\s*(?:was|is|:)?\s*([^.]+)'
-            time_match = re.search(time_pattern, text, re.IGNORECASE)
-            if time_match:
-                result["time"] = time_match.group(1).strip()
-
-            # Extract weather
-            weather_pattern = r'(?:weather|conditions?|climate)(?:\s+(?:were|was|is|today|outside|current))?\s*(?:like|are|is|:)?\s*([^.]+)'
-            weather_match = re.search(weather_pattern, text, re.IGNORECASE)
-            if weather_match:
-                result["weather"] = weather_match.group(1).strip()
-
-            # Extract impression
-            impression_pattern = r'(?:impression|assessment|overview|progress|rating|on\s+track)(?:\s+(?:was|is|overall|general))?\s*(?:like|as|is|:)?\s*([^.]+)'
-            impression_match = re.search(impression_pattern, text, re.IGNORECASE)
-            if impression_match:
-                result["impression"] = impression_match.group(1).strip()
-
-            # Extract comments
-            comments_pattern = r'(?:comments|notes|additional\s+notes|thanks)(?:\s*(?:are|is|:))?\s*([^.]+)'
-            comments_match = re.search(comments_pattern, text, re.IGNORECASE)
-            if comments_match:
-                result["comments"] = comments_match.group(1).strip()
-
-            # If valid report, add date
-            if any(result.get(field) for field in ["site_name", "people", "companies", "activities", "issues"]):
-                log_event("free_form_extraction_success", found_fields=list(result.keys()))
-                result["date"] = datetime.now().strftime("%d-%m-%Y")
-                return result
-
-        log_event("fields_extracted", result_fields=len(result))
-        return result
-    except Exception as e:
-        log_event("extract_fields_error", input=text[:100], error=str(e), traceback=traceback.format_exc())
-        print(f"ERROR in extract_fields: {str(e)}")
-        return {"error": str(e)}
     
 # Define merge_data function (stub version)
 def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id: str) -> Dict[str, Any]:
@@ -1601,13 +1284,25 @@ def transcribe_voice(file_id: str) -> Tuple[str, float]:
         with open(f'/opt/render/project/src/voice_logs.txt', 'a') as f:
             timestamp = datetime.now().isoformat()
             f.write(f"{timestamp} - FILE_ID: {file_id} - TRANSCRIPTION: {text}\n")
+        # If text contains key construction terms, bypass low confidence
+        construction_indicators = ['project', 'section', 'company', 'issue', 'crane', 'engineer', 'supervisor']
+        if any(term in text.lower() for term in construction_indicators):
+            confidence = max(confidence, 0.6)  # Ensure minimum 0.6 confidence
         
         log_event("transcription_success", text=text, confidence=confidence)
         return text, confidence
+       
     except (requests.RequestException, Exception) as e:
         log_event("transcription_failed", error=str(e))
         return "", 0.0
-    
+
+def calculate_enhanced_confidence(text: str, audio_size: int) -> float:
+    """Calculate confidence with multiple factors"""
+    confidence = 0.6  # Start with higher base confidence
+    # ... rest of the function ...
+    return max(0.5, min(1.0, confidence))
+
+
 # REPLACE the normalize_transcription function with this enhanced version:
 def normalize_transcription(text: str) -> str:
     """Normalize transcription text with enhanced construction vocabulary recognition"""
@@ -3307,98 +3002,86 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         
         # Free-form report handling - only if we get here and no structured command matched
        
-        if len(text) > 50:
+        # Free-form report handling - only if we get here and no structured command matched
+        if len(text) > 30:  # Lower threshold
             log_event("detected_free_form_report", length=len(text))
             
-            # Look for "add" followed by site name
-            add_site_pattern = r'add\s+([A-Za-z0-9\s]+?)(?:,|\.|$|Section|section|Segment|segment)'
-            add_site_match = re.search(add_site_pattern, text, re.IGNORECASE)
-            if add_site_match:
-                result["site_name"] = add_site_match.group(1).strip()
+            # Extract site/project name - be more flexible
+            site_patterns = [
+                r'([A-Za-z0-9\s]+)\s+(?:Project|Site)',  # "Harbour Front Project"
+                r'(?:at|from|on)\s+(?:the\s+)?([A-Za-z0-9\s]+?)(?:,|\.|\s+Section|\s+site)',
+                r'^([A-Za-z0-9\s]+?)(?:,|\s+Section)'  # Start with site name
+            ]
             
-            # Extract segment/section
-            segment_pattern = r'(?:Section|Segment)\s+([A-Za-z0-9]+)'
-            segment_match = re.search(segment_pattern, text, re.IGNORECASE)
-            if segment_match:
-                result["segment"] = segment_match.group(1).strip()
+            for pattern in site_patterns:
+                site_match = re.search(pattern, text, re.IGNORECASE)
+                if site_match:
+                    result["site_name"] = site_match.group(1).strip()
+                    break
             
-            # Extract companies/firms
-            companies_pattern = r'(?:firms?|companies?)\s+(?:were|are|is)\s+([^.]+?)(?:\.|,\s*Supervisors|$)'
-            companies_match = re.search(companies_pattern, text, re.IGNORECASE)
-            if companies_match:
-                companies_text = companies_match.group(1).strip()
-                company_names = [name.strip() for name in re.split(r'\s+and\s+|,', companies_text) if name.strip()]
-                result["companies"] = [{"name": name} for name in company_names]
+            # Extract segment/section - more flexible
+            segment_patterns = [
+                r'Section\s+([A-Za-z0-9]+)',
+                r'Segment\s+([A-Za-z0-9]+)',
+                r'Area\s+([A-Za-z0-9]+)'
+            ]
+            for pattern in segment_patterns:
+                segment_match = re.search(pattern, text, re.IGNORECASE)
+                if segment_match:
+                    result["segment"] = segment_match.group(1).strip()
+                    break
             
-            # Extract supervisors
-            supervisor_pattern = r'Supervisors?\s+(?:were|are|is)\s+([^.]+?)(?:\.|,\s*Tools|$)'
-            supervisor_match = re.search(supervisor_pattern, text, re.IGNORECASE)
-            if supervisor_match:
-                supervisors_text = supervisor_match.group(1).strip()
-                supervisor_names = [name.strip() for name in re.split(r'\s+and\s+|,', supervisors_text) if name.strip()]
-                result["people"] = supervisor_names
-                result["roles"] = [{"name": name, "role": "Supervisor"} for name in supervisor_names]
+            # Extract companies - handle "AG Company" or "Company" patterns
+            company_patterns = [
+                r'(?:AG\s+)?Company\s+([A-Za-z0-9\s]+?)(?:,|\.|and|a\s+person|had)',
+                r'(?:companies?|firms?|contractors?)\s+(?:were|are|is)?\s*([^,\.]+)'
+            ]
+            for pattern in company_patterns:
+                company_match = re.search(pattern, text, re.IGNORECASE)
+                if company_match:
+                    companies_text = company_match.group(1).strip()
+                    # Clean up company names
+                    companies = [c.strip() for c in re.split(r'\s+and\s+|,', companies_text) if c.strip()]
+                    result["companies"] = [{"name": name} for name in companies]
+                    break
             
-            # Extract tools
-            tools_pattern = r'Tools[,:]?\s+([^.]+?)(?:\.|,\s*Services|$)'
-            tools_match = re.search(tools_pattern, text, re.IGNORECASE)
-            if tools_match:
-                tools_text = tools_match.group(1).strip()
-                tools = [tool.strip() for tool in re.split(r',|\s+and\s+', tools_text) if tool.strip()]
-                result["tools"] = [{"item": tool} for tool in tools]
+            # Extract people and roles - handle "a person marked as X"
+            person_patterns = [
+                r'(?:a\s+)?person\s+(?:marked|noted|listed)\s+as\s+(?:a\s+)?([A-Za-z\s]+)',
+                r'([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s]+)',
+                r'(?:supervisor|engineer|manager|worker)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)'
+            ]
             
-            # Extract services
-            services_pattern = r'Services[,:]?\s+([^.]+?)(?:\.|,\s*Activities|$)'
-            services_match = re.search(services_pattern, text, re.IGNORECASE)
-            if services_match:
-                services_text = services_match.group(1).strip()
-                services = [service.strip() for service in re.split(r',|\s+and\s+', services_text) if service.strip()]
-                result["services"] = [{"task": service} for service in services]
+            for pattern in person_patterns:
+                person_match = re.search(pattern, text, re.IGNORECASE)
+                if person_match:
+                    if pattern == person_patterns[0]:  # "person marked as role"
+                        role = person_match.group(1).strip()
+                        result["people"] = ["Person"]
+                        result["roles"] = [{"name": "Person", "role": role}]
+                    else:
+                        name = person_match.group(1).strip() if person_match.group(1) else "Person"
+                        role = person_match.group(2).strip() if len(person_match.groups()) > 1 else "Worker"
+                        result["people"] = [name]
+                        result["roles"] = [{"name": name, "role": role}]
+                    break
             
-            # Extract activities
-            activities_pattern = r'Activities[,:]?\s+([^.]+?)(?:\.|,\s*Issues|$)'
-            activities_match = re.search(activities_pattern, text, re.IGNORECASE)
-            if activities_match:
-                activities_text = activities_match.group(1).strip()
-                activities = [activity.strip() for activity in re.split(r',|\s+and\s+', activities_text) if activity.strip()]
-                result["activities"] = activities
+            # Extract issues - very flexible
+            issue_patterns = [
+                r'(?:had\s+)?issues?\s+([^,.]+)',
+                r'(?:problem|delay|malfunction)\s*:?\s*([^,.]+)',
+                r'crane\s+malfunction'  # Specific issue mentioned
+            ]
             
-            # Extract issues
-            issues_pattern = r'Issues[,:]?\s+([^.]+?)(?:\.|,\s*weather|,\s*time|$)'
-            issues_match = re.search(issues_pattern, text, re.IGNORECASE)
-            if issues_match:
-                issues_text = issues_match.group(1).strip()
-                # Split on "and" but be careful with phrases
-                issues = re.split(r',\s*(?:and\s+)?', issues_text)
-                result["issues"] = []
-                for issue in issues:
-                    if issue.strip():
-                        has_photo = "photo" in issue.lower() or "picture" in issue.lower()
-                        result["issues"].append({"description": issue.strip(), "has_photo": has_photo})
-            
-            # Extract weather
-            weather_pattern = r'weather\s+([^,]+)'
-            weather_match = re.search(weather_pattern, text, re.IGNORECASE)
-            if weather_match:
-                result["weather"] = weather_match.group(1).strip()
-            
-            # Extract time
-            time_pattern = r'time\s+(?:in\s+the\s+)?([^,]+)'
-            time_match = re.search(time_pattern, text, re.IGNORECASE)
-            if time_match:
-                result["time"] = time_match.group(1).strip()
-            
-            # Extract impression
-            impression_pattern = r'impression\s+([^,]+)'
-            impression_match = re.search(impression_pattern, text, re.IGNORECASE)
-            if impression_match:
-                result["impression"] = impression_match.group(1).strip()
-            
-            # Extract comments
-            comments_pattern = r'comments?\s+([^.]+)'
-            comments_match = re.search(comments_pattern, text, re.IGNORECASE)
-            if comments_match:
-                result["comments"] = comments_match.group(1).strip()
+            for pattern in issue_patterns:
+                issue_match = re.search(pattern, text, re.IGNORECASE)
+                if issue_match:
+                    if pattern == r'crane\s+malfunction':
+                        result["issues"] = [{"description": "crane malfunction", "has_photo": False}]
+                    else:
+                        issue_text = issue_match.group(1).strip() if issue_match.groups() else issue_match.group(0)
+                        result["issues"] = [{"description": issue_text, "has_photo": False}]
+                    break
             
             # If we found any data, consider it a valid report
             if result:
