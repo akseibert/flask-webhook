@@ -2702,7 +2702,8 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
     except Exception as e:
         log_event("extract_single_command_error", input=cmd, error=str(e))
         return {}
- def handle_direct_delete_command(text: str) -> Dict[str, Any]:
+        
+def handle_direct_delete_command(text: str) -> Dict[str, Any]:
     """Handle direct delete commands with company names"""
     delete_pattern = r'^(?:delete|remove)\s+(.+?)(?:\s+from\s+(.+))?$'
     match = re.match(delete_pattern, text, re.IGNORECASE)
