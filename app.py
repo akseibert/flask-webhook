@@ -269,7 +269,7 @@ CONFIG = {
     "REPORT_FORMAT": config("REPORT_FORMAT", default="detailed"),
     "MAX_SUGGESTIONS": config("MAX_SUGGESTIONS", default=3, cast=int),
     "ENABLE_FREEFORM_EXTRACTION": config("ENABLE_FREEFORM_EXTRACTION", default=True, cast=bool),
-    "FREEFORM_MIN_LENGTH": config("FREEFORM_MIN_LENGTH", default=200, cast=int)
+    "FREEFORM_MIN_LENGTH": config("FREEFORM_MIN_LENGTH", default=200, cast=int),
 
 # Error message templates
 ERROR_MESSAGES = {
