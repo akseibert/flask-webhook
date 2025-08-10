@@ -2702,7 +2702,21 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
     except Exception as e:
         log_event("extract_single_command_error", input=cmd, error=str(e))
         return {}
-    
+ def handle_direct_delete_command(text: str) -> Dict[str, Any]:
+    """Handle direct delete commands with company names"""
+    delete_pattern = r'^(?:delete|remove)\s+(.+?)(?:\s+from\s+(.+))?$'
+    match = re.match(delete_pattern, text, re.IGNORECASE)
+    if match:
+        value = match.group(1).strip()
+        category = match.group(2).strip() if match.group(2) else None
+        
+        # If no category but value looks like a company name
+        if not category and any(suffix in value.lower() for suffix in ['ag', 'gmbh', 'ltd', 'inc', 'corp']):
+            return {"delete": {"value": value, "category": "companies"}}
+        
+        return {"delete": {"value": value, "category": category}}
+    return {}
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
     """Extract fields from text input with enhanced error handling and field validation"""
@@ -2759,6 +2773,168 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
             return {"reset": True}
             
         # Try FIELD_PATTERNS first for structured commands
+      # Handle comma-separated format like "Site X, Segment Y, Companies Z"
+        if ',' in normalized_text:
+            parts = normalized_text.split(',')
+            
+            for part in parts:
+                part = part.strip()
+                
+                # Check each part against patterns
+                # Site patterns
+                if re.match(r'^[Ss]ite\s+', part):
+                    site_match = re.match(r'^[Ss]ite\s+(.+)', part)
+                    if site_match:
+                        result["site_name"] = site_match.group(1).strip()
+                
+                # Segment patterns
+                elif re.match(r'^[Ss]egment\s+', part):
+                    segment_match = re.match(r'^[Ss]egment\s+(.+)', part)
+                    if segment_match:
+                        result["segment"] = segment_match.group(1).strip()
+                
+                # Category patterns
+                elif re.match(r'^[Cc]ategory\s+', part):
+                    category_match = re.match(r'^[Cc]ategory\s+(.+)', part)
+                    if category_match:
+                        result["category"] = category_match.group(1).strip()
+                
+                # Companies/Firms patterns
+                elif re.match(r'^(?:[Cc]ompanies|[Ff]irms)\s*', part):
+                    companies_match = re.match(r'^(?:[Cc]ompanies|[Ff]irms)\s*,?\s*(.+)', part)
+                    if companies_match:
+                        companies_text = companies_match.group(1).strip()
+                        companies = [c.strip() for c in re.split(r'\s+and\s+', companies_text)]
+                        result["companies"] = [{"name": company} for company in companies if company]
+                
+                # Supervisors pattern
+                elif re.match(r'^[Ss]upervisors?\s+', part):
+                    supervisors_match = re.match(r'^[Ss]upervisors?\s+(.+)', part)
+                    if supervisors_match:
+                        supervisors_text = supervisors_match.group(1).strip()
+                        supervisors = [s.strip() for s in re.split(r'\s+and\s+', supervisors_text)]
+                        if "people" not in result:
+                            result["people"] = []
+                        if "roles" not in result:
+                            result["roles"] = []
+                        for supervisor in supervisors:
+                            result["people"].append(supervisor)
+                            result["roles"].append({"name": supervisor, "role": "Supervisor"})
+                
+                # People pattern
+                elif re.match(r'^[Pp]eople\s*', part):
+                    people_match = re.match(r'^[Pp]eople\s*,?\s*(.+)', part)
+                    if people_match:
+                        people_text = people_match.group(1).strip()
+                        # Handle "Name as Role" format
+                        if ' as ' in people_text:
+                            name_role_match = re.match(r'(.+?)\s+as\s+(.+)', people_text)
+                            if name_role_match:
+                                name = name_role_match.group(1).strip()
+                                role = name_role_match.group(2).strip()
+                                if "people" not in result:
+                                    result["people"] = []
+                                if "roles" not in result:
+                                    result["roles"] = []
+                                result["people"].append(name)
+                                result["roles"].append({"name": name, "role": role})
+                        else:
+                            people = [p.strip() for p in re.split(r'\s+and\s+', people_text)]
+                            if "people" not in result:
+                                result["people"] = []
+                            result["people"].extend(people)
+                
+                # Tools pattern
+                elif re.match(r'^[Tt]ools?\s+', part):
+                    tools_match = re.match(r'^[Tt]ools?\s+(.+)', part)
+                    if tools_match:
+                        tools_text = tools_match.group(1).strip()
+                        tools = [t.strip() for t in re.split(r'\s+and\s+|,', tools_text)]
+                        if "tools" not in result:
+                            result["tools"] = []
+                        result["tools"].extend([{"item": tool} for tool in tools if tool])
+                
+                # Services pattern
+                elif re.match(r'^[Ss]ervices?\s+', part):
+                    services_match = re.match(r'^[Ss]ervices?\s+(.+)', part)
+                    if services_match:
+                        services_text = services_match.group(1).strip()
+                        services = [s.strip() for s in re.split(r'\s+and\s+', services_text)]
+                        if "services" not in result:
+                            result["services"] = []
+                        result["services"].extend([{"task": service} for service in services if service])
+                
+                # Activities pattern
+                elif re.match(r'^[Aa]ctivities?\s+', part):
+                    activities_match = re.match(r'^[Aa]ctivities?\s+(.+)', part)
+                    if activities_match:
+                        activities_text = activities_match.group(1).strip()
+                        activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text)]
+                        if "activities" not in result:
+                            result["activities"] = []
+                        result["activities"].extend(activities)
+                
+                # Issues pattern
+                elif re.match(r'^[Ii]ssues?\s+', part):
+                    issues_match = re.match(r'^[Ii]ssues?\s+(.+)', part)
+                    if issues_match:
+                        issues_text = issues_match.group(1).strip()
+                        issues = [i.strip() for i in re.split(r',|\s+and\s+', issues_text)]
+                        if "issues" not in result:
+                            result["issues"] = []
+                        for issue in issues:
+                            if issue:
+                                has_photo = "photo" in issue.lower()
+                                result["issues"].append({"description": issue, "has_photo": has_photo})
+                
+                # Weather pattern
+                elif re.match(r'^[Ww]eather\s+', part):
+                    weather_match = re.match(r'^[Ww]eather\s+(.+)', part)
+                    if weather_match:
+                        result["weather"] = weather_match.group(1).strip()
+                
+                # Time pattern
+                elif re.match(r'^[Tt]ime\s+', part):
+                    time_match = re.match(r'^[Tt]ime\s+(.+)', part)
+                    if time_match:
+                        result["time"] = time_match.group(1).strip()
+                
+                # Impression pattern
+                
+                elif re.match(r'^[Ii]mpression\s+', part):
+                    impression_match = re.match(r'^[Ii]mpression\s+(.+)', part)
+                    if impression_match:
+                        result["impression"] = impression_match.group(1).strip()
+                
+                # Special case: "we are on track" at the end
+                elif 'we are on track' in part.lower() or 'on track' in part.lower():
+                    # This is likely part of the impression
+                    if "impression" in result:
+                        result["impression"] += ", we are on track"
+                    else:
+                        result["impression"] = "we are on track"
+                
+                # Special case: "we are on track" at the end
+                elif 'we are on track' in part.lower() or 'on track' in part.lower():
+                    # This is likely part of the impression
+                    if "impression" in result:
+                        result["impression"] += ", we are on track"
+                    else:
+                        result["impression"] = "we are on track"
+                
+                # Comments pattern
+                elif re.match(r'^[Cc]omments?\s+', part):
+                    comment_match = re.match(r'^[Cc]omments?\s+(.+)', part)
+                    if comment_match:
+                        result["comments"] = comment_match.group(1).strip()
+            
+            # If we found data through comma-separated parsing, return it
+            if result:
+                log_event("comma_separated_extraction_success", found_fields=list(result.keys()))
+                result["date"] = datetime.now().strftime("%d-%m-%Y")
+                return result
+        
+        # Try FIELD_PATTERNS for non-comma-separated commands
         for field, pattern in FIELD_PATTERNS.items():
             match = re.match(pattern, normalized_text, re.IGNORECASE)
             if match:
@@ -2783,191 +2959,8 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     else:
                         result["category"] = value
                     return result
-                elif field == "company":
-                    companies_text = match.group(1).strip()
-                    companies_text = re.sub(r'^add\s+', '', companies_text, flags=re.IGNORECASE)
-                    companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
-                    result["companies"] = [{"name": company} for company in companies if company]
-                    # DON'T RETURN HERE - continue checking other patterns
                 
-                elif field == "tool":
-                    tools_text = match.group(1).strip()
-                    # Remove any "add" prefix that might have been captured
-                    tools_text = re.sub(r'^add\s+', '', tools_text, flags=re.IGNORECASE)
-                    # Split on commas, "and", or semicolons
-                    tools = [t.strip() for t in re.split(r',|\s+and\s+|;', tools_text) if t.strip()]
-                    result["tools"] = [{"item": tool} for tool in tools]
-                    
-                
-                elif field == "service":
-                    services_text = match.group(1).strip()
-                    # Remove any "add" prefix
-                    services_text = re.sub(r'^add\s+', '', services_text, flags=re.IGNORECASE)
-                    # Split on commas, "and", or semicolons
-                    services = [s.strip() for s in re.split(r',|\s+and\s+|;', services_text) if s.strip()]
-                    result["services"] = [{"task": service} for service in services]
-                    
-                
-                    if chat_id and chat_id in session_data:
-                        # Just return the new services, merging will be handled later
-                        return {"services": [{"task": service} for service in services if service]}
-                    else:
-                        # Only return the complete result if we're not in a chat context
-                        return result 
-                    
-                elif field == "activity":
-                    activities_text = match.group(1).strip()
-                    # Remove any "add" prefix
-                    activities_text = re.sub(r'^add\s+', '', activities_text, flags=re.IGNORECASE)
-                    # Split on commas, "and", or semicolons  
-                    activities = [a.strip() for a in re.split(r',|\s+and\s+|;', activities_text) if a.strip()]
-                    result["activities"] = activities
-                   
 
-                elif field == "issue":
-                    issues_text = match.group(1).strip()
-                    # Split on semicolons, commas, or "and"
-                    issues = [i.strip() for i in re.split(r';|,|\s+and\s+', issues_text) if i.strip()]
-                    result["issues"] = []
-                    for issue in issues:
-                        if issue:
-                            has_photo = "photo" in issue.lower() or "picture" in issue.lower()
-                            result["issues"].append({"description": issue, "has_photo": has_photo})
-                  
-                elif field == "time":
-                    result["time"] = match.group(1).strip()
-                    return result
-                elif field == "weather":
-                    result["weather"] = match.group(1).strip()
-                    return result
-                elif field == "impression":
-                    result["impression"] = match.group(1).strip()
-                    return result
-                elif field == "comments":
-                    result["comments"] = match.group(1).strip()
-                    return result
-                elif field == "people":
-                    people_text = match.group(1).strip()
-                    role_text = match.group(2).strip() if len(match.groups()) > 1 and match.group(2) else None
-                    
-                    # Clean up the people text - remove any "add" at the beginning
-                    people_text = re.sub(r'^add\s+', '', people_text, flags=re.IGNORECASE)
-                    
-                    people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
-                    result["people"] = people
-                    
-                    if role_text:
-                        # Assign the role to all people in the list
-                        result["roles"] = [{"name": person, "role": role_text} for person in people]
-                    
-                    
-                # Add a new handler for "Person as Role" syntax
-                elif field == "person_as_role":
-                    name = match.group(1).strip()
-                    role = match.group(2).strip()
-                    if name and role:
-                        result["people"] = [name]
-                        result["roles"] = [{"name": name, "role": role}]
-                    
-                elif field == "role":
-                    # This pattern has multiple group captures for different variations
-                    name = None
-                    role = None
-                    
-                    # Find the non-None groups for name and role
-                    for i in range(1, len(match.groups()) + 1):
-                        if match.group(i):
-                            if name is None:
-                                name = match.group(i).strip()
-                            elif role is None:
-                                role = match.group(i).strip()
-                    
-                    if name and role:
-                        result["people"] = [name]
-                        result["roles"] = [{"name": name, "role": role}]
-                    
-                    
-                elif field == "supervisor":
-                    name = match.group(1).strip()
-                    result["people"] = [name]
-                    result["roles"] = [{"name": name, "role": "Supervisor"}]
-                    
-                elif field == "delete":
-                    # Get the matched groups
-                    groups = match.groups()
-                    value = groups[0].strip() if groups[0] else None
-                    category = groups[1].strip().lower() if len(groups) > 1 and groups[1] else None
-
-                    # For direct company deletion without category
-                    if value and not category and any(word in value.lower() for word in ["ag", "gmbh", "ltd", "inc", "corp"]):
-                        return {"delete": {"value": value, "category": "companies"}}
-                    
-                    # Map category names to field names
-                    if category:
-                        category = FIELD_MAPPING.get(category, category)
-                    
-                    # If we have a value, create a delete command
-                    if value:
-                        return {"delete": {"value": value, "category": category}}
-                    
-                    return {"delete": {"category": category, "value": value}}
-
-                
-                    if groups[0] and groups[1]:  # "delete value from category"
-                        value = groups[0].strip()
-                        category = groups[1].lower()
-                    elif groups[2] and groups[3]:  # "delete category value"
-                        category = groups[2].lower()
-                        value = groups[3].strip() if groups[3] else None
-                    elif groups[4] and groups[5]:  # "category delete value"
-                        category = groups[4].lower()
-                        value = groups[5].strip() if groups[5] else None
-                    elif groups[6]:  # "delete value" (no category)
-                        value = groups[6].strip()
-                    
-                    # Map category names to field names
-                    if category:
-                        category = FIELD_MAPPING.get(category, category)
-                    
-                    # If we have a value, create a delete command
-                    if value:
-                        return {"delete": {"value": value, "category": category}}
-                    
-                    return {"delete": {"category": category, "value": value}}
-                
-                elif field == "delete_entire":
-                    field_name = match.group(1).lower()
-                    mapped_field = FIELD_MAPPING.get(field_name, field_name)
-                    return {mapped_field: {"delete": True}}
-                elif field == "correct":
-                    raw_field = match.group(1).lower()
-                    old_value = match.group(2).strip() if match.group(2) else None
-                    new_value = match.group(3).strip() if match.group(3) else None
-                    field_name = FIELD_MAPPING.get(raw_field, raw_field)
-                    
-                    if old_value:
-                        if new_value:
-                            return {"correct": [{"field": field_name, "old": old_value, "new": new_value}]}
-                        else:
-                            return {"spelling_correction": {"field": field_name, "old_value": old_value}}
-                elif field == "reset":
-                    return {"reset": True}
-                elif field == "undo_last":
-                    return {"undo_last": True}
-                elif field == "help":
-                    topic = match.group(1) or match.group(2) or "general"
-                    return {"help": topic.lower()}
-                elif field == "summary":
-                    return {"summary": True}
-                elif field == "detailed":
-                    return {"detailed": True}
-                elif field == "export_pdf":
-                    return {"export_pdf": True}
-                elif field == "clear":
-                    field_name = match.group(1).lower()
-                    field_name = FIELD_MAPPING.get(field_name, field_name)
-                    result[field_name] = [] if field_name in LIST_FIELDS else ""
-                    return result
         # If we found structured data through patterns, return it
         if result and not any(field in result for field in ["error"]):
             log_event("structured_extraction_success", found_fields=list(result.keys()))
