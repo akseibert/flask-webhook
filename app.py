@@ -2702,7 +2702,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
     except Exception as e:
         log_event("extract_single_command_error", input=cmd, error=str(e))
         return {}
-        
+
 def handle_direct_delete_command(text: str) -> Dict[str, Any]:
     """Handle direct delete commands with company names"""
     delete_pattern = r'^(?:delete|remove)\s+(.+?)(?:\s+from\s+(.+))?$'
@@ -2775,22 +2775,31 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
             
         # Try FIELD_PATTERNS first for structured commands
       # Handle comma-separated format like "Site X, Segment Y, Companies Z"
-        if ',' in normalized_text:
-            parts = normalized_text.split(',')
+        # Handle comma-separated format but ALSO handle space-separated field names
+        # Like "Segment 9C Companies, BuildCorp, People, Lisa as Supervisor"
+        if ',' in normalized_text or any(keyword in normalized_text.lower() for keyword in ['companies', 'people', 'tools', 'services', 'segment']):
+            # First, handle special case where field names run together
+            # Replace "Segment XXX Companies" with "Segment XXX, Companies"
+            text_to_parse = normalized_text
+            text_to_parse = re.sub(r'([Ss]egment\s+[A-Z0-9]+)\s+([Cc]ompanies|[Ff]irms)', r'\1, \2', text_to_parse)
+            text_to_parse = re.sub(r'([Cc]ompanies[^,]+)\s+([Pp]eople)', r'\1, \2', text_to_parse)
+            text_to_parse = re.sub(r'([Pp]eople[^,]+)\s+([Ss]ervices)', r'\1, \2', text_to_parse)
+            text_to_parse = re.sub(r'([Ss]ervices[^,]+)\s+([Tt]ools)', r'\1, \2', text_to_parse)
+            
+            parts = text_to_parse.split(',')
             
             for part in parts:
                 part = part.strip()
                 
-                # Check each part against patterns
                 # Site patterns
                 if re.match(r'^[Ss]ite\s+', part):
                     site_match = re.match(r'^[Ss]ite\s+(.+)', part)
                     if site_match:
                         result["site_name"] = site_match.group(1).strip()
                 
-                # Segment patterns
+                # Segment patterns - just get the segment code
                 elif re.match(r'^[Ss]egment\s+', part):
-                    segment_match = re.match(r'^[Ss]egment\s+(.+)', part)
+                    segment_match = re.match(r'^[Ss]egment\s+([A-Z0-9]+)', part)
                     if segment_match:
                         result["segment"] = segment_match.group(1).strip()
                 
@@ -2801,11 +2810,12 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         result["category"] = category_match.group(1).strip()
                 
                 # Companies/Firms patterns
-                elif re.match(r'^(?:[Cc]ompanies|[Ff]irms)\s*', part):
-                    companies_match = re.match(r'^(?:[Cc]ompanies|[Ff]irms)\s*,?\s*(.+)', part)
-                    if companies_match:
+                elif re.match(r'^(?:[Cc]ompanies|[Ff]irms)', part):
+                    # Handle "Companies, BuildCorp" or "Companies BuildCorp"
+                    companies_match = re.match(r'^(?:[Cc]ompanies|[Ff]irms)\s*[,:]?\s*(.+)?', part)
+                    if companies_match and companies_match.group(1):
                         companies_text = companies_match.group(1).strip()
-                        companies = [c.strip() for c in re.split(r'\s+and\s+', companies_text)]
+                        companies = [c.strip() for c in re.split(r'\s+and\s+', companies_text) if c.strip()]
                         result["companies"] = [{"name": company} for company in companies if company]
                 
                 # Supervisors pattern
@@ -2822,12 +2832,13 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                             result["people"].append(supervisor)
                             result["roles"].append({"name": supervisor, "role": "Supervisor"})
                 
-                # People pattern
-                elif re.match(r'^[Pp]eople\s*', part):
-                    people_match = re.match(r'^[Pp]eople\s*,?\s*(.+)', part)
-                    if people_match:
+                # People pattern - handle various formats
+                elif re.match(r'^[Pp]eople', part):
+                    people_match = re.match(r'^[Pp]eople\s*[,:]?\s*(.+)?', part)
+                    if people_match and people_match.group(1):
                         people_text = people_match.group(1).strip()
-                        # Handle "Name as Role" format
+                        
+                        # Handle "Lisa as Supervisor"
                         if ' as ' in people_text:
                             name_role_match = re.match(r'(.+?)\s+as\s+(.+)', people_text)
                             if name_role_match:
@@ -2845,20 +2856,46 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                                 result["people"] = []
                             result["people"].extend(people)
                 
+                # Handle standalone "Name as Role" pattern
+                elif ' as ' in part and not any(keyword in part.lower() for keyword in ['companies', 'tools', 'services', 'issues']):
+                    name_role_match = re.match(r'(.+?)\s+as\s+(.+)', part)
+                    if name_role_match:
+                        name = name_role_match.group(1).strip()
+                        role = name_role_match.group(2).strip()
+                        if "people" not in result:
+                            result["people"] = []
+                        if "roles" not in result:
+                            result["roles"] = []
+                        result["people"].append(name)
+                        result["roles"].append({"name": name, "role": role})
+                
+                # Handle "Thomas driving the truck" pattern
+                elif 'driving' in part.lower() or 'operating' in part.lower():
+                    driver_match = re.match(r'(.+?)\s+(?:driving|operating)\s+(?:the\s+)?(.+)', part, re.IGNORECASE)
+                    if driver_match:
+                        name = driver_match.group(1).strip()
+                        vehicle = driver_match.group(2).strip()
+                        if "people" not in result:
+                            result["people"] = []
+                        if "roles" not in result:
+                            result["roles"] = []
+                        result["people"].append(name)
+                        result["roles"].append({"name": name, "role": f"Driver ({vehicle})"})
+                
                 # Tools pattern
-                elif re.match(r'^[Tt]ools?\s+', part):
-                    tools_match = re.match(r'^[Tt]ools?\s+(.+)', part)
-                    if tools_match:
+                elif re.match(r'^[Tt]ools?', part):
+                    tools_match = re.match(r'^[Tt]ools?\s*[,:]?\s*(.+)?', part)
+                    if tools_match and tools_match.group(1):
                         tools_text = tools_match.group(1).strip()
-                        tools = [t.strip() for t in re.split(r'\s+and\s+|,', tools_text)]
+                        tools = [t.strip() for t in re.split(r'\s+and\s+', tools_text)]
                         if "tools" not in result:
                             result["tools"] = []
                         result["tools"].extend([{"item": tool} for tool in tools if tool])
                 
                 # Services pattern
-                elif re.match(r'^[Ss]ervices?\s+', part):
-                    services_match = re.match(r'^[Ss]ervices?\s+(.+)', part)
-                    if services_match:
+                elif re.match(r'^[Ss]ervices?', part):
+                    services_match = re.match(r'^[Ss]ervices?\s*[,:]?\s*(.+)?', part)
+                    if services_match and services_match.group(1):
                         services_text = services_match.group(1).strip()
                         services = [s.strip() for s in re.split(r'\s+and\s+', services_text)]
                         if "services" not in result:
@@ -2866,21 +2903,21 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         result["services"].extend([{"task": service} for service in services if service])
                 
                 # Activities pattern
-                elif re.match(r'^[Aa]ctivities?\s+', part):
-                    activities_match = re.match(r'^[Aa]ctivities?\s+(.+)', part)
-                    if activities_match:
+                elif re.match(r'^[Aa]ctivities?', part):
+                    activities_match = re.match(r'^[Aa]ctivities?\s*[,:]?\s*(.+)?', part)
+                    if activities_match and activities_match.group(1):
                         activities_text = activities_match.group(1).strip()
-                        activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text)]
+                        activities = [a.strip() for a in re.split(r'\s+and\s+', activities_text)]
                         if "activities" not in result:
                             result["activities"] = []
                         result["activities"].extend(activities)
                 
                 # Issues pattern
-                elif re.match(r'^[Ii]ssues?\s+', part):
-                    issues_match = re.match(r'^[Ii]ssues?\s+(.+)', part)
-                    if issues_match:
+                elif re.match(r'^[Ii]ssues?', part):
+                    issues_match = re.match(r'^[Ii]ssues?\s*[,:]?\s*(.+)?', part)
+                    if issues_match and issues_match.group(1):
                         issues_text = issues_match.group(1).strip()
-                        issues = [i.strip() for i in re.split(r',|\s+and\s+', issues_text)]
+                        issues = [i.strip() for i in re.split(r'\s+and\s+', issues_text)]
                         if "issues" not in result:
                             result["issues"] = []
                         for issue in issues:
@@ -2889,44 +2926,34 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                                 result["issues"].append({"description": issue, "has_photo": has_photo})
                 
                 # Weather pattern
-                elif re.match(r'^[Ww]eather\s+', part):
-                    weather_match = re.match(r'^[Ww]eather\s+(.+)', part)
-                    if weather_match:
+                elif re.match(r'^[Ww]eather', part):
+                    weather_match = re.match(r'^[Ww]eather\s*[,:]?\s*(.+)?', part)
+                    if weather_match and weather_match.group(1):
                         result["weather"] = weather_match.group(1).strip()
                 
                 # Time pattern
-                elif re.match(r'^[Tt]ime\s+', part):
-                    time_match = re.match(r'^[Tt]ime\s+(.+)', part)
-                    if time_match:
+                elif re.match(r'^[Tt]ime', part):
+                    time_match = re.match(r'^[Tt]ime\s*[,:]?\s*(.+)?', part)
+                    if time_match and time_match.group(1):
                         result["time"] = time_match.group(1).strip()
                 
                 # Impression pattern
-                
-                elif re.match(r'^[Ii]mpression\s+', part):
-                    impression_match = re.match(r'^[Ii]mpression\s+(.+)', part)
-                    if impression_match:
+                elif re.match(r'^[Ii]mpression', part):
+                    impression_match = re.match(r'^[Ii]mpression\s*[,:]?\s*(.+)?', part)
+                    if impression_match and impression_match.group(1):
                         result["impression"] = impression_match.group(1).strip()
                 
                 # Special case: "we are on track" at the end
                 elif 'we are on track' in part.lower() or 'on track' in part.lower():
-                    # This is likely part of the impression
-                    if "impression" in result:
-                        result["impression"] += ", we are on track"
-                    else:
-                        result["impression"] = "we are on track"
-                
-                # Special case: "we are on track" at the end
-                elif 'we are on track' in part.lower() or 'on track' in part.lower():
-                    # This is likely part of the impression
                     if "impression" in result:
                         result["impression"] += ", we are on track"
                     else:
                         result["impression"] = "we are on track"
                 
                 # Comments pattern
-                elif re.match(r'^[Cc]omments?\s+', part):
-                    comment_match = re.match(r'^[Cc]omments?\s+(.+)', part)
-                    if comment_match:
+                elif re.match(r'^[Cc]omments?', part):
+                    comment_match = re.match(r'^[Cc]omments?\s*[,:]?\s*(.+)?', part)
+                    if comment_match and comment_match.group(1):
                         result["comments"] = comment_match.group(1).strip()
             
             # If we found data through comma-separated parsing, return it
