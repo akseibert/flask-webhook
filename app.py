@@ -296,13 +296,12 @@ def get_error_message(error_type: str, **kwargs) -> str:
     "NLP_FALLBACK_TO_REGEX": config("NLP_FALLBACK_TO_REGEX", default=True, cast=bool),
     "NLP_COMMAND_PATTERN_WEIGHT": config("NLP_COMMAND_PATTERN_WEIGHT", default=0.7, cast=float),
     "NLP_FREE_FORM_WEIGHT": config("NLP_FREE_FORM_WEIGHT", default=0.3, cast=float),
-    
-    # ADD THESE NEW LINES HERE (PDF settings)
+    # PDF settings
     "PDF_LOGO_PATH": config("PDF_LOGO_PATH", default=""),  # Path to company logo
     "PDF_LOGO_WIDTH": config("PDF_LOGO_WIDTH", default=2, cast=float),  # Logo width in inches
     "ENABLE_PDF_PHOTOS": config("ENABLE_PDF_PHOTOS", default=True, cast=bool),
     "MAX_PHOTO_WIDTH": config("MAX_PHOTO_WIDTH", default=4, cast=float),  # Max photo width in inches
-    "MAX_PHOTO_HEIGHT": config("MAX_PHOTO_HEIGHT", default=3, cast=float),  # Max photo height in inches
+    "MAX_PHOTO_HEIGHT": config("MAX_PHOTO_HEIGHT", default=3, cast=float)  # <- NO COMMA on the last item
 }
 
 # --- Enhanced GPT Prompt for Construction Site Reports ---
