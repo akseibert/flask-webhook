@@ -4149,8 +4149,11 @@ def webhook() -> tuple[str, int]:
                 text, confidence = transcribe_voice(file_id)
                 
                 # For short commands (less than 5 words), lower the threshold
-                if len(text.split()) < 5 and any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export"]):
+                if len(text.split()) < 5 and any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export", "segment", "site"]):
                     confidence_threshold = 0.3
+                # For field-based inputs with multiple keywords, also lower threshold
+                elif any(keyword in text.lower() for keyword in ["category", "companies", "segment", "people", "tools", "services", "activities", "issues", "firms"]):
+                    confidence_threshold = 0.35
                 else:
                     confidence_threshold = 0.5
 
