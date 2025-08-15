@@ -1308,10 +1308,9 @@ def calculate_enhanced_confidence(text: str, audio_size: int) -> float:
     
     return max(0.1, min(1.0, confidence))
         
-    # Normalize text - handle common non-English transcriptions
-    text = normalize_transcription(text)
+        # Normalize text - handle common non-English transcriptions
+        text = normalize_transcription(text)
         
-    
         # Calculate confidence based on multiple factors
         confidence = 0.0
 
@@ -1340,7 +1339,8 @@ def calculate_enhanced_confidence(text: str, audio_size: int) -> float:
         # Command confidence - if it matches command patterns
         command_patterns = [
             r'\b(add|delete|update|correct|site|category|people|companies|tools|activities|issues)\b',
-            r'\b(new|reset|undo|export|summary|help)\b'
+            r'\b(new|reset|undo|export|summary|help)\b',
+            r'\b(firms|segment|services|supervisors|weather|time|impression)\b'  # Add more field keywords
         ]
         
         command_matches = any(re.search(pattern, text, re.IGNORECASE) for pattern in command_patterns)
