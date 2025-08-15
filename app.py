@@ -1308,8 +1308,8 @@ def calculate_enhanced_confidence(text: str, audio_size: int) -> float:
     
     return max(0.1, min(1.0, confidence))
         
-        # Normalize text - handle common non-English transcriptions
-        text = normalize_transcription(text)
+    # Normalize text - handle common non-English transcriptions
+    text = normalize_transcription(text)
         
     
         # Calculate confidence based on multiple factors
