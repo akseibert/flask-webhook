@@ -2856,8 +2856,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     
                     # Split by commas to handle multiple people
                     people_parts = [p.strip() for p in people_text.split(',')]
-                    
-                    for part in people_parts:
+                   for part in people_parts:
                         # Check for "X as Y" pattern
                         if ' as ' in part.lower():
                             splits = re.split(r'\s+as\s+', part, flags=re.IGNORECASE)
@@ -2887,29 +2886,15 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     
                     return result
                 # Add a new handler for "Person as Role" syntax
-                elif field == "person_as_role":
+                elif field == "person_as_role":    # <-- THIS LINE NEEDS TO BE UNINDENTED
                     name = match.group(1).strip()
                     role = match.group(2).strip()
                     if name and role:
                         result["people"] = [name]
                         result["roles"] = [{"name": name, "role": role}]
                     return result
-                elif field == "role":
-                    # This pattern has multiple group captures for different variations
-                    name = None
-                    role = None
-                    
-                    # Find the non-None groups for name and role
-                    for i in range(1, len(match.groups()) + 1):
-                        if match.group(i):
-                            if name is None:
-                                name = match.group(i).strip()
-                            elif role is None:
-                                role = match.group(i).strip()
-                    
-                    if name and role:
-                        result["people"] = [name]
-                        result["roles"] = [{"name": name, "role": role}]
+                elif field == "role":               # <-- THIS LINE NEEDS TO BE UNINDENTED 
+                   
                     
                     return result
                 elif field == "supervisor":
