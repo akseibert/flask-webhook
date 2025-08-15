@@ -1308,9 +1308,6 @@ def calculate_enhanced_confidence(text: str, audio_size: int) -> float:
     
     return max(0.1, min(1.0, confidence))
 
-# THE FOLLOWING CODE NEEDS TO BE INSIDE A FUNCTION - IT'S CURRENTLY FLOATING
-# This appears to be OLD code that should be DELETED or moved into transcribe_voice function
-# DELETE FROM HERE...
         
 # Normalize text - handle common non-English transcriptions
 text = normalize_transcription(text)
@@ -1358,7 +1355,7 @@ confidence = max(0.1, min(confidence, 0.95))
 
 # Bonus for exact command matches
 if any(text.lower().startswith(cmd) for cmd in ["yes", "no", "new", "reset", "add", "site", "undo"]):
-    confidence = 0.95
+        confidence = 0.95
     
 # Log the confidence calculation components
 log_event("transcription_confidence_details", 
@@ -1370,26 +1367,6 @@ log_event("transcription_confidence_details",
 
 return text, confidence
 
-
-        # Extract and return confidence (approximate calculation)
-        confidence = min(0.95, 0.5 + (len(text) / 200))
-
-        # Boost confidence for simple commands
-        if len(text.split()) < 5:
-            if any(cmd in text.lower() for cmd in ["delete", "add", "yes", "no", "export"]):
-                confidence = max(confidence, 0.6)
-        
-        # Log the transcription for debugging
-        with open(f'/opt/render/project/src/voice_logs.txt', 'a') as f:
-            timestamp = datetime.now().isoformat()
-            f.write(f"{timestamp} - FILE_ID: {file_id} - TRANSCRIPTION: {text}\n")
-        
-        log_event("transcription_success", text=text, confidence=confidence)
-        return text, confidence
-    except (requests.RequestException, Exception) as e:
-        log_event("transcription_failed", error=str(e))
-        return "", 0.0
-# ... DELETE TO HERE (this is duplicate/old code)
     
 # REPLACE the normalize_transcription function with this enhanced version:
 def normalize_transcription(text: str) -> str:
