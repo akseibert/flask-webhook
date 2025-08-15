@@ -714,6 +714,7 @@ FIELD_PATTERNS = {
     "summary": r'^(summarize|summary|short report|brief report|overview|compact report)\s*[.!]?$',
     "detailed": r'^(detailed|full|complete|comprehensive)\s+report\s*[.!]?$',
     "export_pdf": r'^(?:export\s*pdf|export|pdf|generate\s*pdf|generate\s*report|export\s*report)\.?\s*$',
+    "export": r'^export\.?\s*$',
     "yes_confirm": r'^(?:yes|ya|yep|yeah|yup|ok|okay|sure|confirm|confirmed|y|да|ню|нью)\s*[.!]?$',
     "no_confirm": r'^(?:no|nope|nah|negative|n|нет)\s*[.!]?$',
     "voice_add_site": r"(?:hey\s+)?(?:i\'?m\s+)?add(?:ing)?\s+(?:the\s+)?(.+?)\s+site[,.]?\s*segment\s+(.+?)[,.]?\s*category\s+(.+?)(?:\.\s|$)",
@@ -2587,18 +2588,22 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 
                 elif field == "tool":
                     tools_text = match.group(1).strip()
-                    # Remove any "add" prefix that might have been captured
+                    # Remove prefixes
                     tools_text = re.sub(r'^add\s+', '', tools_text, flags=re.IGNORECASE)
-                    tools = [c.strip() for c in re.split(r',|\s+and\s+', tools_text)]
-                    result["tools"] = [{"name": tool} for tool in tools if tool]
+                    tools_text = re.sub(r'^tools?\s*,?\s*', '', tools_text, flags=re.IGNORECASE)
+                    
+                    tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text)]
+                    result["tools"] = [{"item": tool} for tool in tools if tool]
                     return result
                 
                 elif field == "service":
                     services_text = match.group(1).strip()
-                    # Remove any "add" prefix that might have been captured
+                    # Remove prefixes
                     services_text = re.sub(r'^add\s+', '', services_text, flags=re.IGNORECASE)
-                    services = [c.strip() for c in re.split(r',|\s+and\s+', services_text)]
-                    result["services"] = [{"name": service} for service in services if service]
+                    services_text = re.sub(r'^services?\s*,?\s*', '', services_text, flags=re.IGNORECASE)
+                    
+                    services = [s.strip() for s in re.split(r',|\s+and\s+', services_text)]
+                    result["services"] = [{"task": service} for service in services if service]
                     return result
                 
                     if chat_id and chat_id in session_data:
@@ -2615,8 +2620,26 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return result
                 elif field == "issue":
                     issues_text = match.group(1).strip()
-                    issues = [i.strip() for i in re.split(r';|,|\s+and\s+', issues_text)]
+                    # Remove prefix
+                    issues_text = re.sub(r'^issues?\s*,?\s*', '', issues_text, flags=re.IGNORECASE)
+                    
                     result["issues"] = []
+                    
+                    # Split on periods for multiple sentences, or commas
+                    if '.' in issues_text and 'There' in issues_text:
+                        # Handle "sentence. There was also..." pattern
+                        issue_parts = [i.strip() for i in issues_text.split('.') if i.strip()]
+                    else:
+                        issue_parts = [i.strip() for i in re.split(r';|,', issues_text) if i.strip()]
+                    
+                    # Process each issue
+                    for issue in issue_parts:
+                        if issue:
+                            has_photo = "photo" in issue.lower() or "picture" in issue.lower()
+                            result["issues"].append({"description": issue, "has_photo": has_photo})
+                    
+                    return result
+
                     for issue in issues:
                         if issue:
                             has_photo = "photo" in issue.lower() or "picture" in issue.lower() or "took a" in issue.lower()
@@ -2632,48 +2655,41 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result["impression"] = match.group(1).strip()
                     return result
                 elif field == "comments":
-                    result["comments"] = match.group(1).strip()
+                    comments_text = match.group(1).strip()
+                    # Remove question mark if it's at the beginning
+                    comments_text = re.sub(r'^\?\s*', '', comments_text)
+                    # Remove "comments" prefix
+                    comments_text = re.sub(r'^comments?\s*[,:]?\s*', '', comments_text, flags=re.IGNORECASE)
+                    result["comments"] = comments_text
                     return result
                 elif field == "people":
                     people_text = match.group(1).strip()
                     
                     # Clean up the people text
                     people_text = re.sub(r'^add\s+', '', people_text, flags=re.IGNORECASE)
+                    people_text = re.sub(r'^people\s*,?\s*', '', people_text, flags=re.IGNORECASE)
                     
                     result["people"] = []
                     result["roles"] = []
                     
-                    # Split by commas to handle multiple people
-                    people_parts = [p.strip() for p in people_text.split(',')]
-                    for part in people_parts:
-                        # Check for "X as Y" pattern
-                        if ' as ' in part.lower():
-                            splits = re.split(r'\s+as\s+', part, flags=re.IGNORECASE)
-                            if len(splits) == 2:
-                                name = splits[0].strip()
-                                role = splits[1].strip()
-                                result["people"].append(name)
-                                result["roles"].append({"name": name, "role": role})
-                        # Check for "X was Y" or "X was doing Y" pattern
-                        elif ' was ' in part.lower():
-                            splits = re.split(r'\s+was\s+', part, flags=re.IGNORECASE)
-                            if len(splits) == 2:
-                                name = splits[0].strip()
-                                role_or_activity = splits[1].strip()
-                                if 'doing' in role_or_activity.lower():
-                                    # Handle "doing Y" as activity or role
-                                    role = role_or_activity.replace('doing', '').strip()
-                                else:
-                                    role = role_or_activity
-                                result["people"].append(name)
-                                result["roles"].append({"name": name, "role": role})
-                        else:
-                            # Just a name without role
-                            name = part.strip()
+                    # Parse "Name as Role, Name as Role" pattern
+                    role_pattern = r'([A-Za-z\s]+?)\s+as\s+([A-Za-z\s]+?)(?:,|$)'
+                    role_matches = re.findall(role_pattern, people_text, re.IGNORECASE)
+                    
+                    if role_matches:
+                        for name, role in role_matches:
+                            name = name.strip()
+                            role = role.strip()
                             if name:
                                 result["people"].append(name)
+                                result["roles"].append({"name": name, "role": role})
+                    else:
+                        # No roles, just parse names
+                        people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+                        result["people"] = [p for p in people if p]
                     
                     return result
+    
                 # Add a new handler for "Person as Role" syntax
                 elif field == "person_as_role":    # <-- THIS LINE NEEDS TO BE UNINDENTED
                     name = match.group(1).strip()
@@ -2760,6 +2776,8 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     elif field == "detailed":
                         return {"detailed": True}
                     elif field == "export_pdf":
+                        return {"export_pdf": True}
+                    elif field == "export":
                         return {"export_pdf": True}
                     elif field == "sharepoint":
                         return {"sharepoint_export": True}
@@ -3677,9 +3695,10 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         session["last_interaction"] = time()
         
         # Handle confirmation for reset command
+        # Handle confirmation for reset command
         if session.get("awaiting_reset_confirmation", False):
             if text.lower() in ["yes", "y", "yeah", "yep", "sure", "ok", "okay"]:
-                # User confirmed - perform the reset
+                # User confirmed - perform the reset HERE
                 session["awaiting_reset_confirmation"] = False
                 session["structured_data"] = blank_report()
                 session["command_history"].clear()
@@ -3693,6 +3712,7 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                 summary = summarize_report(session["structured_data"])
                 send_message(chat_id, f"**Report reset**\n\n{summary}\n\nSpeak or type your first category (e.g., 'site Downtown Project').")
                 return "ok", 200
+
             elif text.lower() in ["no", "n", "nope", "nah"]:
                 session["awaiting_reset_confirmation"] = False
                 save_session(session_data)
@@ -3768,11 +3788,13 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             COMMAND_HANDLERS[clean_text](chat_id, session)
             return "ok", 200
         
-        
-        # For free-form reports, make sure to use NLP extraction
-        if CONFIG["ENABLE_NLP_EXTRACTION"]:
-            nlp_data, confidence = extract_with_nlp(text)
-            if confidence >= CONFIG["NLP_EXTRACTION_CONFIDENCE_THRESHOLD"]:
+    
+        # For free-form reports, make sure to use NLP extraction ONLY if no structured command
+        if CONFIG["ENABLE_NLP_EXTRACTION"] and len(text) > 50:
+            # Skip NLP for obvious commands
+            if not any(text.lower().startswith(cmd) for cmd in ["add", "delete", "correct", "export", "help", "status", "new", "reset"]):
+                nlp_data, confidence = extract_with_nlp(text)
+                if confidence >= CONFIG["NLP_EXTRACTION_CONFIDENCE_THRESHOLD"]:
                 log_event("free_form_nlp_extraction", confidence=confidence)
                 session_data[chat_id]["command_history"].append(session_data[chat_id]["structured_data"].copy())
                 session_data[chat_id]["structured_data"] = merge_data(
