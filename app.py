@@ -30,6 +30,54 @@ from reportlab.platypus.flowables import HRFlowable
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.platypus import KeepTogether, PageBreak
 from reportlab.pdfgen import canvas
+from reportlab.pdfgen import canvas
+from functools import wraps
+from collections import defaultdict
+
+# Rate limiting decorator
+def rate_limit(max_calls, time_window):
+    """
+    Decorator to rate limit function calls
+    max_calls: maximum number of calls allowed
+    time_window: time window in seconds
+    """
+    def decorator(func):
+        # Store call times for each identifier (chat_id in this case)
+        call_times = defaultdict(list)
+        
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Try to get chat_id from args or kwargs
+            chat_id = None
+            if args and isinstance(args[0], str):
+                chat_id = args[0]
+            elif 'chat_id' in kwargs:
+                chat_id = kwargs['chat_id']
+            
+            if chat_id:
+                current_time = time()
+                # Remove old calls outside the time window
+                call_times[chat_id] = [t for t in call_times[chat_id] 
+                                       if current_time - t < time_window]
+                
+                # Check if rate limit exceeded
+                if len(call_times[chat_id]) >= max_calls:
+                    # Rate limit exceeded, return early
+                    try:
+                        send_message(chat_id, "⚠️ Too many requests. Please wait a moment before trying again.")
+                    except:
+                        pass
+                    return "rate_limited", 429
+                
+                # Add current call time
+                call_times[chat_id].append(current_time)
+            
+            # Call the original function
+            return func(*args, **kwargs)
+        
+        return wrapper
+    return decorator
+
 
 # Initialize Flask app
 app = Flask(__name__)
