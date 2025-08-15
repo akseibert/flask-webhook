@@ -1308,50 +1308,50 @@ def calculate_enhanced_confidence(text: str, audio_size: int) -> float:
     
     return max(0.1, min(1.0, confidence))
         
-        # Normalize text - handle common non-English transcriptions
-        text = normalize_transcription(text)
-        
-        # Calculate confidence based on multiple factors
-        confidence = 0.0
+# Normalize text - handle common non-English transcriptions
+text = normalize_transcription(text)
 
-        # Adjust confidence based on text length
-        text_words = text.split()
-        if len(text_words) < 5:  # Short command
-            if any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export", "yes", "no", "time", "correct", "weather", "impression"]):
-                length_confidence = 0.5  # Higher confidence for common short commands
-            else:
-                length_confidence = min(0.7, (len(text) / 250) * 0.5)
-        elif len(text_words) > 100:  # Long report
-            length_confidence = 0.6  # Higher confidence for long reports
-        else:
-            length_confidence = min(0.7, (len(text) / 250) * 0.5)
+# Calculate confidence based on multiple factors
+confidence = 0.0
 
-        # Keyword confidence - if it contains key construction terms
-        construction_keywords = [
-            "site", "project", "concrete", "scaffold", "tools", "safety", 
-            "worker", "supervisor", "engineer", "contractor", "weather",
-            "issue", "delay", "material", "equipment", "schedule", "inspection"
-        ]
-        
-        keyword_matches = sum(1 for word in construction_keywords if word in text.lower())
-        keyword_confidence = min(0.3, keyword_matches * 0.05)
-        
-        # Command confidence - if it matches command patterns
-        command_patterns = [
-            r'\b(add|delete|update|correct|site|category|people|companies|tools|activities|issues)\b',
-            r'\b(new|reset|undo|export|summary|help)\b',
-            r'\b(firms|segment|services|supervisors|weather|time|impression)\b'  # Add more field keywords
-        ]
-        
-        command_matches = any(re.search(pattern, text, re.IGNORECASE) for pattern in command_patterns)
-        command_confidence = 0.3 if command_matches else 0.0
-        
-        # Combine confidences with different weights
-        confidence = length_confidence + keyword_confidence + command_confidence
-        
-        # Minimum threshold
-        confidence = max(0.1, min(confidence, 0.95))
-        
+# Adjust confidence based on text length
+text_words = text.split()
+if len(text_words) < 5:  # Short command
+    if any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export", "yes", "no", "time", "correct", "weather", "impression"]):
+        length_confidence = 0.5  # Higher confidence for common short commands
+    else:
+        length_confidence = min(0.7, (len(text) / 250) * 0.5)
+elif len(text_words) > 100:  # Long report
+    length_confidence = 0.6  # Higher confidence for long reports
+else:
+    length_confidence = min(0.7, (len(text) / 250) * 0.5)
+
+# Keyword confidence - if it contains key construction terms
+construction_keywords = [
+    "site", "project", "concrete", "scaffold", "tools", "safety", 
+    "worker", "supervisor", "engineer", "contractor", "weather",
+    "issue", "delay", "material", "equipment", "schedule", "inspection"
+]
+
+keyword_matches = sum(1 for word in construction_keywords if word in text.lower())
+keyword_confidence = min(0.3, keyword_matches * 0.05)
+
+# Command confidence - if it matches command patterns
+command_patterns = [
+    r'\b(add|delete|update|correct|site|category|people|companies|tools|activities|issues)\b',
+    r'\b(new|reset|undo|export|summary|help)\b',
+    r'\b(firms|segment|services|supervisors|weather|time|impression)\b'  # Add more field keywords
+]
+
+command_matches = any(re.search(pattern, text, re.IGNORECASE) for pattern in command_patterns)
+command_confidence = 0.3 if command_matches else 0.0
+
+# Combine confidences with different weights
+confidence = length_confidence + keyword_confidence + command_confidence
+
+# Minimum threshold
+confidence = max(0.1, min(confidence, 0.95))
+
         # Bonus for exact command matches
         if any(text.lower().startswith(cmd) for cmd in ["yes", "no", "new", "reset", "add", "site", "undo"]):
             confidence = 0.95
