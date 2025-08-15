@@ -909,13 +909,13 @@ list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+)?(?:sites?|location|project)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "segment": r'^(?:(?:add|insert)\s+)?(?:segments?|section)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
-    "category": r'^(?:(?:add|insert)\s+)?(?:categories?|kategorie|category)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
+    "category": r'^(?:(?:add|insert)\s+)?(?:categories?|kategorie|category)\s*[:,]?\s*(.+?)(?:\s*(?:companies|people|tools|services|activities|$))',
     "impression": r'^(?:(?:add|insert)\s+)?(?:impressions?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "people": r'^(?:(?:add|insert)\s+)?(?:peoples?|persons?|pople)\s*[:,]?\s*(.+?)(?:\s+as\s+(.+?))?(?:\s*(?:,|\.|$))',
     "person_as_role": r'^(\w+(?:\s+\w+)?)\s+as\s+(\w+(?:\s+\w+)?)(?:\s*(?:,|\.|$))',
     "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(\w+\s+\w+|\w+)\s+(?:as|is)\s+(.+?)(?:\s*(?:,|\.|$))',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
-    "company": r'^(?:(?:add|insert)\s+)?(?:compan(?:y|ies)|firms?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
+    "company": r'^(?:(?:add|insert)\s+)?(?:compan(?:y|ies)|firms?)\s*[:,]?\s*(.+?)$',
     "service": r'^(?:(?:add|insert)\s+)?(?:services?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "tool": r'^(?:(?:add|insert)\s+)?(?:tools?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "activity": r'^(?:(?:add|insert)\s+)?(?:activit(?:y|ies))\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
@@ -2847,17 +2847,43 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return result
                 elif field == "people":
                     people_text = match.group(1).strip()
-                    role_text = match.group(2).strip() if len(match.groups()) > 1 and match.group(2) else None
                     
-                    # Clean up the people text - remove any "add" at the beginning
+                    # Clean up the people text
                     people_text = re.sub(r'^add\s+', '', people_text, flags=re.IGNORECASE)
                     
-                    people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
-                    result["people"] = people
+                    result["people"] = []
+                    result["roles"] = []
                     
-                    if role_text:
-                        # Assign the role to all people in the list
-                        result["roles"] = [{"name": person, "role": role_text} for person in people]
+                    # Split by commas to handle multiple people
+                    people_parts = [p.strip() for p in people_text.split(',')]
+                    
+                    for part in people_parts:
+                        # Check for "X as Y" pattern
+                        if ' as ' in part.lower():
+                            splits = re.split(r'\s+as\s+', part, flags=re.IGNORECASE)
+                            if len(splits) == 2:
+                                name = splits[0].strip()
+                                role = splits[1].strip()
+                                result["people"].append(name)
+                                result["roles"].append({"name": name, "role": role})
+                        # Check for "X was Y" or "X was doing Y" pattern
+                        elif ' was ' in part.lower():
+                            splits = re.split(r'\s+was\s+', part, flags=re.IGNORECASE)
+                            if len(splits) == 2:
+                                name = splits[0].strip()
+                                role_desc = splits[1].strip()
+                                # Convert descriptions to roles
+                                if "driving" in role_desc.lower() and "crane" in role_desc.lower():
+                                    role = "Crane Operator"
+                                else:
+                                    role = role_desc
+                                result["people"].append(name)
+                                result["roles"].append({"name": name, "role": role})
+                        else:
+                            # Just a name without role
+                            name = part.strip()
+                            if name:
+                                result["people"].append(name)
                     
                     return result
                 # Add a new handler for "Person as Role" syntax
@@ -3511,7 +3537,8 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                 
                         if not already_exists:
                             result[field].append(item)
-                            changes.append(f"added {field[:-1]} '{item[key]}'")
+                            field_singular = field.rstrip('s') if field != "companies" else "company"
+                            changes.append(f"added {field_singular} '{item[key]}'")
                         else:
                             log_event("skipped_duplicate", field=field, value=item[key])
             
@@ -3613,24 +3640,21 @@ def command(name: str) -> Callable:
     return decorator
 
 @command("reset")
+
 def handle_reset(chat_id: str, session: Dict[str, Any]) -> None:
     """Handle reset command to start a new report"""
-    # Check if we're awaiting confirmation
-    if session.get("awaiting_reset_confirmation", False):
-        # User has already confirmed
-        session["awaiting_reset_confirmation"] = False
-        session["structured_data"] = blank_report()
-        session["command_history"].clear()
-        session["last_change_history"].clear()
-        session["context"] = {
-            "last_mentioned_person": None,
-            "last_mentioned_item": None,
-            "last_field": None,
-        }
-        save_session(session_data)
-        summary = summarize_report(session["structured_data"])
-        
-        send_message(chat_id, f"**Report reset**\n\n{summary}\n\nSpeak or type your first category (e.g., 'add site Downtown Project').")
+    session["awaiting_reset_confirmation"] = False
+    session["structured_data"] = blank_report()
+    session["command_history"].clear()
+    session["last_change_history"].clear()
+    session["context"] = {
+        "last_mentioned_person": None,
+        "last_mentioned_item": None,
+        "last_field": None,
+    }
+    save_session(session_data)
+    summary = summarize_report(session["structured_data"])
+    send_message(chat_id, f"**Report reset**\n\n{summary}\n\nSpeak or type your first category (e.g., 'site Downtown Project').")
     else:
         # Request confirmation first
         if any(field for field in session.get("structured_data", {}).values() if field):
