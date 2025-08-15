@@ -3380,23 +3380,11 @@ def command(name: str) -> Callable:
     return decorator
 
 @command("reset")
-
 def handle_reset(chat_id: str, session: Dict[str, Any]) -> None:
     """Handle reset command to start a new report"""
-    session["awaiting_reset_confirmation"] = False
-    session["structured_data"] = blank_report()
-    session["command_history"].clear()
-    session["last_change_history"].clear()
-    session["context"] = {
-        "last_mentioned_person": None,
-        "last_mentioned_item": None,
-        "last_field": None,
-    }
-    save_session(session_data)
-    summary = summarize_report(session["structured_data"])
-    send_message(chat_id, f"**Report reset**\n\n{summary}\n\nSpeak or type your first category (e.g., 'site Downtown Project').")
-    else:
-        # Request confirmation first
+    # Check if we need confirmation
+    if not session.get("awaiting_reset_confirmation", False):
+        # Request confirmation first if report has data
         if any(field for field in session.get("structured_data", {}).values() if field):
             session["awaiting_reset_confirmation"] = True
             save_session(session_data)
@@ -3404,9 +3392,31 @@ def handle_reset(chat_id: str, session: Dict[str, Any]) -> None:
         else:
             # If report is empty, no need for confirmation
             session["structured_data"] = blank_report()
+            session["command_history"].clear()
+            session["last_change_history"].clear()
+            session["context"] = {
+                "last_mentioned_person": None,
+                "last_mentioned_item": None,
+                "last_field": None,
+            }
             save_session(session_data)
             summary = summarize_report(session["structured_data"])
             send_message(chat_id, f"**Report reset**\n\n{summary}\n\nSpeak or type your first category (e.g., 'add site Downtown Project').")
+    else:
+        # We're already awaiting confirmation, so perform the reset
+        session["awaiting_reset_confirmation"] = False
+        session["structured_data"] = blank_report()
+        session["command_history"].clear()
+        session["last_change_history"].clear()
+        session["context"] = {
+            "last_mentioned_person": None,
+            "last_mentioned_item": None,
+            "last_field": None,
+        }
+        save_session(session_data)
+        summary = summarize_report(session["structured_data"])
+        send_message(chat_id, f"**Report reset**\n\n{summary}\n\nSpeak or type your first category (e.g., 'site Downtown Project').")
+
 
 @command("undo")
 def handle_undo(chat_id: str, session: Dict[str, Any]) -> None:
