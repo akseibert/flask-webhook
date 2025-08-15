@@ -3231,76 +3231,119 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
     
     # Handle correcting values
      if "correct" in new_data:
-            corrections = new_data.pop("correct")
-            for correction in corrections:
-                field = correction.get("field")
-                old_value = correction.get("old")
-                new_value = correction.get("new")
-                
-                if not field or not old_value or not new_value:
-                    continue
-                    
-                if field in SCALAR_FIELDS:
-                    # Save last state for undo
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field]))
-                    
-                    # Simple replace for scalar fields
-                    if string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                        result[field] = new_value
-                        changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
-                elif field in LIST_FIELDS:
-                    # More complex handling for list fields
+        corrections = new_data.pop("correct")
+        for correction in corrections:
+            field = correction.get("field")
+            old_value = correction.get("old")
+            new_value = correction.get("new")
+
+            if not field or not old_value or not new_value:
+                continue
+
+            if field in SCALAR_FIELDS:
+                # Save last state for undo
+                session_data[chat_id]["last_change_history"].append((field, existing_data[field]))
+
+                # Simple replace for scalar fields
+                if string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                    result[field] = new_value
+                    changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
+
+            elif field in LIST_FIELDS:
+                # More complex handling for list fields
+                if field == "people":
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
-                    matched = False
-                    
-                    if field == "people":
-                        for i, person in enumerate(result["people"]):
-                            if string_similarity(person.lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                                result["people"][i] = new_value
-                                matched = True
-                                changes.append(f"corrected person '{old_value}' to '{new_value}'")
-                                break
+
+                    corrected = False
+                    for i, person in enumerate(result["people"]):
+                        if string_similarity(person.lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                            result["people"][i] = new_value
+                            corrected = True
+                            break
+
+                    if corrected:
+                        changes.append(f"corrected person '{old_value}' to '{new_value}'")
                         
                         # Also update roles that refer to this person
                         for role in result["roles"]:
-                            if isinstance(role, dict) and role.get("name") and \
-                               string_similarity(role["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                            if (isinstance(role, dict) and role.get("name") and 
+                                string_similarity(role["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
                                 role["name"] = new_value
                         
-                        if matched:
-                            changes.append(f"updated roles for corrected person '{new_value}'")
-                    
-                    elif field == "roles":
-                        # Interpret as correcting a role for a person
-                        for role in result[field]:
-                            if isinstance(role, dict) and role.get("name") and \
-                               string_similarity(role["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                                role["role"] = new_value.title()
-                                matched = True
-                                changes.append(f"corrected role for '{old_value}' to '{new_value}'")
+                        changes.append(f"updated roles for corrected person '{new_value}'")
+                    else:
+                        # If no match, add the new person
+                        result[field].append(new_value)
+                        changes.append(f"added corrected person '{new_value}'")
+
+                elif field == "roles":
+                    # Interpret as correcting a role for a person
+                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
+
+                    matched = False
+                    for role in result[field]:
+                        if (isinstance(role, dict) and role.get("name") and 
+                            string_similarity(role["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
+                            role["role"] = new_value.title()
+                            matched = True
+                            changes.append(f"corrected role for '{old_value}' to '{new_value}'")
+                            break
+
+                    if not matched:
+                        # If no exact match, try finding the person elsewhere
+                        person_name = None
+                        for person in result["people"]:
+                            if string_similarity(person.lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                                person_name = person
                                 break
-                        
-                        if not matched:
-                            # If no exact match, try finding the person elsewhere
-                            person_name = None
-                            for person in result["people"]:
-                                if string_similarity(person.lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                                    person_name = person
-                                    break
-                            
-                            if person_name:
-                                # Add this person with the new role
-                                result[field].append({"name": person_name, "role": new_value.title()})
-                                changes.append(f"added role '{new_value}' for '{person_name}'
-                    
+
+                        if person_name:
+                            # Add this person with the new role
+                            result[field].append({"name": person_name, "role": new_value.title()})
+                            changes.append(f"added role '{new_value}' for '{person_name}'")
+                        else:
+                            # Add both the person and role
+                            result["people"].append(old_value)
+                            result[field].append({"name": old_value, "role": new_value.title()})
+                            changes.append(f"added person '{old_value}' with role '{new_value}'")
+
+                elif field == "companies":
+                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
+
+                    matched = False
+                    for i, company in enumerate(result[field]):
+                        if (isinstance(company, dict) and company.get("name") and 
+                            string_similarity(company["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
+                            company["name"] = new_value
+                            matched = True
+                            changes.append(f"corrected company '{old_value}' to '{new_value}'")
+                            break
+
+                    if not matched:
+                        # If no match, add the new company
+                        result[field].append({"name": new_value})
+                        changes.append(f"added corrected company '{new_value}'")
+
+                elif field == "tools":
+                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
+
+                    matched = False
+                    for i, tool in enumerate(result[field]):
+                        if (isinstance(tool, dict) and tool.get("item") and 
+                            string_similarity(tool["item"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
+                            tool["item"] = new_value
+                            matched = True
+                            changes.append(f"corrected tool '{old_value}' to '{new_value}'")
+                            break
+
                     if not matched:
                         # If no match, add the new tool
                         result[field].append({"item": new_value})
                         changes.append(f"added corrected tool '{new_value}'")
+
                 elif field == "services":
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
+
                     matched = False
                     for i, service in enumerate(result[field]):
                         if (isinstance(service, dict) and service.get("task") and 
@@ -3309,14 +3352,15 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             matched = True
                             changes.append(f"corrected service '{old_value}' to '{new_value}'")
                             break
-                    
+
                     if not matched:
                         # If no match, add the new service
                         result[field].append({"task": new_value})
                         changes.append(f"added corrected service '{new_value}'")
+
                 elif field == "activities":
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
+
                     matched = False
                     for i, activity in enumerate(result[field]):
                         if string_similarity(activity.lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
@@ -3324,14 +3368,15 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             matched = True
                             changes.append(f"corrected activity '{old_value}' to '{new_value}'")
                             break
-                    
+
                     if not matched:
                         # If no match, add the new activity
                         result[field].append(new_value)
                         changes.append(f"added corrected activity '{new_value}'")
+
                 elif field == "issues":
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
+
                     matched = False
                     for i, issue in enumerate(result[field]):
                         if (isinstance(issue, dict) and issue.get("description") and 
@@ -3340,12 +3385,13 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             matched = True
                             changes.append(f"corrected issue '{old_value}' to '{new_value}'")
                             break
-                    
+
                     if not matched:
                         # If no match, add the new issue
                         has_photo = "photo" in old_value.lower() or "photo" in new_value.lower()
                         result[field].append({"description": new_value, "has_photo": has_photo})
                         changes.append(f"added corrected issue '{new_value}'")
+
     
     # Handle context-based additions
     if "context_add" in new_data:
