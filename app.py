@@ -324,19 +324,7 @@ FIELD_PATTERNS = {}
 
 # --- Configuration ---
 # --- Configuration - Add NLP extraction settings ---
-CONFIG = {
-    "SESSION_FILE": config("SESSION_FILE", default="/opt/render/project/src/session_data.json"),
-    "PAUSE_THRESHOLD": config("PAUSE_THRESHOLD", default=300, cast=int),
-    "MAX_HISTORY": config("MAX_HISTORY", default=10, cast=int),
-    "OPENAI_MODEL": config("OPENAI_MODEL", default="gpt-3.5-turbo"),
-    "OPENAI_TEMPERATURE": config("OPENAI_TEMPERATURE", default=0.2, cast=float),
-    "NAME_SIMILARITY_THRESHOLD": config("NAME_SIMILARITY_THRESHOLD", default=0.7, cast=float),
-    "COMMAND_SIMILARITY_THRESHOLD": config("COMMAND_SIMILARITY_THRESHOLD", default=0.85, cast=float),
-    "REPORT_FORMAT": config("REPORT_FORMAT", default="detailed"),
-    "MAX_SUGGESTIONS": config("MAX_SUGGESTIONS", default=3, cast=int),
-    "ENABLE_FREEFORM_EXTRACTION": config("ENABLE_FREEFORM_EXTRACTION", default=True, cast=bool),
-    "FREEFORM_MIN_LENGTH": config("FREEFORM_MIN_LENGTH", default=200, cast=int)
-}
+
 
 # Error message templates
 ERROR_MESSAGES = {
@@ -355,7 +343,19 @@ def get_error_message(error_type: str, **kwargs) -> str:
     return template.format(**kwargs)
 
 CONFIG = {
-     # New NLP extraction settings
+    # Core settings
+    "SESSION_FILE": config("SESSION_FILE", default="/opt/render/project/src/session_data.json"),
+    "PAUSE_THRESHOLD": config("PAUSE_THRESHOLD", default=300, cast=int),
+    "MAX_HISTORY": config("MAX_HISTORY", default=10, cast=int),
+    "OPENAI_MODEL": config("OPENAI_MODEL", default="gpt-3.5-turbo"),
+    "OPENAI_TEMPERATURE": config("OPENAI_TEMPERATURE", default=0.2, cast=float),
+    "NAME_SIMILARITY_THRESHOLD": config("NAME_SIMILARITY_THRESHOLD", default=0.7, cast=float),
+    "COMMAND_SIMILARITY_THRESHOLD": config("COMMAND_SIMILARITY_THRESHOLD", default=0.85, cast=float),
+    "REPORT_FORMAT": config("REPORT_FORMAT", default="detailed"),
+    "MAX_SUGGESTIONS": config("MAX_SUGGESTIONS", default=3, cast=int),
+    "ENABLE_FREEFORM_EXTRACTION": config("ENABLE_FREEFORM_EXTRACTION", default=True, cast=bool),
+    "FREEFORM_MIN_LENGTH": config("FREEFORM_MIN_LENGTH", default=200, cast=int),
+    # NLP extraction settings
     "ENABLE_NLP_EXTRACTION": config("ENABLE_NLP_EXTRACTION", default=False, cast=bool),
     "NLP_MODEL": config("NLP_MODEL", default="gpt-4", cast=str),
     "NLP_EXTRACTION_CONFIDENCE_THRESHOLD": config("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", default=0.7, cast=float),
@@ -364,11 +364,11 @@ CONFIG = {
     "NLP_COMMAND_PATTERN_WEIGHT": config("NLP_COMMAND_PATTERN_WEIGHT", default=0.7, cast=float),
     "NLP_FREE_FORM_WEIGHT": config("NLP_FREE_FORM_WEIGHT", default=0.3, cast=float),
     # PDF settings
-    "PDF_LOGO_PATH": config("PDF_LOGO_PATH", default=""),  # Path to company logo
-    "PDF_LOGO_WIDTH": config("PDF_LOGO_WIDTH", default=2, cast=float),  # Logo width in inches
+    "PDF_LOGO_PATH": config("PDF_LOGO_PATH", default=""),
+    "PDF_LOGO_WIDTH": config("PDF_LOGO_WIDTH", default=2, cast=float),
     "ENABLE_PDF_PHOTOS": config("ENABLE_PDF_PHOTOS", default=True, cast=bool),
-    "MAX_PHOTO_WIDTH": config("MAX_PHOTO_WIDTH", default=4, cast=float),  # Max photo width in inches
-    "MAX_PHOTO_HEIGHT": config("MAX_PHOTO_HEIGHT", default=3, cast=float)  
+    "MAX_PHOTO_WIDTH": config("MAX_PHOTO_WIDTH", default=4, cast=float),
+    "MAX_PHOTO_HEIGHT": config("MAX_PHOTO_HEIGHT", default=3, cast=float)
 }
 
 # --- Enhanced GPT Prompt for Construction Site Reports ---
