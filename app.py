@@ -3678,18 +3678,29 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         
         # Handle confirmation for reset command
         if session.get("awaiting_reset_confirmation", False):
-            if text.lower() in ["yes", "y", "yeah", "yep", "sure", "ok", "okay"] or re.match(FIELD_PATTERNS["yes_confirm"], text, re.IGNORECASE):
-                COMMAND_HANDLERS["reset"](chat_id, session)
+            if text.lower() in ["yes", "y", "yeah", "yep", "sure", "ok", "okay"]:
+                # User confirmed - perform the reset
+                session["awaiting_reset_confirmation"] = False
+                session["structured_data"] = blank_report()
+                session["command_history"].clear()
+                session["last_change_history"].clear()
+                session["context"] = {
+                    "last_mentioned_person": None,
+                    "last_mentioned_item": None,
+                    "last_field": None,
+                }
+                save_session(session_data)
+                summary = summarize_report(session["structured_data"])
+                send_message(chat_id, f"**Report reset**\n\n{summary}\n\nSpeak or type your first category (e.g., 'site Downtown Project').")
                 return "ok", 200
-            elif text.lower() in ["no", "n", "nope", "nah"] or re.match(FIELD_PATTERNS["no_confirm"], text, re.IGNORECASE):
+            elif text.lower() in ["no", "n", "nope", "nah"]:
                 session["awaiting_reset_confirmation"] = False
                 save_session(session_data)
                 send_message(chat_id, "Reset cancelled. Your report was not changed.")
                 return "ok", 200
-        # Handle greetings
-        if re.match(FIELD_PATTERNS["greeting"], text, re.IGNORECASE):
-            handle_greeting(chat_id, session)
-            return "ok", 200
+            else:
+                send_message(chat_id, "Please reply with 'yes' to confirm reset or 'no' to cancel.")
+                return "ok", 200
         
         # Handle conversational intents
         if re.match(FIELD_PATTERNS["conversation"], text, re.IGNORECASE):
