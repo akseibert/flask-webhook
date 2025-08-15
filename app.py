@@ -1352,19 +1352,19 @@ confidence = length_confidence + keyword_confidence + command_confidence
 # Minimum threshold
 confidence = max(0.1, min(confidence, 0.95))
 
-        # Bonus for exact command matches
-        if any(text.lower().startswith(cmd) for cmd in ["yes", "no", "new", "reset", "add", "site", "undo"]):
-            confidence = 0.95
-            
-        # Log the confidence calculation components
-        log_event("transcription_confidence_details", 
-                text=text, 
-                length_confidence=length_confidence,
-                keyword_confidence=keyword_confidence,
-                command_confidence=command_confidence,
-                final_confidence=confidence)
-        
-        return text, confidence
+# Bonus for exact command matches
+if any(text.lower().startswith(cmd) for cmd in ["yes", "no", "new", "reset", "add", "site", "undo"]):
+    confidence = 0.95
+    
+# Log the confidence calculation components
+log_event("transcription_confidence_details", 
+        text=text, 
+        length_confidence=length_confidence,
+        keyword_confidence=keyword_confidence,
+        command_confidence=command_confidence,
+        final_confidence=confidence)
+
+return text, confidence
 
         # Bypass confidence check for exact command matches or field-like patterns
         known_commands = ["new", "new report", "yes", "no", "reset", "status", "export", "summary", "detailed", "help"]
