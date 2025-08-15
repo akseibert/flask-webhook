@@ -2628,13 +2628,13 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     mapped_field = FIELD_MAPPING.get(field_name, field_name)
                     return {mapped_field: {"delete": True}}
                 elif field == "delete_category":
-                        field_name = match.group(1).lower()
-                        mapped_field = FIELD_MAPPING.get(field_name, field_name)
-                        if mapped_field in LIST_FIELDS:
-                            return {mapped_field: {"delete": True}}
-                        else:
-                            return {mapped_field: ""}  # Clear scalar fields
-                    elif field == "correct":
+                    field_name = match.group(1).lower()
+                    mapped_field = FIELD_MAPPING.get(field_name, field_name)
+                    if mapped_field in LIST_FIELDS:
+                        return {mapped_field: {"delete": True}}
+                    else:
+                        return {mapped_field: ""}  # Clear scalar fields
+                elif field == "correct":
                         raw_field = match.group(1).lower() if match.group(1) else None
                         old_value = match.group(2).strip() if match.group(2) else None
                         new_value = match.group(3).strip() if match.group(3) else None
