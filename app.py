@@ -230,7 +230,7 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 result["companies"] = [{"name": name} for name in company_names]
 
             # Extract people and roles
-            people_pattern = r'(?:people|persons|crew)\s*(?:are|include|were|is|:)?\s*([^.]+)'
+            people_pattern = r'(?:people|persons|crew)\s*(?:are|include|were|is|:)?\s*(.*)'
             people_match = re.search(people_pattern, text, re.IGNORECASE)
             if people_match:
                 people_text = people_match.group(1).strip()
@@ -2768,12 +2768,12 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 return result
             
         # Try FIELD_PATTERNS first for structured commands
+        # Try FIELD_PATTERNS first for structured commands
         for field, pattern in FIELD_PATTERNS.items():
             match = re.match(pattern, normalized_text, re.IGNORECASE)
             if match:
                 if field == "site_name":
                     result["site_name"] = match.group(1).strip()
-                    return result
                 elif field == "segment":
                     if re.match(FIELD_PATTERNS["segment_category"], normalized_text, re.IGNORECASE):
                         match = re.match(FIELD_PATTERNS["segment_category"], normalized_text, re.IGNORECASE)
@@ -2788,14 +2788,13 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         result["category"] = "Mängelerfassung"
                     else:
                         result["category"] = value
-                    return result
                 elif field == "company":
-                    companies_text = match.group(1).strip()
-                    # Remove any "add" prefix that might have been captured
-                    companies_text = re.sub(r'^add\s+', '', companies_text, flags=re.IGNORECASE)
-                    companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
-                    result["companies"] = [{"name": company} for company in companies if company]
-                    return result
+                                companies_text = match.group(1).strip()
+                                # Remove any "add" or "company's" prefix that might be included in the captured text
+                                companies_text = re.sub(r'^add\s+', '', companies_text, flags=re.IGNORECASE)
+                                companies_text = re.sub(r"^company's\s+", '', companies_text, flags=re.IGNORECASE)
+                                companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
+                                result["companies"] = [{"name": company} for company in companies if company]
                 
                 elif field == "tool":
                     tools_text = match.group(1).strip()
