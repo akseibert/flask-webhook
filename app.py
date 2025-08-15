@@ -1370,17 +1370,7 @@ log_event("transcription_confidence_details",
 
 return text, confidence
 
-        # Bypass confidence check for exact command matches or field-like patterns
-        known_commands = ["new", "new report", "yes", "no", "reset", "status", "export", "summary", "detailed", "help"]
-        field_patterns = [
-            r'^(?:site|segment|category|companies|people|tools|services|activities|issues|time|weather|impression)\b',
-            r'^(?:kategorie|baustelle|unternehmen|firma)\b'
-        ]
-        if (text.lower().strip() in known_commands or
-            any(re.match(pattern, text, re.IGNORECASE) for pattern in field_patterns)):
-            log_event("transcription_bypassed_confidence", text=text)
-            return text, 1.0  # Assign maximum confidence
-        
+
         # Extract and return confidence (approximate calculation)
         confidence = min(0.95, 0.5 + (len(text) / 200))
 
