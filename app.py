@@ -103,10 +103,10 @@ def extract_fields(text: str) -> Dict[str, Any]:
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
 
         # Check for basic commands first
-        for command in ["yes_confirm", "no_confirm", "reset", "undo_last", "summary", "detailed", "export_pdf", "help", "sharepoint", "sharepoint_status"]:
-            if re.match(FIELD_PATTERNS[command], normalized_text, re.IGNORECASE):
-                result[command] = True
-                return result
+        for command in ["yes_confirm", "no_confirm", "reset", "undo_last", "summary", "detailed", "export_pdf", "help"]:
+                    if re.match(FIELD_PATTERNS[command], normalized_text, re.IGNORECASE):
+                        result[command] = True
+                        return result
 
         # Handle structured commands using FIELD_PATTERNS
         for field, pattern in FIELD_PATTERNS.items():
@@ -187,6 +187,11 @@ def extract_fields(text: str) -> Dict[str, Any]:
                     field_name = match.group(2).strip()
                     new_value = match.group(3).strip()
                     result["correct"] = [{"field": FIELD_MAPPING.get(field_name, field_name), "old": old_value, "new": new_value}]
+                elif field == "delete_field":
+                    field_name = match.group(1).strip().lower()
+                    field_name = FIELD_MAPPING.get(field_name, field_name)
+                    result["delete_entire"] = {"field": field_name}
+                    return result
                 return result
 
         # Handle free-form reports
@@ -225,34 +230,32 @@ def extract_fields(text: str) -> Dict[str, Any]:
                 result["companies"] = [{"name": name} for name in company_names]
 
             # Extract people and roles
-            roles_pattern = r'([A-Za-z\s]+|myself)\s+(?:as|is|handled|handling)\s+(?:the\s+)?([A-Za-z\s]+?)(?=\s*(?:,|\.|$|\sand\b))'
+            people_pattern = r'(?:people|persons|crew)\s*(?:are|include|were|is|:)?\s*([^.]+)'
+            people_match = re.search(people_pattern, text, re.IGNORECASE)
+            if people_match:
+                people_text = people_match.group(1).strip()
+                people = [p.strip() for p in re.split(r',|\s+and\s+', people_text) if p.strip()]
+                result["people"] = people
+
+            roles_pattern = r'([A-Za-z\s]+)\s+(?:is|as|the)\s+([A-Za-z\s]+?)(?=\s*(?:,|\.|$|\sand\b))'
             roles_matches = re.findall(roles_pattern, text, re.IGNORECASE)
-            result["people"] = []
-            result["roles"] = []
-            for name, role in roles_matches:
-                name = name.strip()
-                role = role.strip()
-                if name.lower() == "myself":
-                    name = reporter_name
-                if name and name not in result["people"]:
-                    result["people"].append(name)
-                result["roles"].append({"name": name, "role": role})
+            result["roles"] = [{"name": name.strip(), "role": role.strip()} for name, role in roles_matches]
 
             # Extract tools
-            tools_pattern = r'(?:tools|equipment|gear|machinery)(?:\s+(?:used|utilized|employed|needed|brought|available))?\s*(?:were|was|are|is|:)?\s*([^.]+)'
+            tools_pattern = r'(?:tools|equipment|gear|machinery)(?:\s+(?:used|utilized|employed|needed|brought|available|being used|include))?\s*(?:were|was|are|is|:)?\s*([^.]+)'
             tools_match = re.search(tools_pattern, text, re.IGNORECASE)
             if tools_match:
                 tools_text = tools_match.group(1).strip()
-                tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text)]
-                result["tools"] = [{"item": tool} for tool in tools if tool]
+                tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text) if t.strip()]
+                result["tools"] = [{"item": tool} for tool in tools]
 
             # Extract services
-            services_pattern = r'(?:services|service|tasks?)(?:\s+(?:provided|performed|done|were|was|included|offered))?\s*(?:were|was|are|is|:)?\s*([^.]+)'
+            services_pattern = r'(?:services|service|tasks?)(?:\s+(?:provided|performed|done|were|was|included|offered|today|include))?\s*(?:were|was|are|is|:)?\s*([^.]+)'
             services_match = re.search(services_pattern, text, re.IGNORECASE)
             if services_match:
                 services_text = services_match.group(1).strip()
-                services = [s.strip() for s in re.split(r',|\s+and\s+', services_text)]
-                result["services"] = [{"task": service} for service in services if service]
+                services = [s.strip() for s in re.split(r',|\s+and\s+', services_text) if s.strip()]
+                result["services"] = [{"task": service} for service in services]
 
             # Extract activities
             activities_pattern = r'(?:activities|work|tasks)\s*(?:included|were|are|is|:)\s*([^.]+)'
@@ -356,7 +359,7 @@ CONFIG = {
     "ENABLE_FREEFORM_EXTRACTION": config("ENABLE_FREEFORM_EXTRACTION", default=True, cast=bool),
     "FREEFORM_MIN_LENGTH": config("FREEFORM_MIN_LENGTH", default=200, cast=int),
     # NLP extraction settings
-    "ENABLE_NLP_EXTRACTION": config("ENABLE_NLP_EXTRACTION", default=False, cast=bool),
+    "ENABLE_NLP_EXTRACTION": config("ENABLE_NLP_EXTRACTION", default=True, cast=bool),
     "NLP_MODEL": config("NLP_MODEL", default="gpt-4", cast=str),
     "NLP_EXTRACTION_CONFIDENCE_THRESHOLD": config("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", default=0.7, cast=float),
     "NLP_MAX_TOKENS": config("NLP_MAX_TOKENS", default=2000, cast=int),
@@ -405,8 +408,6 @@ Special commands to detect (return these as single-field objects, do not combine
 - detailed: boolean (true) - for requests like "detailed report", "full report", "comprehensive report"
 - export_pdf: boolean (true) - for requests like "export", "export pdf", "generate report"
 - undo_last: boolean (true) - for commands like "undo last", "undo last change"
-- sharepoint_export: boolean (true) - for requests like "export to sharepoint", "sync to sharepoint"
-- sharepoint_status: boolean (true) - for requests like "sharepoint status", "connection status"
 - help: string - extract specific help topic if mentioned after "help"
 
 Deletion commands (parse these accurately):
@@ -433,6 +434,8 @@ def extract_with_nlp(text: str) -> Tuple[Dict[str, Any], float]:
         if re.match(r'^(?:yes|no|help|new|reset|undo|export|summarize|detailed)\b', text.lower()):
             log_event("nlp_extraction_skipped", reason="obvious_command")
             return {}, 0.0
+            
+        print("NLP extraction attempted for text:", text)
             
         # Call OpenAI API with the enhanced construction-focused prompt
         log_event("nlp_extraction_start", text_length=len(text))
@@ -762,14 +765,6 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
             if match:
                 return {field: match.group(1).strip()}
         
-        # OPTIMIZATION: Skip NLP for short command-like text
-        if len(text.split()) <= 3 and any(text.lower().startswith(cmd) for cmd in 
-            ["add", "delete", "site", "segment", "category", "people", "companies", 
-             "tools", "services", "activities", "issues", "weather", "time"]):
-            # Use regex extraction for short commands
-            result = extract_fields_with_regex(text, chat_id)
-            if result:
-                return result
         
         # For longer text, use the hybrid approach
         result = hybrid_field_extraction(text, chat_id)
@@ -909,6 +904,7 @@ list_categories_pattern = '|'.join(re.escape(cat) for cat in list_categories)
 FIELD_PATTERNS = {
     "site_name": r'^(?:(?:add|insert)\s+)?(?:sites?|location|project)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "segment": r'^(?:(?:add|insert)\s+)?(?:segments?|section)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
+    "segment_category": r'^(?:(?:add|insert)\s+)?(?:segments?|section)\s*[:,]?\s*(.+?)\s+category\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "category": r'^(?:(?:add|insert)\s+)?(?:categories?|kategorie|category)\s*[:,]?\s*(.+?)(?:\s*(?:companies|people|tools|services|activities|$))',
     "impression": r'^(?:(?:add|insert)\s+)?(?:impressions?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "people": r'^(?:(?:add|insert)\s+)?(?:peoples?|persons?|pople)\s*[:,]?\s*(.+?)(?:\s+as\s+(.+?))?(?:\s*(?:,|\.|$))',
@@ -930,6 +926,7 @@ FIELD_PATTERNS = {
     "delete_category": r'^(?:delete|remove|clear)\s+(companies|people|tools|services|activities|issues|site_name|segment|category|time|weather|impression|comments)$',
     "update_field": r'^(?:update|change|set|modify)\s+(\w+)\s+(?:to|with)\s+(.+?)(?:\s*(?:,|\.|$))',
     "delete_specific": r'^(?:delete|remove)\s+(.+?)\s+from\s+(\w+)(?:\s*(?:,|\.|$))',
+    "delete_field": r'^(?:delete|remove|clear)\s+(.+?)(?:\s*(?:,|\.|$))',
     "delete_item": r'^(?:delete|remove)\s+(?:company|firm)\s+(.+?)(?:\s*(?:,|\.|$))',
     "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+(.+?)(?:\s+in\s+(.+?))?\s*(?:to\s+(.+?))?(?:\s*(?:,|\.|$))',
     "correct_simple": r'^correct\s+spelling\s+(.+?)(?:\s*(?:,|\.|$))',
@@ -2778,8 +2775,12 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result["site_name"] = match.group(1).strip()
                     return result
                 elif field == "segment":
-                    result["segment"] = match.group(1).strip()
-                    return result
+                    if re.match(FIELD_PATTERNS["segment_category"], normalized_text, re.IGNORECASE):
+                        match = re.match(FIELD_PATTERNS["segment_category"], normalized_text, re.IGNORECASE)
+                        result["segment"] = match.group(1).strip()
+                        result["category"] = match.group(2).strip()
+                    else:
+                        result["segment"] = match.group(1).strip()
                 elif field == "category":
                     # Special handling for Mängelerfassung
                     value = match.group(1).strip()
@@ -3250,18 +3251,23 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
             elif field in LIST_FIELDS:
                 # More complex handling for list fields
-                if field == "people":
-                    # Save last state for undo
+                elif field == "people":
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    session_data[chat_id]["last_change_history"].append(("roles", existing_data["roles"].copy()))
                     
-                    # Update person names
-                    matched = False
-                    for i, person in enumerate(result[field]):
-                        if string_similarity(person.lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                            result[field][i] = new_value
-                            matched = True
-                            
+                    # Split people text properly
+                    people_parts = re.split(r',|\s+and\s+', new_value.strip())
+                    added_people = []
+                    for part in people_parts:
+                        person = part.strip()
+                        if person and person.lower() not in [p.lower() for p in result["people"]]:
+                            result["people"].append(person)
+                            added_people.append(person)
+                    
+                    if added_people:
+                        changes.append(f"added people: {', '.join(added_people)}")
+                    else:
+                        changes.append("no new people added (duplicates skipped)")
+
                             # Also update roles that refer to this person
                             for role in result["roles"]:
                                 if (isinstance(role, dict) and role.get("name") and 
@@ -4041,42 +4047,42 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         
         # Process special commands
         if any(key in extracted for key in ["reset", "undo", "status", "help", "summary", 
-                                        "detailed", "export_pdf", "undo_last",
-                                        "yes_confirm", "no_confirm", "spelling_correction"]):
-            if "reset" in extracted:
-                handle_reset(chat_id, session)
-            elif "undo" in extracted:
-                handle_undo(chat_id, session)
-            elif "undo_last" in extracted:
-                handle_undo_last(chat_id, session)
-            elif "status" in extracted:
-                handle_status(chat_id, session)
-            elif "export_pdf" in extracted:
-                handle_export(chat_id, session)
-            elif "summary" in extracted:
-                handle_summary(chat_id, session)
-            elif "detailed" in extracted:
-                handle_detailed(chat_id, session)
-            elif "help" in extracted:
-                topic = extracted.get("help", "general")
-                handle_help(chat_id, session, topic)
-            elif "yes_confirm" in extracted and session.get("awaiting_reset_confirmation"):
-                handle_reset(chat_id, session)
-            elif "no_confirm" in extracted and session.get("awaiting_reset_confirmation"):
-                session["awaiting_reset_confirmation"] = False
-                save_session(session_data)
-                send_message(chat_id, "Reset cancelled. Your report was not changed.")
-            elif "spelling_correction" in extracted:
-                field = extracted["spelling_correction"]["field"]
-                old_value = extracted["spelling_correction"]["old_value"]
-                session["awaiting_spelling_correction"] = {
-                    "active": True,
-                    "field": field,
-                    "old_value": old_value
-                }
-                save_session(session_data)
-                send_message(chat_id, f"Do you want to correct '{old_value}' in {field}? Please reply with 'yes' or 'no'.")
-            return "ok", 200
+                                "detailed", "export_pdf", "undo_last",
+                                "yes_confirm", "no_confirm", "spelling_correction"]):
+                    if "reset" in extracted:
+                        handle_reset(chat_id, session)
+                    elif "undo" in extracted:
+                        handle_undo(chat_id, session)
+                    elif "undo_last" in extracted:
+                        handle_undo_last(chat_id, session)
+                    elif "status" in extracted:
+                        handle_status(chat_id, session)
+                    elif "export_pdf" in extracted:
+                        handle_export(chat_id, session)
+                    elif "summary" in extracted:
+                        handle_summary(chat_id, session)
+                    elif "detailed" in extracted:
+                        handle_detailed(chat_id, session)
+                    elif "help" in extracted:
+                        topic = extracted.get("help", "general")
+                        handle_help(chat_id, session, topic)
+                    elif "yes_confirm" in extracted and session.get("awaiting_reset_confirmation"):
+                        handle_reset(chat_id, session)
+                    elif "no_confirm" in extracted and session.get("awaiting_reset_confirmation"):
+                        session["awaiting_reset_confirmation"] = False
+                        save_session(session_data)
+                        send_message(chat_id, "Reset cancelled. Your report was not changed.")
+                    elif "spelling_correction" in extracted:
+                        field = extracted["spelling_correction"]["field"]
+                        old_value = extracted["spelling_correction"]["old_value"]
+                        session["awaiting_spelling_correction"] = {
+                            "active": True,
+                            "field": field,
+                            "old_value": old_value
+                        }
+                        save_session(session_data)
+                        send_message(chat_id, f"Do you want to correct '{old_value}' in {field}? Please reply with 'yes' or 'no'.")
+                    return "ok", 200
 
         # Handle field updates
         session["command_history"].append(session["structured_data"].copy())
