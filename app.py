@@ -502,15 +502,6 @@ def calculate_extraction_confidence(data: Dict[str, Any], original_text: str) ->
     # Final confidence score bounded between 0 and 1
     return max(0.0, min(1.0, confidence))
 
-
-        # OPTIMIZATION: Skip NLP for short command-like text
-        if len(text.split()) <= 3 and any(text.lower().startswith(cmd) for cmd in 
-            ["add", "delete", "site", "segment", "category", "people", "companies", 
-             "tools", "services", "activities", "issues", "weather", "time"]):
-            # Use regex extraction for short commands
-            result = extract_fields_with_regex(text, chat_id)
-            if result:
-                return result
         
         
         # For longer text, try regex first, then use hybrid only if needed
