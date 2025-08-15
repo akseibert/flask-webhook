@@ -305,8 +305,9 @@ def get_error_message(error_type: str, **kwargs) -> str:
     """Get formatted error message"""
     template = ERROR_MESSAGES.get(error_type, "An error occurred")
     return template.format(**kwargs)
-    
-    # New NLP extraction settings
+
+CONFIG = {
+     # New NLP extraction settings
     "ENABLE_NLP_EXTRACTION": config("ENABLE_NLP_EXTRACTION", default=False, cast=bool),
     "NLP_MODEL": config("NLP_MODEL", default="gpt-4", cast=str),
     "NLP_EXTRACTION_CONFIDENCE_THRESHOLD": config("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", default=0.7, cast=float),
@@ -319,7 +320,7 @@ def get_error_message(error_type: str, **kwargs) -> str:
     "PDF_LOGO_WIDTH": config("PDF_LOGO_WIDTH", default=2, cast=float),  # Logo width in inches
     "ENABLE_PDF_PHOTOS": config("ENABLE_PDF_PHOTOS", default=True, cast=bool),
     "MAX_PHOTO_WIDTH": config("MAX_PHOTO_WIDTH", default=4, cast=float),  # Max photo width in inches
-    "MAX_PHOTO_HEIGHT": config("MAX_PHOTO_HEIGHT", default=3, cast=float)  # <- NO COMMA on the last item
+    "MAX_PHOTO_HEIGHT": config("MAX_PHOTO_HEIGHT", default=3, cast=float)  
 }
 
 # --- Enhanced GPT Prompt for Construction Site Reports ---
