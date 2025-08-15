@@ -1282,23 +1282,29 @@ def calculate_enhanced_confidence(text: str, audio_size: int) -> float:
     """Calculate confidence with multiple factors"""
     confidence = 0.5
     
-    # Text length factor
+    text_lower = text.lower()
     words = text.split()
+    
+    # Text length factor
     if 3 <= len(words) <= 100:
         confidence += 0.2
     elif len(words) > 100:
         confidence += 0.15
     
-    # Construction vocabulary check
+    # Construction vocabulary check - EXPANDED LIST
     construction_terms = {'site', 'concrete', 'scaffold', 'safety', 'contractor', 
-                         'building', 'foundation', 'equipment', 'supervisor', 'worker'}
-    text_lower = text.lower()
+                         'building', 'foundation', 'equipment', 'supervisor', 'worker',
+                         'segment', 'plaza', 'commercial', 'westfield', 'add'}
     term_matches = sum(1 for term in construction_terms if term in text_lower)
     confidence += min(0.3, term_matches * 0.05)
     
-    # Command pattern check
-    if re.match(r'^(add|delete|site|segment|category|companies|people)', text_lower):
-        confidence += 0.15
+    # Command pattern check - IMPROVED
+    if 'add' in text_lower or 'site' in text_lower or 'segment' in text_lower:
+        confidence += 0.2  # Increased from 0.15
+    
+    # Special boost for "add the ... site" pattern
+    if 'add the' in text_lower and 'site' in text_lower:
+        confidence += 0.25
     
     # Penalize suspicious patterns
     if re.search(r'(\w)\1{4,}', text):  # Repeated characters
