@@ -502,50 +502,6 @@ def calculate_extraction_confidence(data: Dict[str, Any], original_text: str) ->
     # Final confidence score bounded between 0 and 1
     return max(0.0, min(1.0, confidence))
 
-        
-        
-        # For longer text, try regex first, then use hybrid only if needed
-        result = extract_fields_with_regex(text, chat_id)
-        if not result or "error" in result:
-            # Only use hybrid for very long free-form text
-            if len(text) > 100:
-                result = hybrid_field_extraction(text, chat_id)
-        
-        # Handle additional post-processing if needed
-        if result and not "error" in result:
-            # For scalar fields, ensure they're strings
-            for field in SCALAR_FIELDS:
-                if field in result and not isinstance(result[field], str):
-                    result[field] = str(result[field]) if result[field] is not None else ""
-            
-            # Make sure date is properly formatted
-            if not "date" in result:
-                result["date"] = datetime.now().strftime("%d-%m-%Y")
-        
-        log_event("extract_fields_completed", result_fields=len(result))
-        return result
-    except Exception as e:
-        log_event("extract_fields_error", input=text[:100], error=str(e), traceback=traceback.format_exc())
-        print(f"ERROR in extract_fields: {str(e)}")
-        return {"error": str(e)}
-        
-        # Handle additional post-processing if needed
-        if result and not "error" in result:
-            # For scalar fields, ensure they're strings
-            for field in SCALAR_FIELDS:
-                if field in result and not isinstance(result[field], str):
-                    result[field] = str(result[field]) if result[field] is not None else ""
-            
-            # Make sure date is properly formatted
-            if not "date" in result:
-                result["date"] = datetime.now().strftime("%d-%m-%Y")
-        
-        log_event("extract_fields_completed", result_fields=len(result))
-        return result
-    except Exception as e:
-        log_event("extract_fields_error", input=text[:100], error=str(e), traceback=traceback.format_exc())
-        print(f"ERROR in extract_fields: {str(e)}")
-        return {"error": str(e)}
 
 REQUIRED_ENV_VARS = ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"]
 
