@@ -3795,17 +3795,17 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             if not any(text.lower().startswith(cmd) for cmd in ["add", "delete", "correct", "export", "help", "status", "new", "reset"]):
                 nlp_data, confidence = extract_with_nlp(text)
                 if confidence >= CONFIG["NLP_EXTRACTION_CONFIDENCE_THRESHOLD"]:
-                log_event("free_form_nlp_extraction", confidence=confidence)
-                session_data[chat_id]["command_history"].append(session_data[chat_id]["structured_data"].copy())
-                session_data[chat_id]["structured_data"] = merge_data(
-                    session_data[chat_id]["structured_data"], 
-                    nlp_data, 
-                    chat_id
-                )
-                save_session(session_data)
-                summary = summarize_report(session_data[chat_id]["structured_data"])
-                send_message(chat_id, f"✅ I've extracted the following information from your report:\n\n{summary}")
-                return "ok", 200
+                    log_event("free_form_nlp_extraction", confidence=confidence)
+                    session_data[chat_id]["command_history"].append(session_data[chat_id]["structured_data"].copy())
+                    session_data[chat_id]["structured_data"] = merge_data(
+                        session_data[chat_id]["structured_data"], 
+                        nlp_data, 
+                        chat_id
+                    )
+                    save_session(session_data)
+                    summary = summarize_report(session_data[chat_id]["structured_data"])
+                    send_message(chat_id, f"✅ I've extracted the following information from your report:\n\n{summary}")
+                    return "ok", 200
 
         # Extract fields from input
         extracted = extract_fields(text)
