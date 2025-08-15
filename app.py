@@ -1309,64 +1309,6 @@ def calculate_enhanced_confidence(text: str, audio_size: int) -> float:
     return max(0.1, min(1.0, confidence))
 
         
-# Normalize text - handle common non-English transcriptions
-text = normalize_transcription(text)
-
-# Calculate confidence based on multiple factors
-confidence = 0.0
-
-# Adjust confidence based on text length
-text_words = text.split()
-if len(text_words) < 5:  # Short command
-    if any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export", "yes", "no", "time", "correct", "weather", "impression"]):
-        length_confidence = 0.5  # Higher confidence for common short commands
-    else:
-        length_confidence = min(0.7, (len(text) / 250) * 0.5)
-elif len(text_words) > 100:  # Long report
-    length_confidence = 0.6  # Higher confidence for long reports
-else:
-    length_confidence = min(0.7, (len(text) / 250) * 0.5)
-
-# Keyword confidence - if it contains key construction terms
-construction_keywords = [
-    "site", "project", "concrete", "scaffold", "tools", "safety", 
-    "worker", "supervisor", "engineer", "contractor", "weather",
-    "issue", "delay", "material", "equipment", "schedule", "inspection"
-]
-
-keyword_matches = sum(1 for word in construction_keywords if word in text.lower())
-keyword_confidence = min(0.3, keyword_matches * 0.05)
-
-# Command confidence - if it matches command patterns
-command_patterns = [
-    r'\b(add|delete|update|correct|site|category|people|companies|tools|activities|issues)\b',
-    r'\b(new|reset|undo|export|summary|help)\b',
-    r'\b(firms|segment|services|supervisors|weather|time|impression)\b'  # Add more field keywords
-]
-
-command_matches = any(re.search(pattern, text, re.IGNORECASE) for pattern in command_patterns)
-command_confidence = 0.3 if command_matches else 0.0
-
-# Combine confidences with different weights
-confidence = length_confidence + keyword_confidence + command_confidence
-
-# Minimum threshold
-confidence = max(0.1, min(confidence, 0.95))
-
-# Bonus for exact command matches
-if any(text.lower().startswith(cmd) for cmd in ["yes", "no", "new", "reset", "add", "site", "undo"]):
-        confidence = 0.95
-    
-# Log the confidence calculation components
-log_event("transcription_confidence_details", 
-        text=text, 
-        length_confidence=length_confidence,
-        keyword_confidence=keyword_confidence,
-        command_confidence=command_confidence,
-        final_confidence=confidence)
-
-return text, confidence
-
     
 # REPLACE the normalize_transcription function with this enhanced version:
 def normalize_transcription(text: str) -> str:
@@ -2900,74 +2842,80 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     target = match.group(1).strip() if match.group(1) else None
                     field_name = match.group(2).strip() if len(match.groups()) > 1 and match.group(2) else None
                     
+                    
+                    # Initialize variables for delete pattern parsing
+                    category = None
+                    value = None
+
                     # Map field name if provided
                     if field_name:
                         field_name = FIELD_MAPPING.get(field_name.lower(), field_name.lower())
-                    
-                    return {"delete": {"target": target, "field": field_name}}
-                    elif groups[2] and groups[3]:  # "delete category value"
-                        category = groups[2].lower()
-                        value = groups[3].strip() if groups[3] else None
+
+                    # Parse different delete syntax patterns
+                    if groups[0]:  # First pattern matched
+                        value = groups[0].strip() if groups[0] else None
+                        if groups[1]:
+                            category = FIELD_MAPPING.get(groups[1].lower(), groups[1].lower())
+                    elif groups[2] and groups[3]:  # "delete value from category"
+                        value = groups[2].strip()
+                        category = FIELD_MAPPING.get(groups[3].lower(), groups[3].lower())
                     elif groups[4] and groups[5]:  # "category delete value"
-                        category = groups[4].lower()
+                        category = FIELD_MAPPING.get(groups[4].lower(), groups[4].lower())
                         value = groups[5].strip() if groups[5] else None
                     elif groups[6]:  # "delete value" (no category)
                         value = groups[6].strip()
-                    
-                    # Map category names to field names
-                    if category:
-                        category = FIELD_MAPPING.get(category, category)
-                    
-                    # If we have a value, create a delete command
-                    if value:
+                        category = None
+
+                    # Return the appropriate delete command
+                    if value or category:
                         return {"delete": {"value": value, "category": category}}
-                    
-                    return {"delete": {"category": category, "value": value}}
-                
-                elif field == "delete_entire":
-                    field_name = match.group(1).lower()
-                    mapped_field = FIELD_MAPPING.get(field_name, field_name)
-                    return {mapped_field: {"delete": True}}
-                elif field == "delete_category":
-                    field_name = match.group(1).lower()
-                    mapped_field = FIELD_MAPPING.get(field_name, field_name)
-                    if mapped_field in LIST_FIELDS:
-                        return {mapped_field: {"delete": True}}
                     else:
-                        return {mapped_field: ""}  # Clear scalar fields
-                elif field == "correct":
-                    raw_field = match.group(1).lower()
-                    old_value = match.group(2).strip() if match.group(2) else None
-                    new_value = match.group(3).strip() if match.group(3) else None
-                    field_name = FIELD_MAPPING.get(raw_field, raw_field)
-                    
-                    if old_value:
-                        if new_value:
-                            return {"correct": [{"field": field_name, "old": old_value, "new": new_value}]}
+                        return {"delete": {"target": target, "field": field_name}}
+
+                    elif field == "delete_entire":
+                        field_name = match.group(1).lower()
+                        mapped_field = FIELD_MAPPING.get(field_name, field_name)
+                        return {mapped_field: {"delete": True}}
+                    elif field == "delete_category":
+                        field_name = match.group(1).lower()
+                        mapped_field = FIELD_MAPPING.get(field_name, field_name)
+                        if mapped_field in LIST_FIELDS:
+                            return {mapped_field: {"delete": True}}
                         else:
-                            return {"spelling_correction": {"field": field_name, "old_value": old_value}}
-                elif field == "reset":
-                    return {"reset": True}
-                elif field == "undo_last":
-                    return {"undo_last": True}
-                elif field == "help":
-                    topic = match.group(1) or match.group(2) or "general"
-                    return {"help": topic.lower()}
-                elif field == "summary":
-                    return {"summary": True}
-                elif field == "detailed":
-                    return {"detailed": True}
-                elif field == "export_pdf":
-                    return {"export_pdf": True}
-                elif field == "sharepoint":
-                    return {"sharepoint_export": True}
-                elif field == "sharepoint_status":
-                    return {"sharepoint_status": True}
-                elif field == "clear":
-                    field_name = match.group(1).lower()
-                    field_name = FIELD_MAPPING.get(field_name, field_name)
-                    result[field_name] = [] if field_name in LIST_FIELDS else ""
-                    return result
+                            return {mapped_field: ""}  # Clear scalar fields
+                    elif field == "correct":
+                        raw_field = match.group(1).lower()
+                        old_value = match.group(2).strip() if match.group(2) else None
+                        new_value = match.group(3).strip() if match.group(3) else None
+                        field_name = FIELD_MAPPING.get(raw_field, raw_field)
+                        
+                        if old_value:
+                            if new_value:
+                                return {"correct": [{"field": field_name, "old": old_value, "new": new_value}]}
+                            else:
+                                return {"spelling_correction": {"field": field_name, "old_value": old_value}}
+                    elif field == "reset":
+                        return {"reset": True}
+                    elif field == "undo_last":
+                        return {"undo_last": True}
+                    elif field == "help":
+                        topic = match.group(1) or match.group(2) or "general"
+                        return {"help": topic.lower()}
+                    elif field == "summary":
+                        return {"summary": True}
+                    elif field == "detailed":
+                        return {"detailed": True}
+                    elif field == "export_pdf":
+                        return {"export_pdf": True}
+                    elif field == "sharepoint":
+                        return {"sharepoint_export": True}
+                    elif field == "sharepoint_status":
+                        return {"sharepoint_status": True}
+                    elif field == "clear":
+                        field_name = match.group(1).lower()
+                        field_name = FIELD_MAPPING.get(field_name, field_name)
+                        result[field_name] = [] if field_name in LIST_FIELDS else ""
+                        return result
         
         # Handle direct "add issue X" commands
         issue_add_pattern = r'^(?:add|insert)\s+issues?\s+(.+)$'
