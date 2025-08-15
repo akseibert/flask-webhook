@@ -2645,26 +2645,26 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                                 return {"correct": [{"field": field_name, "old": old_value, "new": new_value}]}
                             else:
                                 return {"spelling_correction": {"field": field_name, "old_value": old_value}}
-                    elif field == "reset":
-                        return {"reset": True}
-                    elif field == "undo_last":
-                        return {"undo_last": True}
-                    elif field == "help":
-                        topic = match.group(1) if match.group(1) else "general"
-                        return {"help": topic.lower()}
-                    elif field == "summary":
-                        return {"summary": True}
-                    elif field == "detailed":
-                        return {"detailed": True}
-                    elif field == "export_pdf":
-                        return {"export_pdf": True}
-                    elif field == "export":
-                        return {"export_pdf": True}
-                    elif field == "clear":
-                        field_name = match.group(1).lower()
-                        field_name = FIELD_MAPPING.get(field_name, field_name)
-                        result[field_name] = [] if field_name in LIST_FIELDS else ""
-                        return result
+                elif field == "reset":
+                    return {"reset": True}
+                elif field == "undo_last":
+                    return {"undo_last": True}
+                elif field == "help":
+                    topic = match.group(1) if match.group(1) else "general"
+                    return {"help": topic.lower()}
+                elif field == "summary":
+                    return {"summary": True}
+                elif field == "detailed":
+                    return {"detailed": True}
+                elif field == "export_pdf":
+                    return {"export_pdf": True}
+                elif field == "export":
+                    return {"export_pdf": True}
+                elif field == "clear":
+                    field_name = match.group(1).lower()
+                    field_name = FIELD_MAPPING.get(field_name, field_name)
+                    result[field_name] = [] if field_name in LIST_FIELDS else ""
+                    return result
         
         # Handle direct "add issue X" commands
         issue_add_pattern = r'^(?:add|insert)\s+issues?\s+(.+)$'
