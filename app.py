@@ -2857,7 +2857,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     
                     # Split by commas to handle multiple people
                     people_parts = [p.strip() for p in people_text.split(',')]
-                   for part in people_parts:
+                    for part in people_parts:
                         # Check for "X as Y" pattern
                         if ' as ' in part.lower():
                             splits = re.split(r'\s+as\s+', part, flags=re.IGNORECASE)
@@ -2871,12 +2871,12 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                             splits = re.split(r'\s+was\s+', part, flags=re.IGNORECASE)
                             if len(splits) == 2:
                                 name = splits[0].strip()
-                                role_desc = splits[1].strip()
-                                # Convert descriptions to roles
-                                if "driving" in role_desc.lower() and "crane" in role_desc.lower():
-                                    role = "Crane Operator"
+                                role_or_activity = splits[1].strip()
+                                if 'doing' in role_or_activity.lower():
+                                    # Handle "doing Y" as activity or role
+                                    role = role_or_activity.replace('doing', '').strip()
                                 else:
-                                    role = role_desc
+                                    role = role_or_activity
                                 result["people"].append(name)
                                 result["roles"].append({"name": name, "role": role})
                         else:
