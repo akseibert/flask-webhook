@@ -1307,6 +1307,10 @@ def calculate_enhanced_confidence(text: str, audio_size: int) -> float:
         confidence -= 0.1
     
     return max(0.1, min(1.0, confidence))
+
+# THE FOLLOWING CODE NEEDS TO BE INSIDE A FUNCTION - IT'S CURRENTLY FLOATING
+# This appears to be OLD code that should be DELETED or moved into transcribe_voice function
+# DELETE FROM HERE...
         
 # Normalize text - handle common non-English transcriptions
 text = normalize_transcription(text)
@@ -1395,6 +1399,7 @@ return text, confidence
     except (requests.RequestException, Exception) as e:
         log_event("transcription_failed", error=str(e))
         return "", 0.0
+# ... DELETE TO HERE (this is duplicate/old code)
     
 # REPLACE the normalize_transcription function with this enhanced version:
 def normalize_transcription(text: str) -> str:
