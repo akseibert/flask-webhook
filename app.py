@@ -2872,7 +2872,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     else:
                         return {"delete": {"target": target, "field": field_name}}
 
-                    elif field == "delete_entire":
+                    if field == "delete_entire":
                         field_name = match.group(1).lower()
                         mapped_field = FIELD_MAPPING.get(field_name, field_name)
                         return {mapped_field: {"delete": True}}
@@ -4140,10 +4140,13 @@ def webhook() -> tuple[str, int]:
                 if len(text.split()) < 5 and any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export", "segment", "site"]):
                     confidence_threshold = 0.3
                 # For field-based inputs with multiple keywords, also lower threshold
-                elif any(keyword in text.lower() for keyword in ["category", "companies", "segment", "people", "tools", "services", "activities", "issues", "firms"]):
+                elif any(keyword in text.lower() for keyword in ["category", "companies", "segment", "people", "tools", "services", "activities", "issues", "firms", "westfield", "plaza", "commercial"]):
                     confidence_threshold = 0.35
+                # For messages containing "add" and "site"
+                elif "add" in text.lower() and "site" in text.lower():
+                    confidence_threshold = 0.4
                 else:
-                    confidence_threshold = 0.5
+                    confidence_threshold = 0.45  # Lowered from 0.5
 
                 if not text or (confidence < confidence_threshold and not any(re.match(pattern, text, re.IGNORECASE) for pattern in [
                     # patterns
