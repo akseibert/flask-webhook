@@ -2607,7 +2607,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result["roles"] = [{"name": name, "role": "Supervisor"}]
                     return result
                 elif field == "delete":
-                # Handle delete command with proper group extraction
+                    # Handle delete command with proper group extraction
                     groups = match.groups()
                     
                     # The delete pattern has 2 groups: (value) and optional (category)
@@ -2623,12 +2623,11 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         return {"delete": {"value": value, "category": category}}
                     else:
                         return {}
-
-                    elif field == "delete_entire":
-                        field_name = match.group(1).lower()
-                        mapped_field = FIELD_MAPPING.get(field_name, field_name)
-                        return {mapped_field: {"delete": True}}
-                    elif field == "delete_category":
+                elif field == "delete_entire":
+                    field_name = match.group(1).lower()
+                    mapped_field = FIELD_MAPPING.get(field_name, field_name)
+                    return {mapped_field: {"delete": True}}
+                elif field == "delete_category":
                         field_name = match.group(1).lower()
                         mapped_field = FIELD_MAPPING.get(field_name, field_name)
                         if mapped_field in LIST_FIELDS:
