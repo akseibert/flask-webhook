@@ -586,7 +586,7 @@ FIELD_PATTERNS = {
     "segment_category": r'^(?:(?:add|insert)\s+)?(?:segments?|section)\s*[:,]?\s*(.+?)\s+category\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "category": r'^(?:(?:add|insert)\s+)?(?:categories?|kategorie|category)\s*[:,]?\s*(.+?)(?:\s*(?:companies|people|tools|services|activities|$))',
     "impression": r'^(?:(?:add|insert)\s+)?(?:impressions?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
-    "people": r'^(?:(?:add|insert)\s+)?(?:peoples?|persons?|pople)\s*[:,]?\s*(.+?)(?:\s+as\s+(.+?))?(?:\s*(?:,|\.|$))',
+    "people": r'^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+)(?:\s*(?:,|\.|$))|^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "person_as_role": r'^(\w+(?:\s+\w+)?)\s+as\s+(\w+(?:\s+\w+)?)(?:\s*(?:,|\.|$))',
     "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(\w+\s+\w+|\w+)\s+(?:as|is)\s+(.+?)(?:\s*(?:,|\.|$))',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
@@ -608,7 +608,7 @@ FIELD_PATTERNS = {
     "delete_field": r'^(?:delete|remove|clear)\s+(.+?)(?:\s*(?:,|\.|$))',
     "delete_item": r'^(?:delete|remove)\s+(?:company|firm)\s+(.+?)(?:\s*(?:,|\.|$))',
     "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+(.+?)(?:\s+in\s+(.+?))?\s*(?:to\s+(.+?))?(?:\s*(?:,|\.|$))',
-    "correct_simple": r'^correct\s+spelling\s+(.+?)(?:\s*(?:,|\.|$))',
+    "correct_simple": r'^(?:companies?\s+)?correct\s+spelling\s+(.+?)(?:\s*(?:,|\.|$))',
     "help": r'^help(?:\s+on\s+([a-z_]+))?$|^\/help(?:\s+([a-z_]+))?$',
     "undo_last": r'^undo\s+last\s*[.!]?$|^undo\s+last\s+(?:change|modification|edit)\s*[.!]?$',
     "context_add": r'^(?:add|include|insert)\s+(?:it|this|that|him|her|them)\s+(?:to|in|into|as)\s+(.+?)\s*[.!]?$',
@@ -2414,7 +2414,31 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                              original=text, 
                              resolved=normalized_text,
                              item=last_item)
-
+        # Handle simple spelling corrections for companies
+        correct_simple = re.match(r'^(?:companies?\s+)?correct\s+spelling\s+(.+?)(?:\s*(?:,|\.|$))', normalized_text, re.IGNORECASE)
+        if correct_simple:
+            # This is a correction, not an addition
+            correction_text = correct_simple.group(1).strip()
+            
+            # Try to identify what's being corrected
+            # Format: "old_name to new_name" or just "new_name"
+            if ' to ' in correction_text:
+                parts = correction_text.split(' to ', 1)
+                old_value = parts[0].strip()
+                new_value = parts[1].strip()
+                return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
+            else:
+                # Assume it's correcting the most recently added or most similar company
+                new_value = correction_text
+                # Find the most recent company to correct
+                if chat_id and chat_id in session_data:
+                    companies = session_data[chat_id].get("structured_data", {}).get("companies", [])
+                    if companies:
+                        # Get the last added company
+                        last_company = companies[-1].get("name", "") if companies else ""
+                        return {"correct": [{"field": "companies", "old": last_company, "new": new_value}]}
+                # If no context, just return as a new company
+                return {"companies": [{"name": new_value}]}
         # Check for basic commands first
         if normalized_text.lower() in ("yes", "y", "ya", "yeah", "yep", "yup", "okay", "ok"):
             return {"yes_confirm": True}
@@ -2558,6 +2582,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return result
                 elif field == "people":
                     people_text = match.group(1).strip()
+                    role_text = match.group(2).strip() if len(match.groups()) > 1 and match.group(2) else None
                     
                     # Clean up the people text
                     people_text = re.sub(r'^add\s+', '', people_text, flags=re.IGNORECASE)
@@ -2566,21 +2591,27 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result["people"] = []
                     result["roles"] = []
                     
-                    # Parse "Name as Role, Name as Role" pattern
-                    role_pattern = r'([A-Za-z\s]+?)\s+as\s+([A-Za-z\s]+?)(?:,|$)'
-                    role_matches = re.findall(role_pattern, people_text, re.IGNORECASE)
-                    
-                    if role_matches:
-                        for name, role in role_matches:
-                            name = name.strip()
-                            role = role.strip()
-                            if name:
-                                result["people"].append(name)
-                                result["roles"].append({"name": name, "role": role})
+                    # Check if there's a role specified in the second group
+                    if role_text:
+                        # Single person with role from regex groups
+                        result["people"].append(people_text)
+                        result["roles"].append({"name": people_text, "role": role_text})
                     else:
-                        # No roles, just parse names
-                        people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
-                        result["people"] = [p for p in people if p]
+                        # Parse "Name as Role, Name as Role" pattern from the text
+                        role_pattern = r'([A-Za-z\s]+?)\s+as\s+([A-Za-z\s\-]+?)(?:,|$)'
+                        role_matches = re.findall(role_pattern, people_text, re.IGNORECASE)
+                        
+                        if role_matches:
+                            for name, role in role_matches:
+                                name = name.strip()
+                                role = role.strip()
+                                if name:
+                                    result["people"].append(name)
+                                    result["roles"].append({"name": name, "role": role})
+                        else:
+                            # No roles, just parse names
+                            people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+                            result["people"] = [p for p in people if p]
                     
                     return result
     
