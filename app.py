@@ -1411,17 +1411,18 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
         
         # Activities Section
         if report_data.get("activities"):
-            story.append(Paragraph("📋 Activities", styles['heading']))
+            story.append(Paragraph("Activities", styles['heading']))
             activities = report_data.get("activities", [])
             
             for activity in activities:
                 # Capitalize first letter of activity
                 activity_text = activity[0].upper() + activity[1:] if activity else activity
-                story.append(Paragraph(f"â€¢ {activity_text}", styles['normal']))
+                story.append(Paragraph(f"• {activity_text}", styles['normal']))
             
             story.append(Spacer(1, 12))
         
         # Issues Section with Photos
+       
         if report_data.get("issues"):
             story.append(Paragraph("Issues & Problems", styles['heading']))
             issues = report_data.get("issues", [])
@@ -1429,6 +1430,8 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
             for i, issue in enumerate(issues):
                 if isinstance(issue, dict):
                     desc = issue.get("description", "")
+                    # Capitalize first letter
+                    desc = desc[0].upper() + desc[1:] if desc else desc
                     
                     # Create issue content
                     issue_content = []
@@ -1465,13 +1468,25 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
             story.append(Spacer(1, 12))
         
         # Tools & Services Section
+  
         if report_data.get("tools") or report_data.get("services"):
-            story.append(Paragraph("🔧 Equipment & Services", styles['heading']))
+            story.append(Paragraph("Equipment & Services", styles['heading']))
             
             if report_data.get("tools"):
-                tools_str = ", ".join(t.get("item", "") for t in report_data.get("tools", []) if t.get("item"))
+                tools_list = [t.get("item", "") for t in report_data.get("tools", []) if t.get("item")]
+                # Capitalize each tool
+                tools_list = [tool[0].upper() + tool[1:] if tool else tool for tool in tools_list]
+                tools_str = ", ".join(tools_list)
                 if tools_str:
                     story.append(Paragraph(f"<b>Tools:</b> {tools_str}", styles['normal']))
+            
+            if report_data.get("services"):
+                services_list = [s.get("task", "") for s in report_data.get("services", []) if s.get("task")]
+                # Capitalize each service
+                services_list = [service[0].upper() + service[1:] if service else service for service in services_list]
+                services_str = ", ".join(services_list)
+                if services_str:
+                    story.append(Paragraph(f"<b>Services:</b> {services_str}", styles['normal']))
             
             if report_data.get("services"):
                 services_str = ", ".join(s.get("task", "") for s in report_data.get("services", []) if s.get("task"))
@@ -1486,9 +1501,13 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
             
             conditions_data = []
             if report_data.get("time"):
-                conditions_data.append(['Time:', report_data.get("time", "")])
+                time_text = report_data.get("time", "")
+                time_text = time_text[0].upper() + time_text[1:] if time_text else time_text
+                conditions_data.append(['Time:', time_text])
             if report_data.get("weather"):
-                conditions_data.append(['Weather:', report_data.get("weather", "")])
+                weather_text = report_data.get("weather", "")
+                weather_text = weather_text[0].upper() + weather_text[1:] if weather_text else weather_text
+                conditions_data.append(['Weather:', weather_text])
             if report_data.get("impression"):
                 conditions_data.append(['Overall Impression:', report_data.get("impression", "")])
             
@@ -3955,6 +3974,7 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                 return "ok", 200
 
         # Handle field updates
+       
         session["command_history"].append(session["structured_data"].copy())
         session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
         session["structured_data"] = enrich_date(session["structured_data"])
@@ -3965,6 +3985,12 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                         if field not in ["help", "reset", "undo", "status", "export_pdf", 
                                         "summary", "detailed", "undo_last", "error",
                                         "yes_confirm", "no_confirm", "spelling_correction"]]
+        
+        # Always show summary after corrections
+        if "correct" in extracted:
+            summary = summarize_report(session["structured_data"])
+            send_message(chat_id, f"✅ Corrected information in your report.\n\n{summary}")
+            return "ok", 200
         
         if changed_fields:
             message = "✅ Updated report."
@@ -4188,7 +4214,7 @@ def webhook() -> tuple[str, int]:
                     # Check if there are any issues in the report
                     issues = session_data[chat_id]["structured_data"].get("issues", [])
                     if issues:
-                        issue_list = "\n".join([f"{i+1}. {issue.get('description', '')[:50]}" 
+                        issue_list = "\n".join([f"{i+1}. {issue.get('description', '')}" 
                                                for i, issue in enumerate(issues)])
                         send_message(chat_id, 
                             f"📸 Photo received! Which issue does this belong to?\n\n{issue_list}\n\n"
