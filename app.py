@@ -609,7 +609,7 @@ FIELD_PATTERNS = {
     "comments": r'^(?:(?:add|insert)\s+)?(?:comments?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*(?:none|delete|clear|remove|reset)$|^(?:clear|empty|reset)\s+(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)$',
     "reset": r'^(new|new report|reset|start over|clear report)[!?.]*$',
-    "delete": r'^(?:delete|remove)\s+(.+?)(?:\s+from\s+(.+?))?\.?\s*$',
+    "delete": r'^(?:delete|remove)\s+(.+?)(?:\s+from\s+(.+?))?\.?\s*$|^(?:delete|remove)\s+(services|tools|companies|people|activities|issues|segment|category|weather|time|impression|comments)$',
     "delete_entire": r'^(?:delete|remove|clear)\s+(?:entire|all)\s+(.+?)(?:\s*(?:,|\.|$))',
     "delete_category": r'^(?:delete|remove|clear)\s+(companies|people|tools|services|activities|issues|site_name|segment|category|time|weather|impression|comments)$',
     "update_field": r'^(?:update|change|set|modify)\s+(\w+)\s+(?:to|with)\s+(.+?)(?:\s*(?:,|\.|$))',
@@ -2772,9 +2772,31 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     # Handle delete command with proper group extraction
                     groups = match.groups()
                     
-                    # The delete pattern has 2 groups: (value) and optional (category)
-                    value = groups[0].strip() if groups[0] else None
-                    category = groups[1].strip() if len(groups) > 1 and groups[1] else None
+                    # Safely extract groups
+                    value = None
+                    category = None
+                    
+                    if groups and len(groups) > 0 and groups[0] is not None:
+                        value = groups[0].strip()
+                    if len(groups) > 1 and groups[1] is not None:
+                        category = groups[1].strip()
+                    
+                    # Special handling for "delete services" or other category-only deletions
+                    if value and not category:
+                        # Check if the value is actually a category name
+                        if value.lower() in ['services', 'tools', 'companies', 'people', 'activities', 'issues', 'roles', 'segment', 'category']:
+                            category = value.lower()
+                            value = None
+                    
+                    # Map field name if provided
+                    if category:
+                        category = FIELD_MAPPING.get(category.lower(), category.lower())
+                    
+                    # Return the delete command
+                    if value or category:
+                        return {"delete": {"value": value, "category": category}}
+                    else:
+                        return {}
                     
                     # Special handling for "delete services" or other category-only deletions
                     if value and not category:
@@ -3008,10 +3030,17 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
     
     # Handle special operation: delete items
     
+    # Handle special operation: delete items
     if "delete" in new_data:
         delete_info = new_data.pop("delete")
-        value = delete_info.get("value", "").strip() if delete_info.get("value") else ""
-        category = delete_info.get("category", "").strip() if delete_info.get("category") else ""
+        value = delete_info.get("value", "") if delete_info.get("value") else ""
+        category = delete_info.get("category", "") if delete_info.get("category") else ""
+        
+        # Clean up values safely
+        if value:
+            value = value.strip()
+        if category:
+            category = category.strip()
         
         # Special case: if value is a category name and no category specified
         if value and not category:
