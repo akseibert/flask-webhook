@@ -522,7 +522,7 @@ OPENAI_API_KEY = config("OPENAI_API_KEY")
 
 # --- Logger Setup ---
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -1601,10 +1601,7 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
                 if tools_str:
                     story.append(Paragraph(f"<b>Tools:</b> {tools_str}", normal_style))
             
-            if report_data.get("services"):
-                services_str = ", ".join(s.get("task", "") for s in report_data.get("services", []) if s.get("task"))
-                if services_str:
-                    story.append(Paragraph(f"<b>Services:</b> {services_str}", normal_style))
+        
             
             story.append(Spacer(1, 6))
         
@@ -1718,7 +1715,7 @@ def summarize_report(data: Dict[str, Any]) -> str:
             f"🛠️ **Segment**: {capitalize_first(data.get('segment', ''))}",
             f"📋 **Category**: {capitalize_first(data.get('category', ''))}",
             f"🏢 **Companies**: {companies_str}",
-            f"👷 **People**: {', '.join(data.get('people', []))}",
+            f"👷 **People**: {', '.join(data.get('people', [])) if data.get('people') else ''}",
             f"🎭 **Roles**: {roles_str}",
             f"🔧 **Services**: {services_str}",
             f"🛠️ **Tools**: {tools_str}",
@@ -3010,10 +3007,36 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
         return existing_data  # Return unchanged data
     
     # Handle special operation: delete items
+    
     if "delete" in new_data:
         delete_info = new_data.pop("delete")
-        value = delete_info.get("value", "").strip()
-        category = delete_info.get("category")
+        value = delete_info.get("value", "").strip() if delete_info.get("value") else ""
+        category = delete_info.get("category", "").strip() if delete_info.get("category") else ""
+        
+        # Special case: if value is a category name and no category specified
+        if value and not category:
+            if value.lower() in ['services', 'tools', 'companies', 'people', 'activities', 'issues', 'roles', 'segment', 'category']:
+                category = value.lower()
+                value = ""
+        
+        # Map the category
+        if category:
+            category = FIELD_MAPPING.get(category, category)
+        
+        # If only category is specified, delete entire category
+        if category and not value:
+            if category in LIST_FIELDS:
+                session_data[chat_id]["last_change_history"].append((category, existing_data.get(category, []).copy()))
+                result[category] = []
+                changes.append(f"cleared all {category}")
+            elif category in SCALAR_FIELDS:
+                session_data[chat_id]["last_change_history"].append((category, existing_data.get(category, "")))
+                result[category] = ""
+                changes.append(f"cleared {category}")
+            
+            # Make sure to update and return here
+            log_event("deleted_category", category=category)
+            return result
         
         if not value and not category:
             return result  # Nothing to delete
