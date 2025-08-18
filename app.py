@@ -522,7 +522,7 @@ OPENAI_API_KEY = config("OPENAI_API_KEY")
 
 # --- Logger Setup ---
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -2768,9 +2768,31 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result["people"] = [name]
                     result["roles"] = [{"name": name, "role": "Supervisor"}]
                     return result
+                
                 elif field == "delete":
-                    # Handle delete command with proper group extraction
-                    groups = match.groups()
+                    # Simple delete handling
+                    match_text = match.group(0) if match.group(0) else ""
+                    
+                    # Check if it's "delete services" or similar
+                    simple_delete = re.match(r'^(?:delete|remove)\s+(services|tools|companies|people|activities|issues|segment|category)$', match_text, re.IGNORECASE)
+                    if simple_delete:
+                        category = simple_delete.group(1).lower()
+                        return {"delete": {"value": None, "category": category}}
+                    
+                    # Otherwise try to parse "delete X from Y" format
+                    if match.groups():
+                        value = match.group(1) if match.group(1) else None
+                        category = match.group(2) if len(match.groups()) > 1 and match.group(2) else None
+                        
+                        # Clean up safely
+                        if value:
+                            value = value.strip()
+                        if category:
+                            category = category.strip()
+                            
+                        return {"delete": {"value": value, "category": category}}
+                    
+                    return {}
                     
                     # Safely extract groups
                     value = None
@@ -2929,10 +2951,11 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         log_event("fields_extracted", result_fields=len(result))
         return result
     except Exception as e:
-        log_event("extract_fields_error", input=text[:100], error=str(e))
+        log_event("extract_fields_error", input=text[:100], error=str(e), traceback=traceback.format_exc())
         print(f"ERROR in extract_fields: {str(e)}")
-        # Return a minimal result to avoid breaking the app
-        return {"error": str(e)}
+        print(f"TRACEBACK: {traceback.format_exc()}")
+        # Return empty result instead of error to avoid breaking the app
+        return {}
 
 def extract_fields_with_regex(text: str, chat_id: str = None) -> Dict[str, Any]:
     """Extract fields using regex patterns only"""
@@ -4559,6 +4582,15 @@ def health_check():
             "added handling for simple 'yes' responses",
             "improved error handling and feedback"
         ]
+    }), 200
+
+@app.route("/", methods=["GET"])
+def index():
+    """Root endpoint"""
+    return jsonify({
+        "name": "Construction Site Report Bot",
+        "status": "running",
+        "endpoints": ["/webhook", "/health"]
     }), 200
 
 # Start Flask server if running directly
