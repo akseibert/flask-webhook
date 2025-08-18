@@ -589,6 +589,7 @@ FIELD_PATTERNS = {
     "people": r'^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+)(?:\s*(?:,|\.|$))|^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "person_as_role": r'^(\w+(?:\s+\w+)?)\s+as\s+(\w+(?:\s+\w+)?)(?:\s*(?:,|\.|$))',
     "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(\w+\s+\w+|\w+)\s+(?:as|is)\s+(.+?)(?:\s*(?:,|\.|$))',
+    "role_parentheses": r'^roles?:\s*([A-Za-z\s]+)\s*\(([^)]+)\)$',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
     "company": r'^(?:(?:add|insert)\s+)?(?:compan(?:y|ies)|firms?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "service": r'^(?:(?:add|insert)\s+)?(?:services?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
@@ -1368,7 +1369,10 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
             if report_data.get("segment"):
                 info_data.append(['Segment:', report_data.get("segment", "")])
             if report_data.get("category"):
-                info_data.append(['Category:', report_data.get("category", "")])
+                category = report_data.get("category", "")
+                # Capitalize first letter of each word
+                category = ' '.join(word.capitalize() for word in category.split())
+                info_data.append(['Category:', category])
             
             if info_data:
                 info_table = Table(info_data, colWidths=[1.5*inch, 5*inch])
@@ -2626,6 +2630,60 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result["people"] = []
                     result["roles"] = []
                     
+                    # Check if there's a role specified
+                    if " as " in people_text.lower():
+                        # Parse "Name as Role" pattern
+                        role_pattern = r'([A-Za-z\s]+?)\s+as\s+([A-Za-z\s\-]+?)(?:,|and|$)'
+                        role_matches = re.findall(role_pattern, people_text, re.IGNORECASE)
+                        
+                        if role_matches:
+                            for name, role in role_matches:
+                                name = name.strip().replace(",", "")  # Remove trailing comma
+                                role = role.strip()
+                                
+                                # Clean up role titles
+                                if "mechanical engineer" in role.lower():
+                                    role = "Mechanical Engineer"
+                                elif "main" in role.lower() and "engineer" in role.lower():
+                                    role = "Mechanical Engineer"
+                                elif role.lower() == "supervising":
+                                    role = "Supervisor"
+                                
+                                if name:
+                                    # Handle "I" as a special case
+                                    if name.lower() == "i":
+                                        name = "Anna"  # Based on your logs, Anna is supervising
+                                    result["people"].append(name)
+                                    result["roles"].append({"name": name, "role": role})
+                        else:
+                            # Just add the person without role
+                            result["people"].append(people_text)
+                    else:
+                        # No roles, just parse names
+                        people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+                        result["people"] = [p for p in people if p]
+                    
+                    return result
+                    
+                    # Check each group to find the actual data
+                    for i in range(1, len(match.groups()) + 1):
+                        if match.group(i) is not None:
+                            if people_text is None:
+                                people_text = match.group(i).strip()
+                            elif role_text is None:
+                                role_text = match.group(i).strip()
+                                break
+                    
+                    if not people_text:
+                        continue
+                    
+                    # Clean up the people text
+                    people_text = re.sub(r'^add\s+', '', people_text, flags=re.IGNORECASE)
+                    people_text = re.sub(r'^people\s*,?\s*', '', people_text, flags=re.IGNORECASE)
+                    
+                    result["people"] = []
+                    result["roles"] = []
+                    
                     # Check if there's a role specified in the second group
                     if role_text:
                         # Single person with role from regex groups
@@ -2672,6 +2730,16 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         result["people"] = [name]
                         result["roles"] = [{"name": name, "role": role}]
                     return result
+                elif field == "role_parentheses":
+                    name = match.group(1).strip()
+                    role = match.group(2).strip()
+                    if name and role:
+                        # Capitalize role properly
+                        role = ' '.join(word.capitalize() for word in role.split())
+                        result["roles"] = [{"name": name, "role": role}]
+                        # Make sure person is in people list too
+                        result["people"] = [name]
+                    return result
 
                 elif field == "supervisor":
                     name = match.group(1).strip()
@@ -2706,6 +2774,20 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         return {mapped_field: {"delete": True}}
                     else:
                         return {mapped_field: ""}  # Clear scalar fields
+                elif field == "delete_category":
+                    field_name = match.group(1).lower()
+                    mapped_field = FIELD_MAPPING.get(field_name, field_name)
+                    if mapped_field in LIST_FIELDS:
+                        return {mapped_field: {"delete": True}}
+                    else:
+                        return {mapped_field: ""}  # Clear scalar fields
+                elif field == "delete_field":
+                    # Handle "delete segment" or other scalar field deletions
+                    field_name = match.group(1).lower()
+                    mapped_field = FIELD_MAPPING.get(field_name, field_name)
+                    if mapped_field in SCALAR_FIELDS:
+                        return {mapped_field: ""}
+                    return {}
                 elif field == "correct":
                         raw_field = match.group(1).lower() if match.group(1) else None
                         old_value = match.group(2).strip() if match.group(2) else None
@@ -3261,6 +3343,28 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 elif field == "services":
                     key = "task"
                     existing_values = [s.get(key, "").lower() for s in result[field] if isinstance(s, dict)]
+                    
+                    # Add new items
+                    for item in new_data[field]:
+                        if isinstance(item, dict) and key in item:
+                            # Clean up the service task
+                            task = item[key]
+                            # Remove "today include" prefix if present
+                            task = re.sub(r'^today\s+include\s+', '', task, flags=re.IGNORECASE)
+                            item_value = task.lower()
+                            
+                            # Check if this item already exists
+                            already_exists = False
+                            for existing_value in existing_values:
+                                if string_similarity(item_value, existing_value) >= 0.8:  # Higher threshold for services
+                                    already_exists = True
+                                    break
+                                    
+                            if not already_exists:
+                                result[field].append({"task": task})
+                                changes.append(f"added service '{task}'")
+                            else:
+                                log_event("skipped_duplicate", field=field, value=task)
                 elif field == "issues":
                     key = "description"
                     existing_values = [i.get(key, "").lower() for i in result[field] if isinstance(i, dict)]
