@@ -599,8 +599,8 @@ FIELD_PATTERNS = {
     "time": r'^(?:(?:add|insert)\s+)?(?:time)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "comments": r'^(?:(?:add|insert)\s+)?(?:comments?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "clear": r'^(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)\s*[:,]?\s*(?:none|delete|clear|remove|reset)$|^(?:clear|empty|reset)\s+(issues?|activit(?:y|ies)|comments?|tools?|services?|compan(?:y|ies)|peoples?|roles?|site_name|segment|category|time|weather|impression)$',
-    "reset": r'^(new|new\s+report|reset|reset\s+report|\/new)\s*[.!]?$',
-    "delete": r'^(?:delete|remove)\s+([^from]+?)(?:\s+from\s+([^,.\s]+(?:\s+[^,.\s]+)?))?(?:\s*(?:,|\.|$))',
+    "reset": r'^(new|new report|reset|start over|clear report)[!?.]*$',
+    "delete": r'^(?:delete|remove)\s+(.+?)(?:\s+from\s+(.+?))?\.?\s*$',
     "delete_entire": r'^(?:delete|remove|clear)\s+(?:entire|all)\s+(.+?)(?:\s*(?:,|\.|$))',
     "delete_category": r'^(?:delete|remove|clear)\s+(companies|people|tools|services|activities|issues|site_name|segment|category|time|weather|impression|comments)$',
     "update_field": r'^(?:update|change|set|modify)\s+(\w+)\s+(?:to|with)\s+(.+?)(?:\s*(?:,|\.|$))',
@@ -616,8 +616,8 @@ FIELD_PATTERNS = {
     "detailed": r'^(detailed|full|complete|comprehensive)\s+report\s*[.!]?$',
     "export_pdf": r'^(?:export\s*pdf|export|pdf|generate\s*pdf|generate\s*report|export\s*report)\.?\s*$',
     "export": r'^export\.?\s*$',
-    "yes_confirm": r'^(?:yes|ya|yep|yeah|yup|ok|okay|sure|confirm|confirmed|y|да|ню|нью)\s*[.!]?$',
-    "no_confirm": r'^(?:no|nope|nah|negative|n|нет)\s*[.!]?$',
+    "yes_confirm": r'^(yes|yeah|ok|sure|confirm|ja|jep|yes please)[!?.]*$',
+    "no_confirm": r'^(no|nope|nah|negative|nein|nee|no thanks)[!?.]*$',
     "voice_add_site": r"(?:hey\s+)?(?:i\'?m\s+)?add(?:ing)?\s+(?:the\s+)?(.+?)\s+site[,.]?\s*segment\s+(.+?)[,.]?\s*category\s+(.+?)(?:\.\s|$)",
     "voice_companies": r"(?:the\s+)?compan(?:y|ies)\s+(?:here\s+)?(?:today\s+)?(?:are|is|were)\s+(.+?)(?:\.|,|$)",
     "voice_people_roles": r"(?:people\s+are|persons?\s+are)\s+(.+?)\s+as\s+(.+?)(?:\.|,|$)",
@@ -1137,6 +1137,9 @@ def normalize_transcription(text: str) -> str:
     
     if re.match(r'^new[.!?]*$', text_lower):
         text = "new"
+    
+    if text_lower in ["new", "new report", "reset", "reset report"]:
+        return text_lower
         
     if re.match(r'^new\s+report[.!?]*$', text_lower):
         text = "new report"
@@ -1218,7 +1221,7 @@ def get_pdf_styles():
         'CustomTitle',
         parent=styles['Title'],
         fontSize=20,
-        textColor=colors.HexColor('#1a237e'),
+        textColor=colors.HexColor('#485B6A'),
         spaceAfter=16,
         alignment=TA_CENTER,
         fontName='Helvetica-Bold'
@@ -1228,7 +1231,7 @@ def get_pdf_styles():
         'Subtitle',
         parent=styles['Normal'],
         fontSize=12,
-        textColor=colors.HexColor('#424242'),
+        textColor=colors.HexColor('#485B6A'),
         spaceAfter=12,
         alignment=TA_CENTER,
         fontName='Helvetica'
@@ -1238,11 +1241,11 @@ def get_pdf_styles():
         'Heading',
         parent=styles['Heading2'],
         fontSize=14,
-        textColor=colors.HexColor('#1976d2'),
+        textColor=colors.HexColor('#485B6A'),
         spaceAfter=8,
         spaceBefore=12,
         fontName='Helvetica-Bold',
-        borderColor=colors.HexColor('#1976d2'),
+        borderColor=colors.HexColor('#485B6A'),
         borderWidth=0,
         borderPadding=0
     )
@@ -1354,7 +1357,7 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
         story.append(Spacer(1, 12))
         
         # Add a nice horizontal line
-        story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor('#1976d2')))
+        story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor('#485B6A')))
         story.append(Spacer(1, 12))
         
         # Basic Information Section with better formatting
@@ -1412,13 +1415,15 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
             activities = report_data.get("activities", [])
             
             for activity in activities:
-                story.append(Paragraph(f"• {activity}", styles['normal']))
+                # Capitalize first letter of activity
+                activity_text = activity[0].upper() + activity[1:] if activity else activity
+                story.append(Paragraph(f"â€¢ {activity_text}", styles['normal']))
             
             story.append(Spacer(1, 12))
         
         # Issues Section with Photos
         if report_data.get("issues"):
-            story.append(Paragraph("⚠️ Issues & Problems", styles['heading']))
+            story.append(Paragraph("Issues & Problems", styles['heading']))
             issues = report_data.get("issues", [])
             
             for i, issue in enumerate(issues):
@@ -1506,11 +1511,6 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
             story.append(Paragraph(report_data.get("comments", ""), styles['normal']))
             story.append(Spacer(1, 12))
         
-        # Add footer
-        story.append(Spacer(1, 24))
-        story.append(HRFlowable(width="100%", thickness=1, color=colors.gray))
-        footer_text = f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        story.append(Paragraph(footer_text, styles['metadata']))
         
         # Build the document with numbered pages
         doc.build(story, canvasmaker=NumberedCanvas)
@@ -3042,7 +3042,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             added_people.append(person)
                     
                     if added_people:
-                        changes.append(f"added people: {', '.join(added_people)}")
+                        changes.append(f"added person: {', '.join(added_people)}")
                     else:
                         changes.append("no new people added (duplicates skipped)")
                         
@@ -3088,14 +3088,30 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 elif field == "companies":
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                     
-                    matched = False
-                    for i, company in enumerate(result[field]):
-                        if (isinstance(company, dict) and company.get("name") and 
-                            string_similarity(company["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
-                            company["name"] = new_value
-                            matched = True
-                            changes.append(f"corrected company '{old_value}' to '{new_value}'")
-                            break
+                    # Check if we're correcting based on the old value matching
+                    if old_value.lower() == "of electro mayer" or "of " in old_value.lower():
+                        # Remove "of " prefix if present
+                        clean_old = old_value.replace("of ", "").strip()
+                        
+                        # Find the best match
+                        for i, company in enumerate(result[field]):
+                            if isinstance(company, dict) and company.get("name"):
+                                company_name = company["name"].lower()
+                                # Check for similarity with the cleaned old value
+                                if "electro" in company_name.lower() or string_similarity(company_name, clean_old) >= 0.5:
+                                    company["name"] = new_value
+                                    changes.append(f"corrected company to '{new_value}'")
+                                    matched = True
+                                    break
+                    else:
+                        # Normal matching logic
+                        for i, company in enumerate(result[field]):
+                            if (isinstance(company, dict) and company.get("name") and 
+                                string_similarity(company["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
+                                company["name"] = new_value
+                                matched = True
+                                changes.append(f"corrected company '{old_value}' to '{new_value}'")
+                                break
                     
                     if not matched:
                         # If no match, add the new company
@@ -3622,9 +3638,10 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         session["last_interaction"] = time()
         
         # Handle confirmation for reset command
-        # Handle confirmation for reset command
         if session.get("awaiting_reset_confirmation", False):
-            if text.lower() in ["yes", "y", "yeah", "yep", "sure", "ok", "okay"]:
+            # Normalize the text for confirmation
+            confirm_text = text.lower().strip()
+            if confirm_text in ["yes", "y", "ya", "yeah", "yep", "yup", "sure", "ok", "okay"]:
                 # User confirmed - perform the reset HERE
                 session["awaiting_reset_confirmation"] = False
                 session["structured_data"] = blank_report()
@@ -3936,7 +3953,7 @@ def webhook() -> tuple[str, int]:
                 text, confidence = transcribe_voice(file_id)
                 
                 # For short commands (less than 5 words), lower the threshold
-                if len(text.split()) < 5 and any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export", "segment", "site"]):
+                if len(text.split()) < 5 and any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export", "segment", "site", "new", "yes", "no"]):
                     confidence_threshold = 0.3
                 # For field-based inputs with multiple keywords, also lower threshold
                 elif any(keyword in text.lower() for keyword in ["category", "companies", "segment", "people", "tools", "services", "activities", "issues", "firms", "westfield", "plaza", "commercial"]):
@@ -3947,12 +3964,16 @@ def webhook() -> tuple[str, int]:
                 else:
                     confidence_threshold = 0.45  # Lowered from 0.5
 
+                # Force process short confirmations even if low confidence
+                if len(text.split()) < 3 and text.lower() in ['yes', 'no', 'new', 'reset']:
+                    confidence = 1.0  # Override for critical short commands
+                
                 if not text or confidence < confidence_threshold:
                     log_event("low_confidence_transcription", text=text, confidence=confidence)
                     error_message = "⚠️ I couldn't clearly understand your voice message."
                     if text:
                         error_message += f" I heard: '{text}'."
-                    
+                        
                     error_message += "\n\nWhen recording, try to:\n• Speak clearly and slowly\n• Reduce background noise\n• Keep the phone close to your mouth"
                     send_message(chat_id, error_message)
                     return "ok", 200
@@ -3981,6 +4002,29 @@ def webhook() -> tuple[str, int]:
                 # Store photo reference in session
                 if "photos" not in session_data[chat_id]:
                     session_data[chat_id]["photos"] = []
+                
+                # If caption mentions an issue, link it automatically
+                # Check if this is a response to the photo question
+                # Handle both caption and regular text response to photo prompt
+                pending_photos = [p for p in session_data[chat_id].get("photos", []) if p.get("pending")]
+                
+                if pending_photos and text and text.strip().isdigit():
+                    issue_index = int(text.strip()) - 1
+                    issues = session_data[chat_id]["structured_data"].get("issues", [])
+                    if 0 <= issue_index < len(issues):
+                        # Update the pending photo
+                        for photo in session_data[chat_id]["photos"]:
+                            if photo.get("pending"):
+                                photo["pending"] = False
+                                photo["issue_ref"] = str(issue_index + 1)
+                                photo["caption"] = f"Photo for issue {issue_index + 1}"
+                                # Mark this issue as having a photo
+                                issues[issue_index]["has_photo"] = True
+                                break
+                        send_message(chat_id, f"📸 Photo attached to issue {issue_index + 1}")
+                        save_session(session_data)
+                        return "ok", 200
+            
                 
                 # If caption mentions an issue, link it automatically
                 if caption:
@@ -4058,7 +4102,17 @@ def webhook() -> tuple[str, int]:
             
             # Handle reset confirmation
             if session_data[chat_id].get("awaiting_reset_confirmation", False):
-                # ... keep existing reset confirmation code ...
+                if text.lower() in ['yes', 'yeah', 'ok', 'sure', 'confirm', 'ja', 'jep', 'yes please']:
+                    handle_reset(chat_id, session_data[chat_id])
+                    session_data[chat_id]["awaiting_reset_confirmation"] = False
+                    save_session(session_data)
+                    send_message(chat_id, "✅ Report reset to blank.")
+                elif text.lower() in ['no', 'nope', 'nah', 'negative', 'nein', 'nee', 'no thanks']:
+                    session_data[chat_id]["awaiting_reset_confirmation"] = False
+                    save_session(session_data)
+                    send_message(chat_id, "Reset cancelled. Your report was not changed.")
+                else:
+                    send_message(chat_id, "Please reply with yes or no to confirm reset.")
                 return "ok", 200
             
             # Handle spelling correction
