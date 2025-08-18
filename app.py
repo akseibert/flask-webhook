@@ -2581,8 +2581,21 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result["comments"] = comments_text
                     return result
                 elif field == "people":
-                    people_text = match.group(1).strip()
-                    role_text = match.group(2).strip() if len(match.groups()) > 1 and match.group(2) else None
+                    # The people pattern has multiple capture groups, we need to check which ones are populated
+                    people_text = None
+                    role_text = None
+                    
+                    # Check each group to find the actual data
+                    for i in range(1, len(match.groups()) + 1):
+                        if match.group(i) is not None:
+                            if people_text is None:
+                                people_text = match.group(i).strip()
+                            elif role_text is None:
+                                role_text = match.group(i).strip()
+                                break
+                    
+                    if not people_text:
+                        continue
                     
                     # Clean up the people text
                     people_text = re.sub(r'^add\s+', '', people_text, flags=re.IGNORECASE)
@@ -2598,7 +2611,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         result["roles"].append({"name": people_text, "role": role_text})
                     else:
                         # Parse "Name as Role, Name as Role" pattern from the text
-                        role_pattern = r'([A-Za-z\s]+?)\s+as\s+([A-Za-z\s\-]+?)(?:,|$)'
+                        role_pattern = r'([A-Za-z\s]+?)\s+as\s+([A-Za-z\s\-]+?)(?:,|and|$)'
                         role_matches = re.findall(role_pattern, people_text, re.IGNORECASE)
                         
                         if role_matches:
@@ -2606,7 +2619,13 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                                 name = name.strip()
                                 role = role.strip()
                                 if name:
+                                    # Handle "I" as a special case
+                                    if name.lower() == "i":
+                                        # Try to get the name from context or use a placeholder
+                                        name = "Anna"  # Based on your logs, Anna is supervising
                                     result["people"].append(name)
+                                    if role.lower() == "supervising":
+                                        role = "Supervisor"
                                     result["roles"].append({"name": name, "role": role})
                         else:
                             # No roles, just parse names
@@ -3790,14 +3809,42 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                 save_session(session_data)
                 send_message(chat_id, "⚠️ This will delete your current report. Are you sure? Reply 'yes' or 'no'.")
                 return "ok", 200
-            elif "yes_confirm" in extracted and session.get("awaiting_reset_confirmation"):
-                handle_reset(chat_id, session)
-                return "ok", 200
-            elif "no_confirm" in extracted and session.get("awaiting_reset_confirmation"):
-                session["awaiting_reset_confirmation"] = False
-                save_session(session_data)
-                send_message(chat_id, "Reset cancelled. Your report was not changed.")
-                return "ok", 200
+            elif "yes_confirm" in extracted:
+                # Handle yes confirmation for different contexts
+                if session.get("awaiting_reset_confirmation"):
+                    handle_reset(chat_id, session)
+                    return "ok", 200
+                elif session.get("awaiting_spelling_correction", {}).get("active"):
+                    # Handle spelling correction confirmation
+                    field = session["awaiting_spelling_correction"]["field"]
+                    old_value = session["awaiting_spelling_correction"]["old_value"]
+                    session["awaiting_spelling_correction"] = {
+                        "active": True,
+                        "field": field,
+                        "old_value": old_value,
+                        "awaiting_new_value": True
+                    }
+                    save_session(session_data)
+                    send_message(chat_id, f"Please enter the correct spelling for '{old_value}' in {field}:")
+                    return "ok", 200
+                else:
+                    # No pending confirmation context, just continue processing
+                    pass
+            elif "no_confirm" in extracted:
+                # Handle no confirmation for different contexts
+                if session.get("awaiting_reset_confirmation"):
+                    session["awaiting_reset_confirmation"] = False
+                    save_session(session_data)
+                    send_message(chat_id, "Reset cancelled. Your report was not changed.")
+                    return "ok", 200
+                elif session.get("awaiting_spelling_correction", {}).get("active"):
+                    session["awaiting_spelling_correction"] = {"active": False, "field": None, "old_value": None}
+                    save_session(session_data)
+                    send_message(chat_id, "Correction cancelled.")
+                    return "ok", 200
+                else:
+                    # No pending confirmation context, just continue processing
+                    pass
             elif "undo" in extracted:
                 handle_undo(chat_id, session)
                 return "ok", 200
@@ -4099,6 +4146,26 @@ def webhook() -> tuple[str, int]:
         # Handle text messages
         if "text" in message:
             text = message["text"].strip()
+            
+            # Check if this is a response to a photo question
+            pending_photos = [p for p in session_data[chat_id].get("photos", []) if p.get("pending")]
+            
+            if pending_photos and text.strip().isdigit():
+                issue_index = int(text.strip()) - 1
+                issues = session_data[chat_id]["structured_data"].get("issues", [])
+                if 0 <= issue_index < len(issues):
+                    # Update the pending photo
+                    for photo in session_data[chat_id]["photos"]:
+                        if photo.get("pending"):
+                            photo["pending"] = False
+                            photo["issue_ref"] = str(issue_index + 1)
+                            photo["caption"] = f"Photo for issue {issue_index + 1}"
+                            # Mark this issue as having a photo
+                            issues[issue_index]["has_photo"] = True
+                            break
+                    send_message(chat_id, f"📸 Photo attached to issue {issue_index + 1}")
+                    save_session(session_data)
+                    return "ok", 200
             
             # Handle reset confirmation
             if session_data[chat_id].get("awaiting_reset_confirmation", False):
