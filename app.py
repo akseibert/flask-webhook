@@ -358,15 +358,23 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                 elif isinstance(tool, str):
                     result["tools"].append({"item": tool})
     
-    # Services
+
+    # Services - deduplicate
     if "services" in data:
         if isinstance(data["services"], list):
             result["services"] = []
+            seen_services = set()
             for service in data["services"]:
                 if isinstance(service, dict) and "task" in service:
-                    result["services"].append({"task": service["task"]})
+                    task = service["task"].lower().strip()
+                    if task not in seen_services:
+                        seen_services.add(task)
+                        result["services"].append({"task": service["task"]})
                 elif isinstance(service, str):
-                    result["services"].append({"task": service})
+                    task = service.lower().strip()
+                    if task not in seen_services:
+                        seen_services.add(task)
+                        result["services"].append({"task": service})
     
     # Activities
     if "activities" in data:
@@ -1362,29 +1370,23 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
         story.append(Spacer(1, 12))
         
         # Basic Information Section with better formatting
+        
         if any([report_data.get("segment"), report_data.get("category")]):
             story.append(Paragraph("📍 Site Information", styles['heading']))
             
-            info_data = []
             if report_data.get("segment"):
-                info_data.append(['Segment:', report_data.get("segment", "")])
+                segment_text = report_data.get("segment", "")
+                # Capitalize first letter
+                segment_text = segment_text[0].upper() + segment_text[1:] if segment_text else segment_text
+                story.append(Paragraph(f"<b>Segment:</b> {segment_text}", styles['normal']))
+            
             if report_data.get("category"):
                 category = report_data.get("category", "")
                 # Capitalize first letter of each word
                 category = ' '.join(word.capitalize() for word in category.split())
-                info_data.append(['Category:', category])
+                story.append(Paragraph(f"<b>Category:</b> {category}", styles['normal']))
             
-            if info_data:
-                info_table = Table(info_data, colWidths=[1.5*inch, 5*inch])
-                info_table.setStyle(TableStyle([
-                    ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, -1), 11),
-                    ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#616161')),
-                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-                ]))
-                story.append(info_table)
-                story.append(Spacer(1, 12))
+            story.append(Spacer(1, 12))
         
         # Personnel & Companies Section
         if report_data.get("people") or report_data.get("companies") or report_data.get("roles"):
@@ -1687,27 +1689,48 @@ def summarize_report(data: Dict[str, Any]) -> str:
                 return text
             return text[0].upper() + text[1:] if len(text) > 1 else text.upper()
         
-        roles_str = ", ".join(f"{r.get('name', '')} ({r.get('role', '')})" for r in data.get("roles", []) if r.get("role"))
+        def capitalize_list_items(items: list) -> list:
+            """Capitalize first letter of each item in a list"""
+            return [capitalize_first(item) for item in items]
+        
+        # Format roles with capitalization
+        roles_str = ", ".join(f"{r.get('name', '')} ({capitalize_first(r.get('role', ''))})" 
+                              for r in data.get("roles", []) if r.get("role"))
+        
+        # Format companies with capitalization
+        companies_str = ', '.join(capitalize_first(c.get('name', '')) 
+                                 for c in data.get('companies', []) if c.get('name'))
+        
+        # Format tools with capitalization
+        tools_str = ', '.join(capitalize_first(t.get('item', '')) 
+                             for t in data.get('tools', []) if t.get('item'))
+        
+        # Format services with capitalization
+        services_str = ', '.join(capitalize_first(s.get('task', '')) 
+                                for s in data.get('services', []) if s.get('task'))
+        
+        # Format activities with capitalization
+        activities_str = ', '.join(capitalize_list_items(data.get('activities', [])))
         
         # Always include all fields, even empty ones
         lines = [
             f"🏗️ **Site**: {capitalize_first(data.get('site_name', ''))}",
             f"🛠️ **Segment**: {capitalize_first(data.get('segment', ''))}",
             f"📋 **Category**: {capitalize_first(data.get('category', ''))}",
-            f"🏢 **Companies**: {', '.join(c.get('name', '') for c in data.get('companies', []) if c.get('name'))}",
+            f"🏢 **Companies**: {companies_str}",
             f"👷 **People**: {', '.join(data.get('people', []))}",
             f"🎭 **Roles**: {roles_str}",
-            f"🔧 **Services**: {', '.join(s.get('task', '') for s in data.get('services', []) if s.get('task'))}",
-            f"🛠️ **Tools**: {', '.join(t.get('item', '') for t in data.get('tools', []) if t.get('item'))}",
-            f"📅 **Activities**: {', '.join(data.get('activities', []))}",
+            f"🔧 **Services**: {services_str}",
+            f"🛠️ **Tools**: {tools_str}",
+            f"📅 **Activities**: {activities_str}",
             "⚠️ **Issues**:"
         ]
         
-        # Process issues for display
+        # Process issues for display with capitalization
         valid_issues = [i for i in data.get("issues", []) if isinstance(i, dict) and i.get("description", "").strip()]
         if valid_issues:
             for i in valid_issues:
-                desc = i["description"]
+                desc = capitalize_first(i["description"])
                 by = i.get("caused_by", "")
                 photo = " 📸" if i.get("has_photo") else ""
                 extra = f" (by {by})" if by else ""
@@ -2427,8 +2450,20 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                              resolved=normalized_text,
                              item=last_item)
         # Handle simple spelling corrections for companies
-        correct_simple = re.match(r'^(?:companies?\s+)?correct\s+spelling\s+(.+?)(?:\s*(?:,|\.|$))', normalized_text, re.IGNORECASE)
+        correct_simple = re.match(r'^(?:correct\s+spelling\s+)?(?:companies?\s+)?(.+?)\s+(?:to|with)\s+(.+?)(?:\s*(?:,|\.|$))', normalized_text, re.IGNORECASE)
         if correct_simple:
+            old_value = correct_simple.group(1).strip()
+            new_value = correct_simple.group(2).strip()
+            
+            # Clean up the old value - remove "companies" if it got included
+            old_value = re.sub(r'^companies?\s+', '', old_value, flags=re.IGNORECASE)
+            
+            # For "Key, Back" style corrections, handle as a single company
+            if ',' in old_value and ',' not in new_value:
+                # This is correcting a multi-word company name to a single name
+                return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
+            else:
+                return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
             # This is a correction, not an addition
             correction_text = correct_simple.group(1).strip()
             
@@ -2743,6 +2778,23 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     # The delete pattern has 2 groups: (value) and optional (category)
                     value = groups[0].strip() if groups[0] else None
                     category = groups[1].strip() if len(groups) > 1 and groups[1] else None
+                    
+                    # Special handling for "delete services" or other category-only deletions
+                    if value and not category:
+                        # Check if the value is actually a category name
+                        if value.lower() in ['services', 'tools', 'companies', 'people', 'activities', 'issues', 'roles']:
+                            category = value.lower()
+                            value = None
+                    
+                    # Map field name if provided
+                    if category:
+                        category = FIELD_MAPPING.get(category.lower(), category.lower())
+                    
+                    # Return the delete command
+                    if value or category:
+                        return {"delete": {"value": value, "category": category}}
+                    else:
+                        return {}
                     
                     # Map field name if provided
                     if category:
@@ -4091,17 +4143,18 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             send_message(chat_id, f"{message}\n\n{summary}")
             return "ok", 200
         
-        if changed_fields:
-            message = "✅ Updated report."
+        if changed_fields or "delete" in extracted:
+            # Determine the appropriate message
             if "delete" in extracted:
                 message = "✅ Deleted information from your report."
             elif "delete_entire" in extracted:
                 message = "✅ Cleared entire field from your report."
             elif "correct" in extracted:
                 message = "✅ Corrected information in your report."
+            else:
+                message = "✅ Updated report."
 
-            # ... keep any other existing code here ...
-
+            # Always show summary for any changes
             summary = summarize_report(session["structured_data"])
             send_message(chat_id, f"{message}\n\n{summary}")
             
