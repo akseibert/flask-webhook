@@ -1492,41 +1492,30 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
                 if services_str:
                     story.append(Paragraph(f"<b>Services:</b> {services_str}", styles['normal']))
             
-            if report_data.get("services"):
-                services_str = ", ".join(s.get("task", "") for s in report_data.get("services", []) if s.get("task"))
-                if services_str:
-                    story.append(Paragraph(f"<b>Services:</b> {services_str}", styles['normal']))
-            
             story.append(Spacer(1, 12))
         
+        # Conditions Section
         # Conditions Section
         if report_data.get("time") or report_data.get("weather") or report_data.get("impression"):
             story.append(Paragraph("📊 Conditions", styles['heading']))
             
-            conditions_data = []
             if report_data.get("time"):
                 time_text = report_data.get("time", "")
                 time_text = time_text[0].upper() + time_text[1:] if time_text else time_text
-                conditions_data.append(['Time:', time_text])
+                story.append(Paragraph(f"<b>Time:</b> {time_text}", styles['normal']))
+            
             if report_data.get("weather"):
                 weather_text = report_data.get("weather", "")
                 weather_text = weather_text[0].upper() + weather_text[1:] if weather_text else weather_text
-                conditions_data.append(['Weather:', weather_text])
-            if report_data.get("impression"):
-                conditions_data.append(['Overall Impression:', report_data.get("impression", "")])
+                story.append(Paragraph(f"<b>Weather:</b> {weather_text}", styles['normal']))
             
-            if conditions_data:
-                conditions_table = Table(conditions_data, colWidths=[1.5*inch, 5*inch])
-                conditions_table.setStyle(TableStyle([
-                    ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, -1), 11),
-                    ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#616161')),
-                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-                ]))
-                story.append(conditions_table)
+            if report_data.get("impression"):
+                impression_text = report_data.get("impression", "")
+                impression_text = impression_text[0].upper() + impression_text[1:] if impression_text else impression_text
+                story.append(Paragraph(f"<b>Overall Impression:</b> {impression_text}", styles['normal']))
             
             story.append(Spacer(1, 12))
+            
         
         # Comments Section
         if report_data.get("comments"):
@@ -2631,9 +2620,10 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result["roles"] = []
                     
                     # Check if there's a role specified
+                    
                     if " as " in people_text.lower():
-                        # Parse "Name as Role" pattern
-                        role_pattern = r'([A-Za-z\s]+?)\s+as\s+([A-Za-z\s\-]+?)(?:,|and|$)'
+                        # Parse "Name as Role" pattern - handle commas in roles
+                        role_pattern = r'([A-Za-z\s]+?)\s+as\s+([A-Za-z\s\-,]+?)(?:,\s*(?:also|and)|$)'
                         role_matches = re.findall(role_pattern, people_text, re.IGNORECASE)
                         
                         if role_matches:
@@ -4090,10 +4080,15 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                                         "summary", "detailed", "undo_last", "error",
                                         "yes_confirm", "no_confirm", "spelling_correction"]]
         
-        # Always show summary after corrections
-        if "correct" in extracted:
+   
+        # Always show summary after corrections or deletions
+        if "correct" in extracted or "delete" in extracted:
             summary = summarize_report(session["structured_data"])
-            send_message(chat_id, f"✅ Corrected information in your report.\n\n{summary}")
+            if "correct" in extracted:
+                message = "✅ Corrected information in your report."
+            else:
+                message = "✅ Deleted information from your report."
+            send_message(chat_id, f"{message}\n\n{summary}")
             return "ok", 200
         
         if changed_fields:
@@ -4203,6 +4198,14 @@ def webhook() -> tuple[str, int]:
                 if message["voice"].get("duration", 0) > 20:  # If longer than 20 seconds
                     send_message(chat_id, "I'm processing your detailed report. This may take a moment...")
                 text, confidence = transcribe_voice(file_id)
+
+                
+                # Special handling for single digit responses (for photo assignment)
+                if text.strip().lower() in ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']:
+                    number_map = {'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
+                                  'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10'}
+                    text = number_map.get(text.strip().lower(), text)
+                    confidence = 1.0  # Override confidence for these simple commands
                 
                 # For short commands (less than 5 words), lower the threshold
                 if len(text.split()) < 5 and any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export", "segment", "site", "new", "yes", "no"]):
