@@ -125,7 +125,7 @@ def get_error_message(error_type: str, **kwargs) -> str:
 
 CONFIG = {
     # Core settings
-    "SESSION_FILE": config("SESSION_FILE", default="/opt/render/project/src/session_data.json"),
+    "SESSION_FILE": config("SESSION_FILE", default="/tmp/session_data.json"),
     "PAUSE_THRESHOLD": config("PAUSE_THRESHOLD", default=300, cast=int),
     "MAX_HISTORY": config("MAX_HISTORY", default=10, cast=int),
     "OPENAI_MODEL": config("OPENAI_MODEL", default="gpt-3.5-turbo"),
@@ -2503,12 +2503,15 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     else:
                         result["category"] = value
                 elif field == "company":
-                                companies_text = match.group(1).strip()
-                                # Remove any "add" or "company's" prefix that might be included in the captured text
-                                companies_text = re.sub(r'^add\s+', '', companies_text, flags=re.IGNORECASE)
-                                companies_text = re.sub(r"^company's\s+", '', companies_text, flags=re.IGNORECASE)
-                                companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
-                                result["companies"] = [{"name": company} for company in companies if company]
+                    companies_text = match.group(1).strip()
+                    # Remove any "add" or "company's" prefix that might be included in the captured text
+                    companies_text = re.sub(r'^add\s+', '', companies_text, flags=re.IGNORECASE)
+                    companies_text = re.sub(r"^company's\s+", '', companies_text, flags=re.IGNORECASE)
+                    companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
+                    result["companies"] = [{"name": company} for company in companies if company]
+                    
+                    # Don't return here - continue checking for other patterns in the same text
+                    # return result  # REMOVE THIS LINE
                 
                 elif field == "tool":
                     tools_text = match.group(1).strip()
@@ -3647,6 +3650,52 @@ def recognize_intent(text: str) -> Dict[str, Any]:
             return {"delete": {"value": value}}
     
     return {}
+def extract_multiple_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
+    """Extract multiple fields from a single complex command"""
+    result = {}
+    
+    # Split by commas but preserve commands
+    parts = re.split(r',\s*(?=add\s|delete\s|remove\s)', text)
+    
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+            
+        # Extract fields from each part
+        extracted = extract_fields(part, chat_id)
+        
+        # Merge extracted fields
+        for field, value in extracted.items():
+            if field in LIST_FIELDS:
+                if field not in result:
+                    result[field] = []
+                if isinstance(value, list):
+                    result[field].extend(value)
+                else:
+                    result[field].append(value)
+            else:
+                result[field] = value
+    
+    # Also try to extract patterns that might span across commas
+    # Extract activities pattern
+    activities_match = re.search(r'activities?\s+(.+?)(?:\s+and\s+another\s+issue|\s*$)', text, re.IGNORECASE)
+    if activities_match:
+        activities_text = activities_match.group(1)
+        activities = [a.strip() for a in re.split(r',|\s+and\s+', activities_text)]
+        if "activities" not in result:
+            result["activities"] = []
+        result["activities"].extend(activities)
+    
+    # Extract issues pattern
+    issues_match = re.search(r'(?:another\s+)?issues?\s+(.+?)(?:\s*$)', text, re.IGNORECASE)
+    if issues_match:
+        issues_text = issues_match.group(1)
+        if "issues" not in result:
+            result["issues"] = []
+        result["issues"].append({"description": issues_text, "has_photo": False})
+    
+    return result
 
 # Part 12 Handle Commands 
 @rate_limit(max_calls=30, time_window=60)  # 30 commands per minute
@@ -3770,7 +3819,33 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     send_message(chat_id, f"✅ I've extracted the following information from your report:\n\n{summary}")
                     return "ok", 200
 
-        # Extract fields from input
+        # For complex commands with multiple fields (especially from voice)
+        # Check if this looks like multiple commands in one
+        if len(text) > 50 and "," in text and text.lower().startswith("add"):
+            # Count how many field keywords are in the text
+            field_keywords = ["company", "companies", "people", "person", "activities", "issue", "tool", "service"]
+            keyword_count = sum(1 for keyword in field_keywords if keyword in text.lower())
+            
+            # If multiple field keywords found, use multi-field extraction
+            if keyword_count >= 2:
+                multi_extracted = extract_multiple_fields(text, chat_id)
+                if multi_extracted:
+                    session["command_history"].append(session["structured_data"].copy())
+                    session["structured_data"] = merge_data(session["structured_data"], multi_extracted, chat_id)
+                    session["structured_data"] = enrich_date(session["structured_data"])
+                    save_session(session_data)
+                    summary = summarize_report(session["structured_data"])
+                    send_message(chat_id, f"✅ Processed multiple commands.\n\n{summary}")
+                    
+                    # Suggest missing fields if applicable
+                    missing_suggestions = suggest_missing_fields(session["structured_data"])
+                    if missing_suggestions:
+                        suggestion_text = "You might also want to add: " + ", ".join(missing_suggestions)
+                        send_message(chat_id, suggestion_text)
+                    
+                    return "ok", 200
+        
+        # Extract fields from input (single command processing)
         extracted = extract_fields(text)
         
         # Handle empty or invalid extractions
