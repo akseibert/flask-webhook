@@ -641,7 +641,7 @@ FIELD_PATTERNS = {
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
     "company": r'^(?:(?:add|insert)\s+)?(?:compan(?:y|ies)|firms?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "service": r'^(?:(?:add|insert)\s+)?(?:services?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
-    "tool": r'^(?:(?:add|insert)\s+)?(?:tools?)(?:\s+being\s+used)?(?:\s+include)?\s*[:,]?\s*(.+?)$',
+    "tool": r'^(?:.*?)?(?:tools?|used?|using)\s*[:,]?\s*(.+?)$|^(?:we|I|they|he|she|[A-Za-z]+)\s+(?:used?|using)\s+(.+?)$',
     "activity": r'^(?:(?:add|insert)\s+)?(?:activit(?:y|ies))\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "issue": r'^(?:(?:add|insert)\s+)?(?:issues?|problems?|delays?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "weather": r'^(?:(?:add|insert)\s+)?(?:weather)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
@@ -2593,50 +2593,28 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return result
                 
                 elif field == "tool":
-                    tools_text = match.group(1).strip()
-                    # Remove prefixes if they got captured
-                    tools_text = re.sub(r'^add\s+', '', tools_text, flags=re.IGNORECASE)
+                    # Get the captured text - could be in group 1 or 2
+                    tools_text = match.group(1) if match.group(1) else match.group(2) if len(match.groups()) > 1 else ""
+                    tools_text = tools_text.strip()
+                    
+                    # Remove ALL common prefixes and phrases that aren't tool names
+                    # Remove "we also used", "being used include", etc.
+                    tools_text = re.sub(r'^(?:we\s+)?(?:also\s+)?(?:used?\s+)?(?:a\s+)?', '', tools_text, flags=re.IGNORECASE)
+                    tools_text = re.sub(r'^(?:being\s+used\s+)?(?:include\s+)?', '', tools_text, flags=re.IGNORECASE)
+                    tools_text = re.sub(r'^(?:the\s+)?(?:following\s+)?(?:tools?\s*:?\s*)?', '', tools_text, flags=re.IGNORECASE)
                     
                     # Fix common misheard words
                     tools_text = tools_text.replace('for Clift', 'forklift')
                     tools_text = tools_text.replace('for clift', 'forklift')
                     
-                    # Remove trailing period
-                    tools_text = tools_text.rstrip('.')
+                    # Remove trailing period and "and..." 
+                    tools_text = re.sub(r'\s*(?:\.\.\.|\.)\s*$', '', tools_text)
+                    tools_text = re.sub(r'\s+and\s*\.\.\.\s*$', '', tools_text)
                     
-                    # Split on commas and common phrases
+                    # Split on various separators
                     tools = []
-                    # First replace ", and" with just ","
-                    tools_text = re.sub(r',\s+and\s+', ', ', tools_text)
-                    
-                    # Split on comma or phrases like "there was/were"
-                    parts = re.split(r',\s*|\s+and\s+|\s*there\s+(?:was|were|is|are)\s+', tools_text)
-                    
-                    for part in parts:
-                        tool = part.strip()
-                        # Remove articles and filler words
-                        tool = re.sub(r'^(?:a|an|the|some|also)\s+', '', tool, flags=re.IGNORECASE)
-                        # Remove "being used include" if it got through
-                        tool = re.sub(r'^being\s+used\s+include\s+', '', tool, flags=re.IGNORECASE)
-                        
-                        # Skip empty strings and very generic words
-                        if not tool or tool.lower() in ['equipment', 'gear', 'tools', 'stuff']:
-                            continue
-                            
-                        # Special handling for compound tools
-                        if 'safety gear' in tool.lower():
-                            tools.append('Safety Gear')
-                        elif 'power tool' in tool.lower():
-                            tools.append('Power Tools')
-                        elif 'welding equipment' in tool.lower():
-                            tools.append('Welding Equipment')
-                        else:
-                            # Capitalize each word
-                            tool = ' '.join(word.capitalize() for word in tool.split())
-                            tools.append(tool)
-                    
-                    result["tools"] = [{"item": tool} for tool in tools if tool]
-                    return result
+                    # Replace ", and" with just ","
+                    tools_text =
                 
                 elif field == "service":
                     services_text = match.group(1).strip()
