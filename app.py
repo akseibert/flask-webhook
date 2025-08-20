@@ -163,7 +163,7 @@ Extract information into these fields (only include fields that are explicitly m
 
 - site_name: string - physical location or project name (e.g., "Downtown Project", "Building 7")
 - segment: string - specific section or area within the site (e.g., "5", "North Wing", "Foundation")
-- category: string - classification of work or report (e.g., "Bestand", "Safety", "Progress", "Mängelerfassung")
+- category: string - classification of work or report (only extract if explicitly mentioned like "category is X" or "new construction" or "Bestand")
 - companies: list of objects with company names [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}]
 - people: list of strings with names of individuals on site ["Anna Keller", "John Smith"]
 - roles: list of objects associating people with roles [{"name": "Anna Keller", "role": "Supervisor"}]
@@ -293,6 +293,10 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
             if data[field] is None:
                 result[field] = ""
             else:
+                # Don't auto-add category unless explicitly mentioned
+                if field == "category" and data[field] == "Mängelerfassung":
+                    # Check if this was actually mentioned in the original text
+                    continue  # Skip auto-added categories
                 result[field] = str(data[field])
     
     # Handle special command fields (return as is)
@@ -1568,8 +1572,10 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
         # Comments Section
         if report_data.get("comments"):
             story.append(Paragraph("💬 Additional Comments", styles['heading']))
-            story.append(Paragraph(report_data.get("comments", ""), styles['normal']))
-            story.append(Spacer(1, 12))
+            comments_text = report_data.get("comments", "")
+            # Capitalize first letter
+            comments_text = comments_text[0].upper() + comments_text[1:] if comments_text else comments_text
+            story.append(Paragraph(comments_text, styles['normal']))
         
         
         # Build the document with numbered pages
@@ -2123,15 +2129,20 @@ def string_similarity(a: str, b: str) -> float:
             
         # Check for direct substring match
         if a_lower in b_lower or b_lower in a_lower:
-            # Calculate the ratio of the shorter string to the longer one
             shorter = min(len(a_lower), len(b_lower))
             longer = max(len(a_lower), len(b_lower))
-            return min(0.95, shorter / longer + 0.3)  # Add 0.3 to favor substring matches
+            return min(0.95, shorter / longer + 0.3)
+        
+        # Check for very similar strings (one character difference)
+        if abs(len(a_lower) - len(b_lower)) <= 1:
+            # Count matching characters
+            matches = sum(1 for i in range(min(len(a_lower), len(b_lower))) if a_lower[i] == b_lower[i])
+            if matches >= len(a_lower) - 1:
+                return 0.9
         
         # Otherwise use SequenceMatcher
         similarity = SequenceMatcher(None, a_lower, b_lower).ratio()
         
-        # Log for debugging
         log_event("string_similarity", a=a, b=b, similarity=similarity)
         return similarity
     except Exception as e:
@@ -2513,12 +2524,36 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                              resolved=normalized_text,
                              item=last_item)
         
-        # Handle simple spelling corrections for companies
-        correct_simple = re.match(r'^(?:correct\s+spelling\s+)?(?:companies?\s+)?(.+?)\s+(?:to|with)\s+(.+?)(?:\s*(?:,|\.|$))', normalized_text, re.IGNORECASE)
-        if correct_simple:
+        # Handle simple spelling corrections - determine the field from context
+        correct_simple = re.match(r'^(?:correct\s+spelling\s+)?(.+?)\s+(?:to|with)\s+(.+?)(?:\s*(?:,|\.|$))', normalized_text, re.IGNORECASE)
+        if correct_simple and existing_data:
             old_value = correct_simple.group(1).strip()
             new_value = correct_simple.group(2).strip()
             
+            # Remove field prefixes if present
+            old_value = re.sub(r'^(companies?|people?|person)\s+', '', old_value, flags=re.IGNORECASE)
+            
+            # Determine which field contains this value
+            field_to_correct = None
+            
+            # Check people first
+            for person in existing_data.get("people", []):
+                if string_similarity(person.lower(), old_value.lower()) >= 0.7:
+                    field_to_correct = "people"
+                    break
+            
+            # Check companies if not found in people
+            if not field_to_correct:
+                for company in existing_data.get("companies", []):
+                    if isinstance(company, dict) and company.get("name"):
+                        if string_similarity(company["name"].lower(), old_value.lower()) >= 0.7:
+                            field_to_correct = "companies"
+                            break
+            
+            if field_to_correct:
+                return {"correct": [{"field": field_to_correct, "old": old_value, "new": new_value}]}
+            
+        
             # Clean up the old value - remove "companies" if it got included
             old_value = re.sub(r'^companies?\s+', '', old_value, flags=re.IGNORECASE)
             
@@ -2690,6 +2725,10 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     # Clean up the people text
                     people_text = re.sub(r'^add\s+', '', people_text, flags=re.IGNORECASE)
                     people_text = re.sub(r'^people\s*,?\s*', '', people_text, flags=re.IGNORECASE)
+
+                    # Also clean individual names after splitting
+                    people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+                    people = [re.sub(r'^add\s+', '', p, flags=re.IGNORECASE) for p in people if p]
                     
                     result["people"] = []
                     result["roles"] = []
@@ -3310,13 +3349,22 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                     
                     matched = False
+                    old_name = old_value.strip()
                     
-                    # Handle special case for spelling corrections like "correct spelling of X to Y"
-                    if "spelling of " in old_value.lower():
-                        # Extract the actual old name by removing "spelling of "
-                        old_name = re.sub(r'^(correct )?spelling of ', '', old_value, flags=re.IGNORECASE).strip()
-                    else:
-                        old_name = old_value.strip()
+                    # Find and replace the company
+                    for i, company in enumerate(result[field]):
+                        if isinstance(company, dict) and company.get("name"):
+                            # Use fuzzy matching to find the company
+                            if string_similarity(company["name"].lower(), old_name.lower()) >= 0.7:
+                                result[field][i] = {"name": new_value}
+                                matched = True
+                                changes.append(f"corrected company '{company['name']}' to '{new_value}'")
+                                break
+                    
+                    if not matched:
+                        # Company not found, log this
+                        log_event("company_not_found_for_correction", old=old_value, new=new_value)
+                        changes.append(f"could not find company '{old_value}' to correct")
                     
                     for i, company in enumerate(result[field]):
                         if isinstance(company, dict) and company.get("name") and \
