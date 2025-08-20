@@ -2604,23 +2604,23 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     # Remove trailing period
                     tools_text = tools_text.rstrip('.')
                     
-                    # Split on commas and 'and', handling various patterns
+                    # Split on commas and common phrases
                     tools = []
                     # First replace ", and" with just ","
                     tools_text = re.sub(r',\s+and\s+', ', ', tools_text)
                     
-                    # Now split on comma or ' and '
-                    for part in re.split(r',\s*|\s+and\s+', tools_text):
-                        tool = part.strip()
-                        # Remove articles
-                        tool = re.sub(r'^(?:a|an|the)\s+', '', tool, flags=re.IGNORECASE)
-                        if tool and tool.lower() not in ['equipment']:  # Skip generic "equipment"
-                            # Capitalize each word
-                            tool = ' '.join(word.capitalize() for word in tool.split())
-                            tools.append(tool)
+                    # Split on comma or phrases like "there was/were"
+                    parts = re.split(r',\s*|\s+and\s+|\s*there\s+(?:was|were|is|are)\s+', tools_text)
                     
-                    result["tools"] = [{"item": tool} for tool in tools if tool]
-                    return result
+                    for part in parts:
+                        tool = part.strip()
+                        # Remove articles and filler words
+                        tool = re.sub(r'^(?:a|an|the|some|also)\s+', '', tool, flags=re.IGNORECASE)
+                        # Remove "being used include" if it got through
+                        tool = re.sub(r'^being\s+used\s+include\s+', '', tool, flags=re.IGNORECASE)
+                        
+                        # Skip generic words
+                        if tool and tool.low
                 
                 elif field == "service":
                     services_text = match.group(1).strip()
