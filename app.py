@@ -2455,18 +2455,18 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
         
         # Handle simple delete commands FIRST - before any pattern matching
-        if normalized_text.lower() == "delete services":
-            return {"delete": {"value": None, "category": "services"}}
-        elif normalized_text.lower() == "delete tools":
-            return {"delete": {"value": None, "category": "tools"}}
-        elif normalized_text.lower() == "delete companies":
-            return {"delete": {"value": None, "category": "companies"}}
-        elif normalized_text.lower() == "delete people":
-            return {"delete": {"value": None, "category": "people"}}
-        elif normalized_text.lower() == "delete activities":
-            return {"delete": {"value": None, "category": "activities"}}
-        elif normalized_text.lower() == "delete issues":
-            return {"delete": {"value": None, "category": "issues"}}
+        delete_category_pattern = r'^delete\s+(services|tools|companies|people|activities|issues|roles|segment|category|weather|time|impression|comments)$'
+        delete_match = re.match(delete_category_pattern, normalized_text.lower())
+        if delete_match:
+            category = delete_match.group(1)
+            return {"delete": {"value": None, "category": category}}
+        
+        # Also handle "clear" as delete
+        clear_category_pattern = r'^clear\s+(services|tools|companies|people|activities|issues|roles|segment|category|weather|time|impression|comments)$'
+        clear_match = re.match(clear_category_pattern, normalized_text.lower())
+        if clear_match:
+            category = clear_match.group(1)
+            return {"delete": {"value": None, "category": category}}
         
         # GET CONTEXT if chat_id is provided
         context = None
