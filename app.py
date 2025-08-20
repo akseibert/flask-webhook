@@ -4498,11 +4498,21 @@ def webhook() -> tuple[str, int]:
                     session_data[chat_id]["photos"] = []
                 
                 # If caption mentions an issue, link it automatically
-                # Check if this is a response to the photo question
-                # Handle both caption and regular text response to photo prompt
+                # Convert word numbers to digits for photo assignment
+                number_words = {
+                    'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
+                    'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10',
+                    'first': '1', 'second': '2', 'third': '3', 'fourth': '4', 'fifth': '5'
+                }
+                
+                text_lower = text.lower().strip().rstrip('.')
+                if text_lower in number_words:
+                    text = number_words[text_lower]
+                
+                # Check if this is a response to a photo question
                 pending_photos = [p for p in session_data[chat_id].get("photos", []) if p.get("pending")]
                 
-                if pending_photos and text and text.strip().isdigit():
+                if pending_photos and text.strip().isdigit():
                     issue_index = int(text.strip()) - 1
                     issues = session_data[chat_id]["structured_data"].get("issues", [])
                     if 0 <= issue_index < len(issues):
