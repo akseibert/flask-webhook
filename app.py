@@ -3373,30 +3373,31 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     else:
                         old_name = old_value.strip()
                     
+                    # Try to find and correct the company
                     for i, company in enumerate(result[field]):
-                        if isinstance(company, dict) and company.get("name") and \
-                        string_similarity(company["name"].lower(), old_name.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                            company["name"] = new_value
-                            matched = True
-                            changes.append(f"corrected company '{old_value}' to '{new_value}'")
-                            break
+                        if isinstance(company, dict) and company.get("name"):
+                            # Check for similarity
+                            if string_similarity(company["name"].lower(), old_name.lower()) >= 0.5:
+                                company["name"] = new_value
+                                matched = True
+                                changes.append(f"corrected company '{company['name']}' to '{new_value}'")
+                                break
                     
                     if not matched:
-                        # If no match, add the new company
-                        result[field].append({"name": new_value})
-                        changes.append(f"added corrected company '{new_value}'")
-                        
-                        
-                        # Find the best match
+                        # If no match found, try partial matching
                         for i, company in enumerate(result[field]):
                             if isinstance(company, dict) and company.get("name"):
-                                company_name = company["name"].lower()
-                                # Check for similarity with the cleaned old value
-                                if "electro" in company_name.lower() or string_similarity(company_name, clean_old) >= 0.5:
+                                # Check if the old value is part of the company name
+                                if old_name.lower() in company["name"].lower():
                                     company["name"] = new_value
-                                    changes.append(f"corrected company to '{new_value}'")
                                     matched = True
+                                    changes.append(f"corrected company '{company['name']}' to '{new_value}'")
                                     break
+                    
+                    if not matched:
+                        # If still no match, add as new company
+                        result[field].append({"name": new_value})
+                        changes.append(f"added corrected company '{new_value}'")
                     else:
                         # Normal matching logic
                         for i, company in enumerate(result[field]):
@@ -3410,6 +3411,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     if not matched:
                         # If no match, add the new company
                         result[field].append({"name": new_value})
+                
                         changes.append(f"added corrected company '{new_value}'")
                         
                 elif field == "tools":
@@ -3610,7 +3612,12 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             
                     if not already_exists:
                         result[field].append(item)
-                        changes.append(f"added person '{item}'" if field == "people" else f"added {field[:-1]} '{item}'")
+                        if field == "people":
+                            changes.append(f"added person '{item}'")
+                        elif field == "activities":
+                            changes.append(f"added activity '{item}'")
+                        else:
+                            changes.append(f"added {field} '{item}'")
                     else:
                         log_event("skipped_duplicate", field=field, value=item)
     
