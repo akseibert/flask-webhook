@@ -2475,6 +2475,13 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         
         result: Dict[str, Any] = {}
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
+
+        # ALWAYS get existing data for context
+        existing_data = {}
+        context = None
+        if chat_id and chat_id in session_data:
+            existing_data = session_data[chat_id].get("structured_data", {})
+            context = session_data[chat_id].get("context", {})
         
         # Handle simple delete commands FIRST - before any pattern matching
         if normalized_text.lower() == "delete services":
@@ -2525,6 +2532,12 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                              item=last_item)
         
         # Handle simple spelling corrections - determine the field from context
+        # GET EXISTING DATA for context
+        existing_data = {}
+        if chat_id and chat_id in session_data:
+            existing_data = session_data[chat_id].get("structured_data", {})
+        
+        # Handle simple spelling corrections - check context to determine field
         correct_simple = re.match(r'^(?:correct\s+spelling\s+)?(.+?)\s+(?:to|with)\s+(.+?)(?:\s*(?:,|\.|$))', normalized_text, re.IGNORECASE)
         if correct_simple and existing_data:
             old_value = correct_simple.group(1).strip()
@@ -2706,9 +2719,82 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return result
                     
                 elif field == "people":
-                    # The people pattern has multiple capture groups, we need to check which ones are populated
-                    people_text = None
-                    role_text = None
+                    # Special handling for "People on site are..." pattern
+                    if "on site are" in normalized_text.lower():
+                        # Extract everything after "on site are"
+                        people_match = re.search(r'on\s+site\s+are\s+(.+)', normalized_text, re.IGNORECASE)
+                        if people_match:
+                            people_text = people_match.group(1).strip()
+                        else:
+                            continue
+                    else:
+                        # Regular people pattern handling
+                        people_text = None
+                        role_text = None
+                        
+                        # Check each group to find the actual data
+                        for i in range(1, len(match.groups()) + 1):
+                            if match.group(i) is not None:
+                                if people_text is None:
+                                    people_text = match.group(i).strip()
+                                elif role_text is None:
+                                    role_text = match.group(i).strip()
+                                    break
+                    
+                    if not people_text:
+                        continue
+                    
+                    # Clean up the people text - remove command prefixes
+                    people_text = re.sub(r'^(add|include|insert)\s+', '', people_text, flags=re.IGNORECASE)
+                    people_text = re.sub(r'^people\s*,?\s*', '', people_text, flags=re.IGNORECASE)
+                    
+                    result["people"] = []
+                    result["roles"] = []
+                    
+                    # Check if there's an "as" pattern for roles
+                    if " as " in people_text.lower():
+                        # Parse multiple "Name as Role" patterns
+                        role_pattern = r'([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+?)(?:\s*,\s*(?:and\s+)?|\s*$)'
+                        role_matches = re.findall(role_pattern, people_text, re.IGNORECASE)
+                        
+                        if role_matches:
+                            for name, role in role_matches:
+                                name = name.strip()
+                                role = role.strip()
+                                
+                                # Normalize role titles
+                                role_mapping = {
+                                    'project manager': 'Project Manager',
+                                    'electrician': 'Electrician',
+                                    'crane operator': 'Crane Operator',
+                                    'co-worker': 'Co-worker',
+                                    'coworker': 'Co-worker',
+                                    'supervisor': 'Supervisor',
+                                    'engineer': 'Engineer',
+                                    'mechanical engineer': 'Mechanical Engineer',
+                                    'lawyer': 'Lawyer'
+                                }
+                                
+                                role_normalized = role_mapping.get(role.lower(), role.title())
+                                
+                                if name:
+                                    result["people"].append(name)
+                                    result["roles"].append({"name": name, "role": role_normalized})
+                        else:
+                            # Just add as people without roles
+                            result["people"].append(people_text)
+                    elif role_text:
+                        # Handle "People X as Role" with role_text populated
+                        role = role_text.strip()
+                        role_normalized = role.title()
+                        result["people"].append(people_text)
+                        result["roles"].append({"name": people_text, "role": role_normalized})
+                    else:
+                        # No roles, just parse names
+                        people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+                        result["people"] = [p for p in people if p]
+                    
+                    return result
                     
                     # Check each group to find the actual data
                     for i in range(1, len(match.groups()) + 1):
@@ -4154,7 +4240,8 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     return "ok", 200
         
         # Extract fields from input (single command processing)
-        extracted = extract_fields(text)
+        extracted = extract_fields(text, chat_id)
+
         
         # Handle empty or invalid extractions
         if not extracted or "error" in extracted:
