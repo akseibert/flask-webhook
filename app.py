@@ -129,12 +129,12 @@ CONFIG = {
     "MAX_HISTORY": config("MAX_HISTORY", default=10, cast=int),
     "OPENAI_MODEL": config("OPENAI_MODEL", default="gpt-3.5-turbo"),
     "OPENAI_TEMPERATURE": config("OPENAI_TEMPERATURE", default=0.2, cast=float),
-    "NAME_SIMILARITY_THRESHOLD": config("NAME_SIMILARITY_THRESHOLD", default=0.7, cast=float),
+    "NAME_SIMILARITY_THRESHOLD": config("NAME_SIMILARITY_THRESHOLD", default=0.5, cast=float),
     "COMMAND_SIMILARITY_THRESHOLD": config("COMMAND_SIMILARITY_THRESHOLD", default=0.85, cast=float),
     "REPORT_FORMAT": config("REPORT_FORMAT", default="detailed"),
     "MAX_SUGGESTIONS": config("MAX_SUGGESTIONS", default=3, cast=int),
     "ENABLE_FREEFORM_EXTRACTION": config("ENABLE_FREEFORM_EXTRACTION", default=True, cast=bool),
-    "FREEFORM_MIN_LENGTH": config("FREEFORM_MIN_LENGTH", default=200, cast=int),
+    "FREEFORM_MIN_LENGTH": config("FREEFORM_MIN_LENGTH", default=30, cast=int),
     # NLP extraction settings
     "ENABLE_NLP_EXTRACTION": config("ENABLE_NLP_EXTRACTION", default=True, cast=bool),
     "NLP_MODEL": config("NLP_MODEL", default="gpt-4o-mini", cast=str),
@@ -163,10 +163,10 @@ Extract information into these fields (only include fields that are explicitly m
 
 - site_name: string - physical location or project name (e.g., "Downtown Project", "Building 7")
 - segment: string - specific section or area within the site (e.g., "5", "North Wing", "Foundation")
-- category: string - classification of work or report (e.g., "Bestand", "Safety", "Progress", "Mängelerfassung")
-- companies: list of objects with company names [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}]
+- category: string - classification of work or report (only extract if explicitly mentioned like "category is X" or "new construction" or "Bestand"). Do NOT infer from issues or context. Leave empty if not explicitly stated.
+- companies: list of objects with company names [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}] - Only include actual companies (usually ending with AG, GmbH, Ltd, Inc, Corp, LLC). Do NOT include people's names here even if they appear near company context.
 - people: list of strings with names of individuals on site ["Anna Keller", "John Smith"]
-- roles: list of objects associating people with roles [{"name": "Anna Keller", "role": "Supervisor"}]
+- roles: list of objects associating people with roles [{"name": "Anna Keller", "role": "Supervisor"}]. Validate roles to be construction-related (Supervisor, Engineer, Electrician, Operator, Worker, Foreman, Manager, Technician, Inspector, Plumber, Carpenter, Mason, Painter). If you hear "lawyer", it's likely "layer" (construction worker) or "lead worker". Correct obvious misheard roles.
 - tools: list of objects with equipment/tools [{"item": "mobile crane"}, {"item": "welding equipment"}]
 - services: list of objects with services provided [{"task": "electrical wiring"}, {"task": "HVAC installation"}]
 - activities: list of strings describing work performed ["laying foundations", "setting up scaffolding"]
@@ -293,6 +293,10 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
             if data[field] is None:
                 result[field] = ""
             else:
+                # Don't auto-add category unless explicitly mentioned
+                if field == "category" and data[field] == "Mängelerfassung":
+                    # Check if this was actually mentioned in the original text
+                    continue  # Skip auto-added categories
                 result[field] = str(data[field])
     
     # Handle special command fields (return as is)
@@ -314,9 +318,17 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
         if field in data and isinstance(data[field], dict) and "delete" in data[field]:
             result[field] = {"delete": True}
     
-    # Handle correction commands
+
+    # Handle correction commands - but validate they make sense
     if "correct" in data:
-        result["correct"] = data["correct"]
+        # Check if this is actually a correction (not just text containing similar words)
+        if isinstance(data["correct"], list) and len(data["correct"]) > 0:
+            correction = data["correct"][0]
+            if isinstance(correction, dict) and "old" in correction and "new" in correction:
+                # Don't treat activities as corrections
+                old_val = str(correction.get("old", "")).lower()
+                if not any(keyword in old_val for keyword in ["activities", "include", "today", "foundation", "reinforcement"]):
+                    result["correct"] = data["correct"]
     
     # Handle structured list fields
     # Companies
@@ -324,10 +336,25 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(data["companies"], list):
             result["companies"] = []
             for company in data["companies"]:
+                company_name = None
                 if isinstance(company, dict) and "name" in company:
-                    result["companies"].append({"name": company["name"]})
+                    company_name = company["name"]
                 elif isinstance(company, str):
-                    result["companies"].append({"name": company})
+                    company_name = company
+                
+                if company_name:
+                    # Check if it looks like a company (has AG, GmbH, etc. or multiple words with capitals)
+                    if (re.search(r'\b(AG|GmbH|Ltd|Inc|Corp|LLC|SA|BV|AB|AS|A/S|Oy|Oyj|KG|OHG|e\.V\.|Co\.?)\b', company_name, re.IGNORECASE) or
+                        (len(company_name.split()) > 1 and company_name[0].isupper())):
+                        result["companies"].append({"name": company_name})
+                    else:
+                        # Likely a person's name misclassified
+                        log_event("possible_misclassified_company", name=company_name)
+                        # Add to people instead
+                        if "people" not in result:
+                            result["people"] = []
+                        if company_name not in result["people"]:
+                            result["people"].append(company_name)
     
     # People
     if "people" in data:
@@ -354,21 +381,35 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     result["roles"].append({"name": role["name"], "role": role["role"]})
     
     # Tools - deduplicate
+    # Tools - deduplicate and clean
     if "tools" in data:
         if isinstance(data["tools"], list):
             result["tools"] = []
             seen_tools = set()
             for tool in data["tools"]:
+                tool_text = None
                 if isinstance(tool, dict) and "item" in tool:
-                    item = tool["item"].lower().strip()
-                    if item not in seen_tools:
-                        seen_tools.add(item)
-                        result["tools"].append({"item": tool["item"]})
+                    tool_text = tool["item"]
                 elif isinstance(tool, str):
-                    item = tool.lower().strip()
-                    if item not in seen_tools:
-                        seen_tools.add(item)
-                        result["tools"].append({"item": tool})
+                    tool_text = tool
+                
+                if tool_text:
+                    # Clean the tool text
+                    tool_text = re.sub(r'^(being\s+used\s+include|include|includes|including)\s+', '', tool_text, flags=re.IGNORECASE)
+                    tool_text = re.sub(r'^(a|an|the)\s+', '', tool_text, flags=re.IGNORECASE)
+                    tool_text = tool_text.strip()
+                    
+                    # Skip if it's just filler words
+                    if tool_text.lower() in ['being', 'used', 'include', 'includes', 'today']:
+                        continue
+                    
+                    # Capitalize properly
+                    tool_text = ' '.join(word.capitalize() for word in tool_text.split())
+                    
+                    item_lower = tool_text.lower().strip()
+                    if item_lower not in seen_tools and tool_text:
+                        seen_tools.add(item_lower)
+                        result["tools"].append({"item": tool_text})
     
     # Fix misclassified items - move activities from tools to activities
     if "tools" in result:
@@ -398,7 +439,9 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
     
 
     # Services - deduplicate
-    
+    # Services - deduplicate and clean
+    # Services - deduplicate and clean
+    # Services - deduplicate and clean
     if "services" in data:
         if isinstance(data["services"], list):
             result["services"] = []
@@ -411,8 +454,26 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     task_text = service
                 
                 if task_text:
+                    # Clean the service text ONCE
+                    task_text = re.sub(r'^(today\s+include|include|includes|including)\s+', '', task_text, flags=re.IGNORECASE)
+                    task_text = re.sub(r'^(a|an|the)\s+', '', task_text, flags=re.IGNORECASE)
+                    task_text = task_text.strip()
+                    
+                    # Skip if it's just filler words
+                    if task_text.lower() in ['today', 'include', 'includes']:
+                        continue
+                    
+                    # Capitalize properly
+                    task_text = ' '.join(word.capitalize() for word in task_text.split())
+                    
+                    # Now check for duplicates
                     task_lower = task_text.lower().strip()
-                    if task_lower and task_lower not in seen_services:
+                    
+                    # Don't be too aggressive with duplicate detection
+                    # Only consider exact matches or very high similarity as duplicates
+                    is_duplicate = task_lower in seen_services
+                    
+                    if not is_duplicate:
                         seen_services.add(task_lower)
                         result["services"].append({"task": task_text})
     
@@ -640,8 +701,8 @@ FIELD_PATTERNS = {
     "role_parentheses": r'^roles?:\s*([A-Za-z\s]+)\s*\(([^)]+)\)$',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
     "company": r'^(?:(?:add|insert)\s+)?(?:compan(?:y|ies)|firms?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
-    "service": r'^(?:(?:add|insert)\s+)?(?:services?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
-    "tool": r'^(?:(?:add|insert)\s+)?(?:tools?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
+    "service": r'^(?:(?:add|insert)\s+)?(?:services?)(?:\s+today)?(?:\s+include)?s?\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
+    "tool": r'^(?:(?:add|insert)\s+)?(?:tools?)(?:\s+being\s+used)?(?:\s+include)?s?\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "activity": r'^(?:(?:add|insert)\s+)?(?:activit(?:y|ies))\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "issue": r'^(?:(?:add|insert)\s+)?(?:issues?|problems?|delays?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "weather": r'^(?:(?:add|insert)\s+)?(?:weather)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
@@ -656,7 +717,7 @@ FIELD_PATTERNS = {
     "delete_specific": r'^(?:delete|remove)\s+(.+?)\s+from\s+(\w+)(?:\s*(?:,|\.|$))',
     "delete_field": r'^(?:delete|remove|clear)\s+(.+?)(?:\s*(?:,|\.|$))',
     "delete_item": r'^(?:delete|remove)\s+(?:company|firm)\s+(.+?)(?:\s*(?:,|\.|$))',
-    "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+(.+?)(?:\s+in\s+(.+?))?\s*(?:to\s+(.+?))?(?:\s*(?:,|\.|$))',
+    "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+(.+?)\s+(?:in\s+(.+?)\s+)?to\s+(.+?)(?:\s*(?:,|\.|$))',
     "correct_simple": r'^(?:companies?\s+)?correct\s+spelling\s+(.+?)(?:\s*(?:,|\.|$))',
     "help": r'^help(?:\s+on\s+([a-z_]+))?$|^\/help(?:\s+([a-z_]+))?$',
     "undo_last": r'^undo\s+last\s*[.!]?$|^undo\s+last\s+(?:change|modification|edit)\s*[.!]?$',
@@ -1562,8 +1623,10 @@ def generate_pdf(report_data: Dict[str, Any], report_type: str = "detailed", pho
         # Comments Section
         if report_data.get("comments"):
             story.append(Paragraph("💬 Additional Comments", styles['heading']))
-            story.append(Paragraph(report_data.get("comments", ""), styles['normal']))
-            story.append(Spacer(1, 12))
+            comments_text = report_data.get("comments", "")
+            # Capitalize first letter
+            comments_text = comments_text[0].upper() + comments_text[1:] if comments_text else comments_text
+            story.append(Paragraph(comments_text, styles['normal']))
         
         
         # Build the document with numbered pages
@@ -1769,7 +1832,12 @@ def summarize_report(data: Dict[str, Any]) -> str:
             for i in valid_issues:
                 desc = capitalize_first(i["description"])
                 by = i.get("caused_by", "")
-                photo = " 📸" if i.get("has_photo") else ""
+                # Only show photo emoji if photos are actually attached
+                has_actual_photo = False
+                if i.get("has_photo") and chat_id and chat_id in session_data:
+                    photos = session_data[chat_id].get("photos", [])
+                    has_actual_photo = any(p.get("issue_ref") == str(idx+1) for idx, issue in enumerate(data.get("issues", [])) if issue == i for p in photos)
+                photo = " 📸" if has_actual_photo else ""
                 extra = f" (by {by})" if by else ""
                 lines.append(f"  • {desc}{extra}{photo}")
         else:
@@ -2100,6 +2168,14 @@ def debug_command_matching(text: str, chat_id: str) -> List[Dict[str, Any]]:
 def string_similarity(a: str, b: str) -> float:
     """Calculate string similarity ratio between two strings"""
     try:
+        # Handle None values
+        if a is None or b is None:
+            return 0.0
+        
+        # Convert to strings and handle empty strings
+        a = str(a).strip()
+        b = str(b).strip()
+        
         if not a or not b:
             return 0.0
             
@@ -2112,15 +2188,20 @@ def string_similarity(a: str, b: str) -> float:
             
         # Check for direct substring match
         if a_lower in b_lower or b_lower in a_lower:
-            # Calculate the ratio of the shorter string to the longer one
             shorter = min(len(a_lower), len(b_lower))
             longer = max(len(a_lower), len(b_lower))
-            return min(0.95, shorter / longer + 0.3)  # Add 0.3 to favor substring matches
+            return min(0.95, shorter / longer + 0.3)
+        
+        # Check for very similar strings (one character difference)
+        if abs(len(a_lower) - len(b_lower)) <= 1:
+            # Count matching characters
+            matches = sum(1 for i in range(min(len(a_lower), len(b_lower))) if a_lower[i] == b_lower[i])
+            if matches >= len(a_lower) - 1:
+                return 0.9
         
         # Otherwise use SequenceMatcher
         similarity = SequenceMatcher(None, a_lower, b_lower).ratio()
         
-        # Log for debugging
         log_event("string_similarity", a=a, b=b, similarity=similarity)
         return similarity
     except Exception as e:
@@ -2338,13 +2419,22 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     result["companies"] = [{"name": name} for name in company_names]
                 
                 # Handle service/services field
+                # Handle service/services field
                 elif field in ["services", "service"]:
-                    value = clean_value(match.group(1), field)
+                    value = match.group(1).strip()  # Don't use clean_value yet
                     if value.lower() == "none":
                         result["services"] = []
                     else:
-                        services = [service.strip() for service in re.split(r',|\band\b', value) if service.strip()]
-                        result["services"] = [{"task": service} for service in services]
+                        # Capitalize each word properly
+                        services = []
+                        for service in re.split(r',|\s+and\s+', value):
+                            service = service.strip()
+                            if service:
+                                # Capitalize each word
+                                service = ' '.join(word.capitalize() for word in service.split())
+                                services.append({"task": service})
+                        result["services"] = services
+                    return result  # Return immediately to avoid multiple processing
                 
                 # Handle tool/tools field
                 elif field in ["tools", "tool"]:
@@ -2453,6 +2543,13 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         
         result: Dict[str, Any] = {}
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
+
+        # ALWAYS get existing data for context
+        existing_data = {}
+        context = None
+        if chat_id and chat_id in session_data:
+            existing_data = session_data[chat_id].get("structured_data", {})
+            context = session_data[chat_id].get("context", {})
         
         # Handle simple delete commands FIRST - before any pattern matching
         if normalized_text.lower() == "delete services":
@@ -2502,12 +2599,42 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                              resolved=normalized_text,
                              item=last_item)
         
-        # Handle simple spelling corrections for companies
-        correct_simple = re.match(r'^(?:correct\s+spelling\s+)?(?:companies?\s+)?(.+?)\s+(?:to|with)\s+(.+?)(?:\s*(?:,|\.|$))', normalized_text, re.IGNORECASE)
-        if correct_simple:
+        # Handle simple spelling corrections - determine the field from context
+        # GET EXISTING DATA for context
+        existing_data = {}
+        if chat_id and chat_id in session_data:
+            existing_data = session_data[chat_id].get("structured_data", {})
+        
+        # Handle simple spelling corrections - check context to determine field
+        correct_simple = re.match(r'^(?:correct\s+spelling\s+)?(.+?)\s+(?:to|with)\s+(.+?)(?:\s*(?:,|\.|$))', normalized_text, re.IGNORECASE)
+        if correct_simple and existing_data:
             old_value = correct_simple.group(1).strip()
             new_value = correct_simple.group(2).strip()
             
+            # Remove field prefixes if present
+            old_value = re.sub(r'^(companies?|people?|person)\s+', '', old_value, flags=re.IGNORECASE)
+            
+            # Determine which field contains this value
+            field_to_correct = None
+            
+            # Check people first
+            for person in existing_data.get("people", []):
+                if string_similarity(person.lower(), old_value.lower()) >= 0.7:
+                    field_to_correct = "people"
+                    break
+            
+            # Check companies if not found in people
+            if not field_to_correct:
+                for company in existing_data.get("companies", []):
+                    if isinstance(company, dict) and company.get("name"):
+                        if string_similarity(company["name"].lower(), old_value.lower()) >= 0.7:
+                            field_to_correct = "companies"
+                            break
+            
+            if field_to_correct:
+                return {"correct": [{"field": field_to_correct, "old": old_value, "new": new_value}]}
+            
+        
             # Clean up the old value - remove "companies" if it got included
             old_value = re.sub(r'^companies?\s+', '', old_value, flags=re.IGNORECASE)
             
@@ -2598,18 +2725,37 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     tools_text = re.sub(r'^add\s+', '', tools_text, flags=re.IGNORECASE)
                     tools_text = re.sub(r'^tools?\s*,?\s*', '', tools_text, flags=re.IGNORECASE)
                     
-                    tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text)]
+                    # First handle "X, Y and Z" pattern by replacing ", and" with just ","
+                    tools_text = re.sub(r',\s+and\s+', ', ', tools_text)
+                    # Now split on both comma and 'and'
+                    tools = []
+                    for part in re.split(r',|\s+and\s+', tools_text):
+                        tool = part.strip()
+                        if tool:
+                            # Capitalize each word
+                            tool = ' '.join(word.capitalize() for word in tool.split())
+                            tools.append(tool)
+                    
                     result["tools"] = [{"item": tool} for tool in tools if tool]
                     return result
                 
                 elif field == "service":
                     services_text = match.group(1).strip()
-                    # Remove prefixes
-                    services_text = re.sub(r'^add\s+', '', services_text, flags=re.IGNORECASE)
+                    # Remove ALL prefixes including "today include"
+                    services_text = re.sub(r'^(add|include|includes|including|today\s+include|are|is)\s+', '', services_text, flags=re.IGNORECASE)
                     services_text = re.sub(r'^services?\s*[:,]?\s*', '', services_text, flags=re.IGNORECASE)
                     
                     # Split on commas and 'and'
-                    services = [s.strip() for s in re.split(r',|\s+and\s+', services_text)]
+                    services = []
+                    for s in re.split(r',|\s+and\s+', services_text):
+                        service = s.strip()
+                        # Remove articles
+                        service = re.sub(r'^(a|an|the)\s+', '', service, flags=re.IGNORECASE)
+                        if service and service.lower() not in ['today', 'include', 'includes']:
+                            # Capitalize first letter of each word
+                            service = ' '.join(word.capitalize() for word in service.split())
+                            services.append(service)
+                    
                     result["services"] = [{"task": service} for service in services if service]
                     return result
                     
@@ -2660,9 +2806,82 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return result
                     
                 elif field == "people":
-                    # The people pattern has multiple capture groups, we need to check which ones are populated
-                    people_text = None
-                    role_text = None
+                    # Special handling for "People on site are..." pattern
+                    if "on site are" in normalized_text.lower():
+                        # Extract everything after "on site are"
+                        people_match = re.search(r'on\s+site\s+are\s+(.+)', normalized_text, re.IGNORECASE)
+                        if people_match:
+                            people_text = people_match.group(1).strip()
+                        else:
+                            continue
+                    else:
+                        # Regular people pattern handling
+                        people_text = None
+                        role_text = None
+                        
+                        # Check each group to find the actual data
+                        for i in range(1, len(match.groups()) + 1):
+                            if match.group(i) is not None:
+                                if people_text is None:
+                                    people_text = match.group(i).strip()
+                                elif role_text is None:
+                                    role_text = match.group(i).strip()
+                                    break
+                    
+                    if not people_text:
+                        continue
+                    
+                    # Clean up the people text - remove command prefixes
+                    people_text = re.sub(r'^(add|include|insert)\s+', '', people_text, flags=re.IGNORECASE)
+                    people_text = re.sub(r'^people\s*,?\s*', '', people_text, flags=re.IGNORECASE)
+                    
+                    result["people"] = []
+                    result["roles"] = []
+                    
+                    # Check if there's an "as" pattern for roles
+                    if " as " in people_text.lower():
+                        # Parse multiple "Name as Role" patterns
+                        role_pattern = r'([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+?)(?:\s*,\s*(?:and\s+)?|\s*$)'
+                        role_matches = re.findall(role_pattern, people_text, re.IGNORECASE)
+                        
+                        if role_matches:
+                            for name, role in role_matches:
+                                name = name.strip()
+                                role = role.strip()
+                                
+                                # Normalize role titles
+                                role_mapping = {
+                                    'project manager': 'Project Manager',
+                                    'electrician': 'Electrician',
+                                    'crane operator': 'Crane Operator',
+                                    'co-worker': 'Co-worker',
+                                    'coworker': 'Co-worker',
+                                    'supervisor': 'Supervisor',
+                                    'engineer': 'Engineer',
+                                    'mechanical engineer': 'Mechanical Engineer',
+                                    'lawyer': 'Lawyer'
+                                }
+                                
+                                role_normalized = role_mapping.get(role.lower(), role.title())
+                                
+                                if name:
+                                    result["people"].append(name)
+                                    result["roles"].append({"name": name, "role": role_normalized})
+                        else:
+                            # Just add as people without roles
+                            result["people"].append(people_text)
+                    elif role_text:
+                        # Handle "People X as Role" with role_text populated
+                        role = role_text.strip()
+                        role_normalized = role.title()
+                        result["people"].append(people_text)
+                        result["roles"].append({"name": people_text, "role": role_normalized})
+                    else:
+                        # No roles, just parse names
+                        people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+                        result["people"] = [p for p in people if p]
+                    
+                    return result
                     
                     # Check each group to find the actual data
                     for i in range(1, len(match.groups()) + 1):
@@ -2679,33 +2898,51 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     # Clean up the people text
                     people_text = re.sub(r'^add\s+', '', people_text, flags=re.IGNORECASE)
                     people_text = re.sub(r'^people\s*,?\s*', '', people_text, flags=re.IGNORECASE)
+
+                    # Also clean individual names after splitting
+                    people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+                    people = [re.sub(r'^add\s+', '', p, flags=re.IGNORECASE) for p in people if p]
                     
                     result["people"] = []
                     result["roles"] = []
                     
-                    # Check if there's a role specified
-                    if " as " in people_text.lower():
-                        # Parse "Name as Role" pattern - handle commas in roles
+                    # Check if there's a role specified (role_text is populated)
+                    if role_text:
+                        # Handle "People Lisa as co-worker" pattern
+                        role = role_text.strip()
+                        
+                        # Normalize common role terms
+                        role_mapping = {
+                            'co-worker': 'Co-worker',
+                            'coworker': 'Co-worker',
+                            'worker': 'Worker',
+                            'supervisor': 'Supervisor',
+                            'manager': 'Manager',
+                            'engineer': 'Engineer',
+                            'foreman': 'Foreman'
+                        }
+                        
+                        role_normalized = role_mapping.get(role.lower(), role.title())
+                        
+                        result["people"].append(people_text)
+                        result["roles"].append({"name": people_text, "role": role_normalized})
+                    elif " as " in people_text.lower():
+                        # Parse "Name as Role" pattern within the people_text
                         role_pattern = r'([A-Za-z\s]+?)\s+as\s+([A-Za-z\s\-,]+?)(?:,\s*(?:also|and)|$)'
                         role_matches = re.findall(role_pattern, people_text, re.IGNORECASE)
                         
                         if role_matches:
                             for name, role in role_matches:
-                                name = name.strip().replace(",", "")  # Remove trailing comma
+                                name = name.strip().replace(",", "")
                                 role = role.strip()
                                 
-                                # Clean up role titles
-                                if "mechanical engineer" in role.lower():
-                                    role = "Mechanical Engineer"
-                                elif "main" in role.lower() and "engineer" in role.lower():
-                                    role = "Mechanical Engineer"
-                                elif role.lower() == "supervising":
-                                    role = "Supervisor"
+                                # Normalize role titles
+                                if "co-worker" in role.lower() or "coworker" in role.lower():
+                                    role = "Co-worker"
+                                else:
+                                    role = role.title()
                                 
                                 if name:
-                                    # Handle "I" as a special case
-                                    if name.lower() == "i":
-                                        name = "Anna"  # Based on your logs, Anna is supervising
                                     result["people"].append(name)
                                     result["roles"].append({"name": name, "role": role})
                         else:
@@ -2804,16 +3041,30 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return {}
                     
                 elif field == "correct":
-                    raw_field = match.group(1).lower() if match.group(1) else None
-                    old_value = match.group(2).strip() if match.group(2) else None
-                    new_value = match.group(3).strip() if match.group(3) else None
-                    field_name = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
+                    # Safely extract groups
+                    groups = match.groups()
+                    old_value = groups[0].strip() if len(groups) > 0 and groups[0] else None
+                    field_name = groups[1].strip() if len(groups) > 1 and groups[1] else None
+                    new_value = groups[2].strip() if len(groups) > 2 and groups[2] else None
+                    
+                    # Map field name if provided
+                    if field_name:
+                        field_name = FIELD_MAPPING.get(field_name.lower(), field_name.lower())
                     
                     if old_value:
                         if new_value:
-                            return {"correct": [{"field": field_name, "old": old_value, "new": new_value}]}
+                            # If we have all three parts
+                            if field_name:
+                                return {"correct": [{"field": field_name, "old": old_value, "new": new_value}]}
+                            else:
+                                # Try to guess the field from context
+                                return {"correct": [{"field": None, "old": old_value, "new": new_value}]}
                         else:
+                            # Only old value provided, entering correction mode
                             return {"spelling_correction": {"field": field_name, "old_value": old_value}}
+                    
+                    # If nothing matched properly, return empty
+                    return {}
                             
                 elif field == "reset":
                     return {"reset": True}
@@ -2879,6 +3130,21 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 log_event("free_form_extraction_success", found_fields=list(result.keys()))
                 result["date"] = datetime.now().strftime("%d-%m-%Y")
                 return result
+        
+        # If we reach here, no structured or free-form extraction worked
+        # Make sure we're not processing duplicates
+        if result:
+            # Deduplicate within the result itself before returning
+            if "services" in result and isinstance(result["services"], list):
+                seen_services = set()
+                unique_services = []
+                for service in result["services"]:
+                    if isinstance(service, dict) and "task" in service:
+                        task_lower = service["task"].lower()
+                        if task_lower not in seen_services:
+                            seen_services.add(task_lower)
+                            unique_services.append(service)
+                result["services"] = unique_services
         
         # If we reach here, no structured or free-form extraction worked
         log_event("fields_extracted", result_fields=len(result))
@@ -3205,6 +3471,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
             new_data.pop(field)
     
     # Handle correcting values
+    # Handle correcting values
     if "correct" in new_data:
         corrections = new_data.pop("correct")
         for correction in corrections:
@@ -3212,7 +3479,29 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
             old_value = correction.get("old")
             new_value = correction.get("new")
             
+            # If field is None, try to find which field contains the old value
+            if not field and old_value and new_value:
+                # Try to find the value in any field
+                for check_field in LIST_FIELDS + SCALAR_FIELDS:
+                    if check_field in result:
+                        if check_field in SCALAR_FIELDS:
+                            if string_similarity(result[check_field].lower(), old_value.lower()) >= 0.7:
+                                field = check_field
+                                break
+                        elif check_field == "companies":
+                            for company in result.get("companies", []):
+                                if isinstance(company, dict) and company.get("name"):
+                                    if string_similarity(company["name"].lower(), old_value.lower()) >= 0.7:
+                                        field = "companies"
+                                        break
+                        elif check_field == "people":
+                            for person in result.get("people", []):
+                                if string_similarity(person.lower(), old_value.lower()) >= 0.7:
+                                    field = "people"
+                                    break
+            
             if not field or not old_value or not new_value:
+                log_event("correction_incomplete", field=field, old=old_value, new=new_value)
                 continue
                 
             if field in SCALAR_FIELDS:
@@ -3285,13 +3574,22 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                     
                     matched = False
+                    old_name = old_value.strip()
                     
-                    # Handle special case for spelling corrections like "correct spelling of X to Y"
-                    if "spelling of " in old_value.lower():
-                        # Extract the actual old name by removing "spelling of "
-                        old_name = re.sub(r'^(correct )?spelling of ', '', old_value, flags=re.IGNORECASE).strip()
-                    else:
-                        old_name = old_value.strip()
+                    # Find and replace the company
+                    for i, company in enumerate(result[field]):
+                        if isinstance(company, dict) and company.get("name"):
+                            # Use fuzzy matching to find the company
+                            if string_similarity(company["name"].lower(), old_name.lower()) >= 0.7:
+                                result[field][i] = {"name": new_value}
+                                matched = True
+                                changes.append(f"corrected company '{company['name']}' to '{new_value}'")
+                                break
+                    
+                    if not matched:
+                        # Company not found, log this
+                        log_event("company_not_found_for_correction", old=old_value, new=new_value)
+                        changes.append(f"could not find company '{old_value}' to correct")
                     
                     for i, company in enumerate(result[field]):
                         if isinstance(company, dict) and company.get("name") and \
@@ -3301,6 +3599,25 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             changes.append(f"corrected company '{old_value}' to '{new_value}'")
                             break
                     
+                    # If no match found, try to find closest match for feedback
+                    if not matched and result[field]:
+                        closest_match = None
+                        best_score = 0
+                        for company in result[field]:
+                            if isinstance(company, dict) and company.get("name"):
+                                score = string_similarity(company["name"].lower(), old_value.lower())
+                                if score > best_score:
+                                    best_score = score
+                                    closest_match = company["name"]
+                        
+                        if closest_match and best_score > 0.3:
+                            log_event("correction_no_match_found", 
+                                    old=old_value, 
+                                    closest=closest_match, 
+                                    score=best_score)
+                            # Suggest the closest match to the user
+                            send_message(chat_id, f"Could not find exact match for '{old_value}'. Did you mean '{closest_match}'?")
+
                     if not matched:
                         # If no match, add the new company
                         result[field].append({"name": new_value})
@@ -3308,13 +3625,14 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         
                         
                         # Find the best match
+                        
                         for i, company in enumerate(result[field]):
                             if isinstance(company, dict) and company.get("name"):
                                 company_name = company["name"].lower()
-                                # Check for similarity with the cleaned old value
-                                if "electro" in company_name.lower() or string_similarity(company_name, clean_old) >= 0.5:
+                                # Check for similarity with the old value
+                                if string_similarity(company_name, old_name.lower()) >= 0.7:
                                     company["name"] = new_value
-                                    changes.append(f"corrected company to '{new_value}'")
+                                    changes.append(f"corrected company '{company['name']}' to '{new_value}'")
                                     matched = True
                                     break
                     else:
@@ -3440,6 +3758,31 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         if isinstance(item, dict) and key in item:
                             # Clean up the service task
                             task = item[key]
+                            # Remove common prefixes
+                            task = re.sub(r'^(today\s+)?(include|includes|including)\s+', '', task, flags=re.IGNORECASE)
+                            task = task.strip()
+                            item_value = task.lower()
+                            
+                            # Check if this item already exists - EXACT match only for services
+                            already_exists = False
+                            for existing_value in existing_values:
+                                # Only skip if EXACTLY the same or 95%+ similar
+                                if item_value == existing_value or string_similarity(item_value, existing_value) >= 0.95:
+                                    already_exists = True
+                                    break
+                                    
+                            if not already_exists:
+                                result[field].append({"task": task})
+                                existing_values.append(item_value)  # UPDATE the existing_values list!
+                                changes.append(f"added service '{task}'")
+                            else:
+                                log_event("skipped_duplicate", field=field, value=task)
+                    
+                    # Add new items
+                    for item in new_data[field]:
+                        if isinstance(item, dict) and key in item:
+                            # Clean up the service task
+                            task = item[key]
                             # Remove "today include" prefix if present
                             task = re.sub(r'^today\s+include\s+', '', task, flags=re.IGNORECASE)
                             item_value = task.lower()
@@ -3453,6 +3796,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                     
                             if not already_exists:
                                 result[field].append({"task": task})
+                                existing_values.append(item_value)  # ADD THIS LINE to prevent duplicates within same operation
                                 changes.append(f"added service '{task}'")
                             else:
                                 log_event("skipped_duplicate", field=field, value=task)
@@ -3527,7 +3871,13 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             
                     if not already_exists:
                         result[field].append(item)
-                        changes.append(f"added person '{item}'" if field == "people" else f"added {field[:-1]} '{item}'")
+                        # REPLACE THE LINE BELOW
+                        if field == "people":
+                            changes.append(f"added person '{item}'")
+                        elif field == "activities":
+                            changes.append(f"added activity '{item}'")
+                        else:
+                            changes.append(f"added {field[:-1]} '{item}'")
                     else:
                         log_event("skipped_duplicate", field=field, value=item)
     
@@ -4060,7 +4410,8 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     return "ok", 200
         
         # Extract fields from input (single command processing)
-        extracted = extract_fields(text)
+        extracted = extract_fields(text, chat_id)
+
         
         # Handle empty or invalid extractions
         if not extracted or "error" in extracted:
@@ -4175,8 +4526,8 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         session["structured_data"] = enrich_date(session["structured_data"])
         save_session(session_data)
 
-        # Check if we just did a delete or correct operation
-        if "delete" in extracted or "correct" in extracted:
+        # Always show report after delete or correct operations
+        if "delete" in extracted or "correct" in extracted or "spelling_correction" in extracted:
             summary = summarize_report(session["structured_data"])
             if "correct" in extracted:
                 message = "✅ Corrected information in your report."
@@ -4187,11 +4538,13 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             send_message(chat_id, f"{message}\n\n{summary}")
             return "ok", 200
 
+        
+
         # Prepare feedback
         changed_fields = [field for field in extracted.keys() 
                         if field not in ["help", "reset", "undo", "status", "export_pdf", 
                                         "summary", "detailed", "undo_last", "error",
-                                        "yes_confirm", "no_confirm", "spelling_correction"]]
+                                        "yes_confirm", "no_confirm"]] 
         
         # Always show summary after corrections or deletions
         if "correct" in extracted or "delete" in extracted:
@@ -4363,6 +4716,7 @@ def webhook() -> tuple[str, int]:
                 return "ok", 200
 
         # Handle photo messages
+        # Handle photo messages
         if "photo" in message:
             try:
                 # Get the largest photo
@@ -4375,29 +4729,6 @@ def webhook() -> tuple[str, int]:
                 # Store photo reference in session
                 if "photos" not in session_data[chat_id]:
                     session_data[chat_id]["photos"] = []
-                
-                # If caption mentions an issue, link it automatically
-                # Check if this is a response to the photo question
-                # Handle both caption and regular text response to photo prompt
-                pending_photos = [p for p in session_data[chat_id].get("photos", []) if p.get("pending")]
-                
-                if pending_photos and text and text.strip().isdigit():
-                    issue_index = int(text.strip()) - 1
-                    issues = session_data[chat_id]["structured_data"].get("issues", [])
-                    if 0 <= issue_index < len(issues):
-                        # Update the pending photo
-                        for photo in session_data[chat_id]["photos"]:
-                            if photo.get("pending"):
-                                photo["pending"] = False
-                                photo["issue_ref"] = str(issue_index + 1)
-                                photo["caption"] = f"Photo for issue {issue_index + 1}"
-                                # Mark this issue as having a photo
-                                issues[issue_index]["has_photo"] = True
-                                break
-                        send_message(chat_id, f"📸 Photo attached to issue {issue_index + 1}")
-                        save_session(session_data)
-                        return "ok", 200
-            
                 
                 # If caption mentions an issue, link it automatically
                 if caption:
@@ -4454,21 +4785,7 @@ def webhook() -> tuple[str, int]:
             except Exception as e:
                 log_event("photo_processing_error", error=str(e))
                 send_message(chat_id, "⚠️ Error processing photo. Please try again.")
-                return "ok", 200
-                
-                # Store photo reference in session
-                if "photos" not in session_data[chat_id]:
-                    session_data[chat_id]["photos"] = {}
-                
-                # Ask which issue this photo belongs to
-                send_message(chat_id, "📸 Photo received! Which issue does this photo belong to? Reply with the issue number or description.")
-                session_data[chat_id]["pending_photo"] = file_id
-                save_session(session_data)
-                return "ok", 200
-            except Exception as e:
-                log_event("photo_processing_error", error=str(e))
-                send_message(chat_id, "⚠️ Error processing photo. Please try again.")
-                return "ok", 200    
+                return "ok", 200   
         # Handle text messages
         if "text" in message:
             text = message["text"].strip()
