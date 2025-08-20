@@ -163,10 +163,10 @@ Extract information into these fields (only include fields that are explicitly m
 
 - site_name: string - physical location or project name (e.g., "Downtown Project", "Building 7")
 - segment: string - specific section or area within the site (e.g., "5", "North Wing", "Foundation")
-- category: string - classification of work or report (only extract if explicitly mentioned like "category is X" or "new construction" or "Bestand")
-- companies: list of objects with company names [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}]
+- category: string - classification of work or report (only extract if explicitly mentioned like "category is X" or "new construction" or "Bestand"). Do NOT infer from issues or context. Leave empty if not explicitly stated.
+- companies: list of objects with company names [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}] - Only include actual companies (usually ending with AG, GmbH, Ltd, Inc, Corp, LLC). Do NOT include people's names here even if they appear near company context.
 - people: list of strings with names of individuals on site ["Anna Keller", "John Smith"]
-- roles: list of objects associating people with roles [{"name": "Anna Keller", "role": "Supervisor"}]
+- roles: list of objects associating people with roles [{"name": "Anna Keller", "role": "Supervisor"}]. Validate roles to be construction-related (Supervisor, Engineer, Electrician, Operator, Worker, Foreman, Manager, Technician, Inspector, Plumber, Carpenter, Mason, Painter). If you hear "lawyer", it's likely "layer" (construction worker) or "lead worker". Correct obvious misheard roles.
 - tools: list of objects with equipment/tools [{"item": "mobile crane"}, {"item": "welding equipment"}]
 - services: list of objects with services provided [{"task": "electrical wiring"}, {"task": "HVAC installation"}]
 - activities: list of strings describing work performed ["laying foundations", "setting up scaffolding"]
@@ -318,9 +318,17 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
         if field in data and isinstance(data[field], dict) and "delete" in data[field]:
             result[field] = {"delete": True}
     
-    # Handle correction commands
+
+    # Handle correction commands - but validate they make sense
     if "correct" in data:
-        result["correct"] = data["correct"]
+        # Check if this is actually a correction (not just text containing similar words)
+        if isinstance(data["correct"], list) and len(data["correct"]) > 0:
+            correction = data["correct"][0]
+            if isinstance(correction, dict) and "old" in correction and "new" in correction:
+                # Don't treat activities as corrections
+                old_val = str(correction.get("old", "")).lower()
+                if not any(keyword in old_val for keyword in ["activities", "include", "today", "foundation", "reinforcement"]):
+                    result["correct"] = data["correct"]
     
     # Handle structured list fields
     # Companies
@@ -328,10 +336,25 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(data["companies"], list):
             result["companies"] = []
             for company in data["companies"]:
+                company_name = None
                 if isinstance(company, dict) and "name" in company:
-                    result["companies"].append({"name": company["name"]})
+                    company_name = company["name"]
                 elif isinstance(company, str):
-                    result["companies"].append({"name": company})
+                    company_name = company
+                
+                if company_name:
+                    # Check if it looks like a company (has AG, GmbH, etc. or multiple words with capitals)
+                    if (re.search(r'\b(AG|GmbH|Ltd|Inc|Corp|LLC|SA|BV|AB|AS|A/S|Oy|Oyj|KG|OHG|e\.V\.|Co\.?)\b', company_name, re.IGNORECASE) or
+                        (len(company_name.split()) > 1 and company_name[0].isupper())):
+                        result["companies"].append({"name": company_name})
+                    else:
+                        # Likely a person's name misclassified
+                        log_event("possible_misclassified_company", name=company_name)
+                        # Add to people instead
+                        if "people" not in result:
+                            result["people"] = []
+                        if company_name not in result["people"]:
+                            result["people"].append(company_name)
     
     # People
     if "people" in data:
@@ -2663,9 +2686,10 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 
                 elif field == "service":
                     services_text = match.group(1).strip()
-                    # Remove prefixes
-                    services_text = re.sub(r'^add\s+', '', services_text, flags=re.IGNORECASE)
+                    # Remove prefixes including "include"
+                    services_text = re.sub(r'^(add|include|insert)\s+', '', services_text, flags=re.IGNORECASE)
                     services_text = re.sub(r'^services?\s*[:,]?\s*', '', services_text, flags=re.IGNORECASE)
+                    services_text = re.sub(r'^include\s+', '', services_text, flags=re.IGNORECASE)
                     
                     # Split on commas and 'and'
                     services = [s.strip() for s in re.split(r',|\s+and\s+', services_text)]
@@ -3481,13 +3505,14 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         
                         
                         # Find the best match
+                        
                         for i, company in enumerate(result[field]):
                             if isinstance(company, dict) and company.get("name"):
                                 company_name = company["name"].lower()
-                                # Check for similarity with the cleaned old value
-                                if "electro" in company_name.lower() or string_similarity(company_name, clean_old) >= 0.5:
+                                # Check for similarity with the old value
+                                if string_similarity(company_name, old_name.lower()) >= 0.7:
                                     company["name"] = new_value
-                                    changes.append(f"corrected company to '{new_value}'")
+                                    changes.append(f"corrected company '{company['name']}' to '{new_value}'")
                                     matched = True
                                     break
                     else:
@@ -3607,6 +3632,30 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 elif field == "services":
                     key = "task"
                     existing_values = [s.get(key, "").lower() for s in result[field] if isinstance(s, dict)]
+                    
+                    # Add new items
+                    for item in new_data[field]:
+                        if isinstance(item, dict) and key in item:
+                            # Clean up the service task
+                            task = item[key]
+                            # Remove common prefixes
+                            task = re.sub(r'^(today\s+)?(include|includes|including)\s+', '', task, flags=re.IGNORECASE)
+                            task = task.strip()
+                            item_value = task.lower()
+                            
+                            # Check if this item already exists
+                            already_exists = False
+                            for existing_value in existing_values:
+                                if string_similarity(item_value, existing_value) >= 0.8:
+                                    already_exists = True
+                                    break
+                                    
+                            if not already_exists:
+                                result[field].append({"task": task})
+                                existing_values.append(item_value)
+                                changes.append(f"added service '{task}'")
+                            else:
+                                log_event("skipped_duplicate", field=field, value=task)
                     
                     # Add new items
                     for item in new_data[field]:
