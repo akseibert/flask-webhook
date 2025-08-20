@@ -2694,32 +2694,43 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result["people"] = []
                     result["roles"] = []
                     
-                    # Clean up the people text - remove command prefixes
-                    people_text = re.sub(r'^(add|include|insert)\s+', '', people_text, flags=re.IGNORECASE)
-
-                    # Check if there's a role specified
-                    if " as " in people_text.lower():
-                        # Parse "Name as Role" pattern - handle commas in roles
+                    # Check if there's a role specified (role_text is populated)
+                    if role_text:
+                        # Handle "People Lisa as co-worker" pattern
+                        role = role_text.strip()
+                        
+                        # Normalize common role terms
+                        role_mapping = {
+                            'co-worker': 'Co-worker',
+                            'coworker': 'Co-worker',
+                            'worker': 'Worker',
+                            'supervisor': 'Supervisor',
+                            'manager': 'Manager',
+                            'engineer': 'Engineer',
+                            'foreman': 'Foreman'
+                        }
+                        
+                        role_normalized = role_mapping.get(role.lower(), role.title())
+                        
+                        result["people"].append(people_text)
+                        result["roles"].append({"name": people_text, "role": role_normalized})
+                    elif " as " in people_text.lower():
+                        # Parse "Name as Role" pattern within the people_text
                         role_pattern = r'([A-Za-z\s]+?)\s+as\s+([A-Za-z\s\-,]+?)(?:,\s*(?:also|and)|$)'
                         role_matches = re.findall(role_pattern, people_text, re.IGNORECASE)
                         
                         if role_matches:
                             for name, role in role_matches:
-                                name = name.strip().replace(",", "")  # Remove trailing comma
+                                name = name.strip().replace(",", "")
                                 role = role.strip()
                                 
-                                # Clean up role titles
-                                if "mechanical engineer" in role.lower():
-                                    role = "Mechanical Engineer"
-                                elif "main" in role.lower() and "engineer" in role.lower():
-                                    role = "Mechanical Engineer"
-                                elif role.lower() == "supervising":
-                                    role = "Supervisor"
+                                # Normalize role titles
+                                if "co-worker" in role.lower() or "coworker" in role.lower():
+                                    role = "Co-worker"
+                                else:
+                                    role = role.title()
                                 
                                 if name:
-                                    # Handle "I" as a special case
-                                    if name.lower() == "i":
-                                        name = "Anna"  # Based on your logs, Anna is supervising
                                     result["people"].append(name)
                                     result["roles"].append({"name": name, "role": role})
                         else:
@@ -4407,6 +4418,7 @@ def webhook() -> tuple[str, int]:
                 return "ok", 200
 
         # Handle photo messages
+        # Handle photo messages
         if "photo" in message:
             try:
                 # Get the largest photo
@@ -4419,39 +4431,6 @@ def webhook() -> tuple[str, int]:
                 # Store photo reference in session
                 if "photos" not in session_data[chat_id]:
                     session_data[chat_id]["photos"] = []
-                
-                # If caption mentions an issue, link it automatically
-                # Check if this is a response to the photo question
-                # Handle both caption and regular text response to photo prompt
-                pending_photos = [p for p in session_data[chat_id].get("photos", []) if p.get("pending")]
-                
-                # ADD THESE LINES HERE - THIS IS THE ONLY ADDITION
-                number_words = {
-                    'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
-                    'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10'
-                }
-                text_normalized = text.strip().lower().rstrip('.')
-                if text_normalized in number_words:
-                    text = number_words[text_normalized]
-                # END OF ADDITION
-
-                if pending_photos and text and text.strip().isdigit():
-                    issue_index = int(text.strip()) - 1
-                    issues = session_data[chat_id]["structured_data"].get("issues", [])
-                    if 0 <= issue_index < len(issues):
-                        # Update the pending photo
-                        for photo in session_data[chat_id]["photos"]:
-                            if photo.get("pending"):
-                                photo["pending"] = False
-                                photo["issue_ref"] = str(issue_index + 1)
-                                photo["caption"] = f"Photo for issue {issue_index + 1}"
-                                # Mark this issue as having a photo
-                                issues[issue_index]["has_photo"] = True
-                                break
-                        send_message(chat_id, f"📸 Photo attached to issue {issue_index + 1}")
-                        save_session(session_data)
-                        return "ok", 200
-            
                 
                 # If caption mentions an issue, link it automatically
                 if caption:
@@ -4508,21 +4487,7 @@ def webhook() -> tuple[str, int]:
             except Exception as e:
                 log_event("photo_processing_error", error=str(e))
                 send_message(chat_id, "⚠️ Error processing photo. Please try again.")
-                return "ok", 200
-                
-                # Store photo reference in session
-                if "photos" not in session_data[chat_id]:
-                    session_data[chat_id]["photos"] = {}
-                
-                # Ask which issue this photo belongs to
-                send_message(chat_id, "📸 Photo received! Which issue does this photo belong to? Reply with the issue number or description.")
-                session_data[chat_id]["pending_photo"] = file_id
-                save_session(session_data)
-                return "ok", 200
-            except Exception as e:
-                log_event("photo_processing_error", error=str(e))
-                send_message(chat_id, "⚠️ Error processing photo. Please try again.")
-                return "ok", 200    
+                return "ok", 200   
         # Handle text messages
         if "text" in message:
             text = message["text"].strip()
