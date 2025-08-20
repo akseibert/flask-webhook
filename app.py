@@ -2660,6 +2660,9 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     services_text = re.sub(r'^add\s+', '', services_text, flags=re.IGNORECASE)
                     services_text = re.sub(r'^services?\s*[:,]?\s*', '', services_text, flags=re.IGNORECASE)
                     
+                    # Remove "we also did", "we provided", etc.
+                    services_text = re.sub(r'^(?:we|they|I|you)\s+(?:also\s+)?(?:did|provided?|performed?|completed?)\s+', '', services_text, flags=re.IGNORECASE)
+                    
                     # Fix common misheard service names
                     services_text = services_text.replace('Lei Ying Foundation', 'laying foundation')
                     services_text = services_text.replace('lei ying foundation', 'laying foundation')
@@ -2670,14 +2673,19 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     services = []
                     for s in re.split(r',|\s+and\s+', services_text):
                         service = s.strip()
+                        
+                        # Clean each service individually too
+                        service = re.sub(r'^(?:we|they|I|you)\s+(?:also\s+)?(?:did|provided?|performed?|completed?)\s+', '', service, flags=re.IGNORECASE)
+                        service = re.sub(r'^(?:a|an|the|some)\s+', '', service, flags=re.IGNORECASE)
+                        
                         if service:
                             # Capitalize properly
                             if service.lower() == 'laying foundation':
                                 service = 'Laying Foundation'
-                            elif service.lower() == 'electric wiring':
+                            elif service.lower() in ['electric wiring', 'electrical wiring']:
                                 service = 'Electrical Wiring'
-                            elif service.lower() == 'electrical wiring':
-                                service = 'Electrical Wiring'
+                            elif 'solar panel' in service.lower():
+                                service = 'Solar Panel Installation'
                             else:
                                 service = ' '.join(word.capitalize() for word in service.split())
                             services.append(service)
