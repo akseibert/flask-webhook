@@ -2597,10 +2597,10 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     tools_text = match.group(1) if match.group(1) else match.group(2) if len(match.groups()) > 1 else ""
                     tools_text = tools_text.strip()
                     
-                    # Remove ALL common prefixes and phrases that aren't tool names
-                    # Remove "we also used", "being used include", etc.
-                    tools_text = re.sub(r'^(?:we\s+)?(?:also\s+)?(?:used?\s+)?(?:a\s+)?', '', tools_text, flags=re.IGNORECASE)
-                    tools_text = re.sub(r'^(?:being\s+used\s+)?(?:include\s+)?', '', tools_text, flags=re.IGNORECASE)
+                    # First, remove the entire "we used" prefix if it exists
+                    tools_text = re.sub(r'^(?:we|they|he|she|I|you)\s+(?:also\s+)?(?:used?\s+)', '', tools_text, flags=re.IGNORECASE)
+                    # Remove other common prefixes
+                    tools_text = re.sub(r'^(?:being\s+used\s+)?(?:include[ds]?\s+)?', '', tools_text, flags=re.IGNORECASE)
                     tools_text = re.sub(r'^(?:the\s+)?(?:following\s+)?(?:tools?\s*:?\s*)?', '', tools_text, flags=re.IGNORECASE)
                     
                     # Fix common misheard words
@@ -2612,9 +2612,47 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     tools_text = re.sub(r'\s+and\s*\.\.\.\s*$', '', tools_text)
                     
                     # Split on various separators
+                    # Split on various separators
                     tools = []
                     # Replace ", and" with just ","
-                    tools_text =
+                    tools_text = re.sub(r',\s+and\s+', ', ', tools_text)
+                    
+                    # Split on comma, 'and', or phrases like "there was/were"
+                    parts = re.split(r',\s*|\s+and\s+|\s*(?:there\s+)?(?:was|were)\s+(?:also\s+)?', tools_text)
+                    
+                    for part in parts:
+                        tool = part.strip()
+                        
+                        # Remove "we used" if it somehow got through
+                        tool = re.sub(r'^(?:we|they|he|she|I|you)\s+(?:used?\s+)?(?:a\s+)?', '', tool, flags=re.IGNORECASE)
+                        # Remove ALL filler words and articles
+                        tool = re.sub(r'^(?:a|an|the|some|also|another|other)\s+', '', tool, flags=re.IGNORECASE)
+                        
+                        # Skip empty strings and stop words
+                        if not tool or tool.lower() in ['', 'equipment', 'gear', 'tools', 'stuff', 'things', 'items']:
+                            continue
+                        
+                        # Skip if it's just dots or very short
+                        if tool == '...' or len(tool) < 2:
+                            continue
+                            
+                        # Special handling for compound tools
+                        tool_lower = tool.lower()
+                        if 'safety gear' in tool_lower:
+                            tools.append('Safety Gear')
+                        elif 'power tool' in tool_lower:
+                            tools.append('Power Tools')
+                        elif 'welding equipment' in tool_lower:
+                            tools.append('Welding Equipment')
+                        else:
+                            # Capitalize each word
+                            tool = ' '.join(word.capitalize() for word in tool.split())
+                            tools.append(tool)
+                    
+                    # Only return if we found actual tools
+                    if tools:
+                        result["tools"] = [{"item": tool} for tool in tools]
+                    return result
                 
                 elif field == "service":
                     services_text = match.group(1).strip()
