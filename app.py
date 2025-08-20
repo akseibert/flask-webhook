@@ -381,21 +381,35 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     result["roles"].append({"name": role["name"], "role": role["role"]})
     
     # Tools - deduplicate
+    # Tools - deduplicate and clean
     if "tools" in data:
         if isinstance(data["tools"], list):
             result["tools"] = []
             seen_tools = set()
             for tool in data["tools"]:
+                tool_text = None
                 if isinstance(tool, dict) and "item" in tool:
-                    item = tool["item"].lower().strip()
-                    if item not in seen_tools:
-                        seen_tools.add(item)
-                        result["tools"].append({"item": tool["item"]})
+                    tool_text = tool["item"]
                 elif isinstance(tool, str):
-                    item = tool.lower().strip()
-                    if item not in seen_tools:
-                        seen_tools.add(item)
-                        result["tools"].append({"item": tool})
+                    tool_text = tool
+                
+                if tool_text:
+                    # Clean the tool text
+                    tool_text = re.sub(r'^(being\s+used\s+include|include|includes|including)\s+', '', tool_text, flags=re.IGNORECASE)
+                    tool_text = re.sub(r'^(a|an|the)\s+', '', tool_text, flags=re.IGNORECASE)
+                    tool_text = tool_text.strip()
+                    
+                    # Skip if it's just filler words
+                    if tool_text.lower() in ['being', 'used', 'include', 'includes', 'today']:
+                        continue
+                    
+                    # Capitalize properly
+                    tool_text = ' '.join(word.capitalize() for word in tool_text.split())
+                    
+                    item_lower = tool_text.lower().strip()
+                    if item_lower not in seen_tools and tool_text:
+                        seen_tools.add(item_lower)
+                        result["tools"].append({"item": tool_text})
     
     # Fix misclassified items - move activities from tools to activities
     if "tools" in result:
@@ -425,7 +439,9 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
     
 
     # Services - deduplicate
-    
+    # Services - deduplicate and clean
+    # Services - deduplicate and clean
+    # Services - deduplicate and clean
     if "services" in data:
         if isinstance(data["services"], list):
             result["services"] = []
@@ -438,13 +454,25 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     task_text = service
                 
                 if task_text:
+                    # Clean the service text ONCE
+                    task_text = re.sub(r'^(today\s+include|include|includes|including)\s+', '', task_text, flags=re.IGNORECASE)
+                    task_text = re.sub(r'^(a|an|the)\s+', '', task_text, flags=re.IGNORECASE)
+                    task_text = task_text.strip()
+                    
+                    # Skip if it's just filler words
+                    if task_text.lower() in ['today', 'include', 'includes']:
+                        continue
+                    
+                    # Capitalize properly
+                    task_text = ' '.join(word.capitalize() for word in task_text.split())
+                    
+                    # Now check for duplicates
                     task_lower = task_text.lower().strip()
-                    # Check for duplicates more aggressively
-                    is_duplicate = False
-                    for seen in seen_services:
-                        if task_lower == seen or task_lower in seen or seen in task_lower:
-                            is_duplicate = True
-                            break
+                    
+                    # Don't be too aggressive with duplicate detection
+                    # Only consider exact matches or very high similarity as duplicates
+                    is_duplicate = task_lower in seen_services
+                    
                     if not is_duplicate:
                         seen_services.add(task_lower)
                         result["services"].append({"task": task_text})
@@ -673,8 +701,8 @@ FIELD_PATTERNS = {
     "role_parentheses": r'^roles?:\s*([A-Za-z\s]+)\s*\(([^)]+)\)$',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
     "company": r'^(?:(?:add|insert)\s+)?(?:compan(?:y|ies)|firms?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
-    "service": r'^(?:(?:add|insert)\s+)?(?:services?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
-    "tool": r'^(?:(?:add|insert)\s+)?(?:tools?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
+    "service": r'^(?:(?:add|insert)\s+)?(?:services?)(?:\s+today)?(?:\s+include)?s?\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
+    "tool": r'^(?:(?:add|insert)\s+)?(?:tools?)(?:\s+being\s+used)?(?:\s+include)?s?\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "activity": r'^(?:(?:add|insert)\s+)?(?:activit(?:y|ies))\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "issue": r'^(?:(?:add|insert)\s+)?(?:issues?|problems?|delays?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "weather": r'^(?:(?:add|insert)\s+)?(?:weather)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
@@ -2391,13 +2419,22 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     result["companies"] = [{"name": name} for name in company_names]
                 
                 # Handle service/services field
+                # Handle service/services field
                 elif field in ["services", "service"]:
-                    value = clean_value(match.group(1), field)
+                    value = match.group(1).strip()  # Don't use clean_value yet
                     if value.lower() == "none":
                         result["services"] = []
                     else:
-                        services = [service.strip() for service in re.split(r',|\band\b', value) if service.strip()]
-                        result["services"] = [{"task": service} for service in services]
+                        # Capitalize each word properly
+                        services = []
+                        for service in re.split(r',|\s+and\s+', value):
+                            service = service.strip()
+                            if service:
+                                # Capitalize each word
+                                service = ' '.join(word.capitalize() for word in service.split())
+                                services.append({"task": service})
+                        result["services"] = services
+                    return result  # Return immediately to avoid multiple processing
                 
                 # Handle tool/tools field
                 elif field in ["tools", "tool"]:
@@ -2684,23 +2721,41 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 
                 elif field == "tool":
                     tools_text = match.group(1).strip()
-                    # Remove prefixes
-                    tools_text = re.sub(r'^add\s+', '', tools_text, flags=re.IGNORECASE)
-                    tools_text = re.sub(r'^tools?\s*,?\s*', '', tools_text, flags=re.IGNORECASE)
+                    # Remove all common prefixes
+                    tools_text = re.sub(r'^(add|include|includes|including|are|is|being\s+used\s+include)\s+', '', tools_text, flags=re.IGNORECASE)
+                    tools_text = re.sub(r'^tools?\s*[:,]?\s*', '', tools_text, flags=re.IGNORECASE)
                     
-                    tools = [t.strip() for t in re.split(r',|\s+and\s+', tools_text)]
+                    # Split on commas and 'and'
+                    tools = []
+                    for t in re.split(r',|\s+and\s+', tools_text):
+                        tool = t.strip()
+                        # Remove articles
+                        tool = re.sub(r'^(a|an|the)\s+', '', tool, flags=re.IGNORECASE)
+                        if tool and tool.lower() not in ['being', 'used', 'include', 'includes']:
+                            # Capitalize first letter of each word
+                            tool = ' '.join(word.capitalize() for word in tool.split())
+                            tools.append(tool)
+                    
                     result["tools"] = [{"item": tool} for tool in tools if tool]
                     return result
                 
                 elif field == "service":
                     services_text = match.group(1).strip()
-                    # Remove prefixes including "include"
-                    services_text = re.sub(r'^(add|include|insert)\s+', '', services_text, flags=re.IGNORECASE)
+                    # Remove ALL prefixes including "today include"
+                    services_text = re.sub(r'^(add|include|includes|including|today\s+include|are|is)\s+', '', services_text, flags=re.IGNORECASE)
                     services_text = re.sub(r'^services?\s*[:,]?\s*', '', services_text, flags=re.IGNORECASE)
-                    services_text = re.sub(r'^include\s+', '', services_text, flags=re.IGNORECASE)
                     
                     # Split on commas and 'and'
-                    services = [s.strip() for s in re.split(r',|\s+and\s+', services_text)]
+                    services = []
+                    for s in re.split(r',|\s+and\s+', services_text):
+                        service = s.strip()
+                        # Remove articles
+                        service = re.sub(r'^(a|an|the)\s+', '', service, flags=re.IGNORECASE)
+                        if service and service.lower() not in ['today', 'include', 'includes']:
+                            # Capitalize first letter of each word
+                            service = ' '.join(word.capitalize() for word in service.split())
+                            services.append(service)
+                    
                     result["services"] = [{"task": service} for service in services if service]
                     return result
                     
@@ -3075,6 +3130,21 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 log_event("free_form_extraction_success", found_fields=list(result.keys()))
                 result["date"] = datetime.now().strftime("%d-%m-%Y")
                 return result
+        
+        # If we reach here, no structured or free-form extraction worked
+        # Make sure we're not processing duplicates
+        if result:
+            # Deduplicate within the result itself before returning
+            if "services" in result and isinstance(result["services"], list):
+                seen_services = set()
+                unique_services = []
+                for service in result["services"]:
+                    if isinstance(service, dict) and "task" in service:
+                        task_lower = service["task"].lower()
+                        if task_lower not in seen_services:
+                            seen_services.add(task_lower)
+                            unique_services.append(service)
+                result["services"] = unique_services
         
         # If we reach here, no structured or free-form extraction worked
         log_event("fields_extracted", result_fields=len(result))
@@ -3693,16 +3763,17 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             task = task.strip()
                             item_value = task.lower()
                             
-                            # Check if this item already exists
+                            # Check if this item already exists - EXACT match only for services
                             already_exists = False
                             for existing_value in existing_values:
-                                if string_similarity(item_value, existing_value) >= 0.8:
+                                # Only skip if EXACTLY the same or 95%+ similar
+                                if item_value == existing_value or string_similarity(item_value, existing_value) >= 0.95:
                                     already_exists = True
                                     break
                                     
                             if not already_exists:
                                 result[field].append({"task": task})
-                                existing_values.append(item_value)
+                                existing_values.append(item_value)  # UPDATE the existing_values list!
                                 changes.append(f"added service '{task}'")
                             else:
                                 log_event("skipped_duplicate", field=field, value=task)
