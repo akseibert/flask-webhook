@@ -4440,12 +4440,12 @@ def webhook() -> tuple[str, int]:
                 text, confidence = transcribe_voice(file_id)
 
                 # Special handling for number responses (for photo assignment)
-                # Handle both with and without period
-                text_cleaned = text.strip().lower().rstrip('.')
+                text_cleaned = text.strip().lower().rstrip('.').rstrip('?').rstrip('!')
                 number_map = {
                     'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
                     'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10',
-                    'first': '1', 'second': '2', 'third': '3', 'fourth': '4', 'fifth': '5'
+                    'first': '1', 'second': '2', 'third': '3', 'fourth': '4', 'fifth': '5',
+                    'won': '1', 'to': '2', 'too': '2', 'tree': '3', 'for': '4', 'fore': '4'  # Common misheard numbers
                 }
                 
                 # Check if we're expecting a photo assignment response
@@ -4525,46 +4525,45 @@ def webhook() -> tuple[str, int]:
                 if "photos" not in session_data[chat_id]:
                     session_data[chat_id]["photos"] = []
                 
-                # If caption mentions an issue, link it automatically
-                # Convert word numbers to digits for photo assignment
-                number_words = {
-                    'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
-                    'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10',
-                    'first': '1', 'second': '2', 'third': '3', 'fourth': '4', 'fifth': '5'
-                }
-                
-                text_lower = text.lower().strip().rstrip('.')
-                if text_lower in number_words:
-                    text = number_words[text_lower]
-                
-                # Check if this is a response to a photo question
-                pending_photos = [p for p in session_data[chat_id].get("photos", []) if p.get("pending")]
-                
-                if pending_photos and text.strip().isdigit():
-                    issue_index = int(text.strip()) - 1
-                    issues = session_data[chat_id]["structured_data"].get("issues", [])
-                    if 0 <= issue_index < len(issues):
-                        # Update the pending photo
-                        for photo in session_data[chat_id]["photos"]:
-                            if photo.get("pending"):
-                                photo["pending"] = False
-                                photo["issue_ref"] = str(issue_index + 1)
-                                photo["caption"] = f"Photo for issue {issue_index + 1}"
-                                # Mark this issue as having a photo
-                                issues[issue_index]["has_photo"] = True
-                                break
-                        send_message(chat_id, f"📸 Photo attached to issue {issue_index + 1}")
-                        save_session(session_data)
-                        return "ok", 200
-            
+                # If caption contains a number, it might be an issue reference
+                if caption:
+                    # Convert word numbers to digits for photo assignment
+                    number_words = {
+                        'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
+                        'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10',
+                        'first': '1', 'second': '2', 'third': '3', 'fourth': '4', 'fifth': '5',
+                        # Add common voice transcription errors
+                        'won': '1', 'to': '2', 'too': '2', 'tree': '3', 'for': '4', 'fore': '4'
+                    }
+                    
+                    caption_lower = caption.lower().strip().rstrip('.').rstrip('!').rstrip('?')
+                    if caption_lower in number_words:
+                        caption = number_words[caption_lower]
+                    
+                    # Check if caption is just a number (issue reference)
+                    if caption.strip().isdigit():
+                        issue_index = int(caption.strip()) - 1
+                        issues = session_data[chat_id]["structured_data"].get("issues", [])
+                        if 0 <= issue_index < len(issues):
+                            # Store photo with issue reference
+                            session_data[chat_id]["photos"].append({
+                                "file_id": file_id,
+                                "issue_ref": str(issue_index + 1),
+                                "caption": f"Photo for issue {issue_index + 1}"
+                            })
+                            # Mark this issue as having a photo
+                            issues[issue_index]["has_photo"] = True
+                            send_message(chat_id, f"📸 Photo attached to issue {issue_index + 1}")
+                            save_session(session_data)
+                            return "ok", 200
                 
                 # If caption mentions an issue, link it automatically
                 if caption:
                     # Try to extract issue reference from caption
                     issue_patterns = [
-                        r'issue\s*#?(\d+)',  # "issue 1" or "issue #1"
-                        r'problem\s*#?(\d+)',  # "problem 1"
-                        r'for\s+(.+)',  # "for crack in wall"
+                        r'issue\\s*#?(\\d+)',  # "issue 1" or "issue #1"
+                        r'problem\\s*#?(\\d+)',  # "problem 1"
+                        r'for\\s+(.+)',  # "for crack in wall"
                     ]
                     
                     matched = False
@@ -4598,10 +4597,10 @@ def webhook() -> tuple[str, int]:
                     # Check if there are any issues in the report
                     issues = session_data[chat_id]["structured_data"].get("issues", [])
                     if issues:
-                        issue_list = "\n".join([f"{i+1}. {issue.get('description', '')}" 
+                        issue_list = "\\n".join([f"{i+1}. {issue.get('description', '')}" 
                                                for i, issue in enumerate(issues)])
                         send_message(chat_id, 
-                            f"📸 Photo received! Which issue does this belong to?\n\n{issue_list}\n\n"
+                            f"📸 Photo received! Which issue does this belong to?\\n\\n{issue_list}\\n\\n"
                             "Reply with the issue number (e.g., '1') or add a new issue with the photo.")
                     else:
                         send_message(chat_id, 
@@ -4611,26 +4610,25 @@ def webhook() -> tuple[str, int]:
                 save_session(session_data)
                 return "ok", 200
             except Exception as e:
-                log_event("photo_processing_error", error=str(e))
+                log_event("photo_processing_error", error=str(e), traceback=traceback.format_exc())
                 send_message(chat_id, "⚠️ Error processing photo. Please try again.")
                 return "ok", 200
-                
-                # Store photo reference in session
-                if "photos" not in session_data[chat_id]:
-                    session_data[chat_id]["photos"] = {}
-                
-                # Ask which issue this photo belongs to
-                send_message(chat_id, "📸 Photo received! Which issue does this photo belong to? Reply with the issue number or description.")
-                session_data[chat_id]["pending_photo"] = file_id
-                save_session(session_data)
-                return "ok", 200
-            except Exception as e:
-                log_event("photo_processing_error", error=str(e))
-                send_message(chat_id, "⚠️ Error processing photo. Please try again.")
-                return "ok", 200    
+
         # Handle text messages
+        
         if "text" in message:
             text = message["text"].strip()
+            
+            # Convert word numbers to digits for photo assignment
+            number_words = {
+                'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
+                'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10',
+                'first': '1', 'second': '2', 'third': '3', 'fourth': '4', 'fifth': '5'
+            }
+            
+            text_lower = text.lower().strip().rstrip('.')
+            if text_lower in number_words:
+                text = number_words[text_lower]
             
             # Check if this is a response to a photo question
             pending_photos = [p for p in session_data[chat_id].get("photos", []) if p.get("pending")]
