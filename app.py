@@ -2619,8 +2619,24 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         # Remove "being used include" if it got through
                         tool = re.sub(r'^being\s+used\s+include\s+', '', tool, flags=re.IGNORECASE)
                         
-                        # Skip generic words
-                        if tool and tool.low
+                        # Skip empty strings and very generic words
+                        if not tool or tool.lower() in ['equipment', 'gear', 'tools', 'stuff']:
+                            continue
+                            
+                        # Special handling for compound tools
+                        if 'safety gear' in tool.lower():
+                            tools.append('Safety Gear')
+                        elif 'power tool' in tool.lower():
+                            tools.append('Power Tools')
+                        elif 'welding equipment' in tool.lower():
+                            tools.append('Welding Equipment')
+                        else:
+                            # Capitalize each word
+                            tool = ' '.join(word.capitalize() for word in tool.split())
+                            tools.append(tool)
+                    
+                    result["tools"] = [{"item": tool} for tool in tools if tool]
+                    return result
                 
                 elif field == "service":
                     services_text = match.group(1).strip()
@@ -3474,8 +3490,11 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             if not already_exists:
                                 result[field].append({"task": task})
                                 changes.append(f"added service '{task}'")
+                                # Add to existing_values to prevent duplicates in same operation
+                                existing_values.append(item_value)
                             else:
                                 log_event("skipped_duplicate", field=field, value=task)
+
                 elif field == "issues":
                     key = "description"
                     existing_values = [i.get(key, "").lower() for i in result[field] if isinstance(i, dict)]
