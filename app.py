@@ -643,7 +643,7 @@ FIELD_PATTERNS = {
     "service": r'^(?:(?:add|insert)\s+)?(?:services?)\s*[:,]?\s*(.+?)$',
     "tool": r'^(?:.*?)?(?:tools?|used?|using)\s*[:,]?\s*(.+?)$|^(?:we|I|they|he|she|[A-Za-z]+)\s+(?:used?|using)\s+(.+?)$',
     "activity": r'^(?:(?:add|insert)\s+)?(?:activit(?:y|ies))\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
-    "issue": r'^(?:(?:add|insert)\s+)?(?:issues?|problems?|delays?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
+    "issue": r'^(?:(?:add|insert)\s+)?(?:issues?|problems?|delays?)\s*[:,]?\s*(.+?)$',
     "weather": r'^(?:(?:add|insert)\s+)?(?:weather)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "time": r'^(?:(?:add|insert)\s+)?(?:time)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "comments": r'^(?:(?:add|insert)\s+)?(?:comments?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
@@ -1767,10 +1767,22 @@ def summarize_report(data: Dict[str, Any]) -> str:
         # Process issues for display with capitalization
         valid_issues = [i for i in data.get("issues", []) if isinstance(i, dict) and i.get("description", "").strip()]
         if valid_issues:
-            for i in valid_issues:
-                desc = capitalize_first(i["description"])
-                by = i.get("caused_by", "")
-                photo = " 📸" if i.get("has_photo") else ""
+            for idx, issue in enumerate(valid_issues):
+                desc = capitalize_first(issue["description"])
+                by = issue.get("caused_by", "")
+                
+                # Check if this issue has an attached photo
+                has_actual_photo = False
+                if chat_id and chat_id in session_data:
+                    photos = session_data.get(chat_id, {}).get("photos", [])
+                    # Check if any photo is assigned to this issue number
+                    has_actual_photo = any(
+                        p.get("issue_ref") == str(idx + 1) 
+                        for p in photos 
+                        if not p.get("pending")
+                    )
+                
+                photo = " 📸" if has_actual_photo else ""
                 extra = f" (by {by})" if by else ""
                 lines.append(f"  • {desc}{extra}{photo}")
         else:
@@ -2726,19 +2738,45 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 elif field == "issue":
                     issues_text = match.group(1).strip()
                     # Remove prefix
-                    issues_text = re.sub(r'^issues?\s*,?\s*', '', issues_text, flags=re.IGNORECASE)
+                    issues_text = re.sub(r'^issues?\s*[:,]?\s*', '', issues_text, flags=re.IGNORECASE)
                     
                     result["issues"] = []
                     
-                    # Split on periods for multiple sentences, or commas
-                    if '.' in issues_text and 'There' in issues_text:
-                        # Handle "sentence. There was also..." pattern
-                        issue_parts = [i.strip() for i in issues_text.split('.') if i.strip()]
+                    # Split on commas but be careful about commas within descriptions
+                    # First try to split on ", " followed by a potential issue keyword
+                    issue_parts = []
+                    
+                    # If there are clear separators, use them
+                    if ',' in issues_text:
+                        # Split on comma but keep related phrases together
+                        parts = issues_text.split(',')
+                        current_issue = ""
+                        for part in parts:
+                            part = part.strip()
+                            # Check if this looks like a new issue or continuation
+                            if current_issue and (
+                                part.lower().startswith(('and ', 'also ', 'then ')) or
+                                len(part.split()) < 3
+                            ):
+                                # This is likely a continuation
+                                current_issue += ", " + part
+                            else:
+                                # This is a new issue
+                                if current_issue:
+                                    issue_parts.append(current_issue)
+                                current_issue = part
+                        # Don't forget the last issue
+                        if current_issue:
+                            issue_parts.append(current_issue)
                     else:
-                        issue_parts = [i.strip() for i in re.split(r';|,', issues_text) if i.strip()]
+                        # No commas, treat as single issue
+                        issue_parts = [issues_text]
                     
                     # Process each issue
                     for issue in issue_parts:
+                        issue = issue.strip()
+                        # Clean up common prefixes
+                        issue = re.sub(r'^(and\s+)?also\s+', '', issue, flags=re.IGNORECASE)
                         if issue:
                             has_photo = "photo" in issue.lower() or "picture" in issue.lower()
                             result["issues"].append({"description": issue, "has_photo": has_photo})
@@ -4596,9 +4634,10 @@ def webhook() -> tuple[str, int]:
                     })
                     
                     # Check if there are any issues in the report
+                    # Check if there are any issues in the report
                     issues = session_data[chat_id]["structured_data"].get("issues", [])
                     if issues:
-                        # Create a simple numbered list
+                        # Build the message parts
                         lines = ["📸 Photo received!", ""]
                         
                         if len(issues) == 1:
@@ -4610,19 +4649,23 @@ def webhook() -> tuple[str, int]:
                             photo_mark = " 📷" if issues[0].get('has_photo') else ""
                             lines.append(f"1. {desc}{photo_mark}")
                             lines.append("")
-                            lines.append("Reply '1' to confirm or add a new issue")
+                            lines.append("Reply '1' to confirm")
+                            lines.append("Or add: 'issue: description of new issue'")
                         else:
                             lines.append("Select issue number:")
                             lines.append("")
                             for i, issue in enumerate(issues):
                                 desc = issue.get('description', '')
                                 if desc:
+                                    # Capitalize first letter
                                     desc = desc[0].upper() + desc[1:] if len(desc) > 1 else desc.upper()
                                 photo_mark = " 📷" if issue.get('has_photo') else ""
                                 lines.append(f"{i+1}. {desc}{photo_mark}")
                             lines.append("")
-                            lines.append("Reply with 1, 2, 3... or 'new' for new issue")
+                            lines.append("Reply with number: 1, 2, 3...")
+                            lines.append("Or add: 'issue: description of new issue'")
                         
+                        # Join lines with newlines
                         message = "\n".join(lines)
                         send_message(chat_id, message)
                     else:
