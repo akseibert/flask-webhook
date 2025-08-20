@@ -957,8 +957,12 @@ def send_message(chat_id: str, text: str) -> None:
     """Send message to Telegram with enhanced error handling"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        # Don't use parse_mode for messages with newlines - it can break formatting
+        # Don't use parse_mode if the message has formatting issues
         payload = {"chat_id": chat_id, "text": text}
+        
+        # Only use Markdown if the text actually contains markdown formatting
+        if "**" in text or "*" in text or "_" in text or "`" in text:
+            payload["parse_mode"] = "Markdown"
         
         # First try with Markdown
         response = requests.post(url, json=payload)
@@ -1765,24 +1769,15 @@ def summarize_report(data: Dict[str, Any]) -> str:
         ]
         
         # Process issues for display with capitalization
+        # Process issues for display with capitalization
+        # Process issues for display with capitalization
         valid_issues = [i for i in data.get("issues", []) if isinstance(i, dict) and i.get("description", "").strip()]
         if valid_issues:
-            for idx, issue in enumerate(valid_issues):
-                desc = capitalize_first(issue["description"])
-                by = issue.get("caused_by", "")
-                
-                # Check if this issue has an attached photo
-                has_actual_photo = False
-                if chat_id and chat_id in session_data:
-                    photos = session_data.get(chat_id, {}).get("photos", [])
-                    # Check if any photo is assigned to this issue number
-                    has_actual_photo = any(
-                        p.get("issue_ref") == str(idx + 1) 
-                        for p in photos 
-                        if not p.get("pending")
-                    )
-                
-                photo = " 📸" if has_actual_photo else ""
+            for i in valid_issues:
+                desc = capitalize_first(i["description"])
+                by = i.get("caused_by", "")
+                # Only show photo emoji if the issue has_photo flag is set
+                photo = " 📸" if i.get("has_photo") else ""
                 extra = f" (by {by})" if by else ""
                 lines.append(f"  • {desc}{extra}{photo}")
         else:
