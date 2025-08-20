@@ -30,7 +30,6 @@ from reportlab.platypus.flowables import HRFlowable
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.platypus import KeepTogether, PageBreak
 from reportlab.pdfgen import canvas
-from reportlab.pdfgen import canvas
 from functools import wraps
 from collections import defaultdict
 
@@ -130,15 +129,15 @@ CONFIG = {
     "MAX_HISTORY": config("MAX_HISTORY", default=10, cast=int),
     "OPENAI_MODEL": config("OPENAI_MODEL", default="gpt-3.5-turbo"),
     "OPENAI_TEMPERATURE": config("OPENAI_TEMPERATURE", default=0.2, cast=float),
-    "NAME_SIMILARITY_THRESHOLD": config("NAME_SIMILARITY_THRESHOLD", default=0.7, cast=float),
+    "NAME_SIMILARITY_THRESHOLD": config("NAME_SIMILARITY_THRESHOLD", default=0.5, cast=float),
     "COMMAND_SIMILARITY_THRESHOLD": config("COMMAND_SIMILARITY_THRESHOLD", default=0.85, cast=float),
     "REPORT_FORMAT": config("REPORT_FORMAT", default="detailed"),
     "MAX_SUGGESTIONS": config("MAX_SUGGESTIONS", default=3, cast=int),
     "ENABLE_FREEFORM_EXTRACTION": config("ENABLE_FREEFORM_EXTRACTION", default=True, cast=bool),
-    "FREEFORM_MIN_LENGTH": config("FREEFORM_MIN_LENGTH", default=200, cast=int),
+    "FREEFORM_MIN_LENGTH": config("FREEFORM_MIN_LENGTH", default=30, cast=int),
     # NLP extraction settings
     "ENABLE_NLP_EXTRACTION": config("ENABLE_NLP_EXTRACTION", default=True, cast=bool),
-    "NLP_MODEL": config("NLP_MODEL", default="gpt-4o", cast=str),
+    "NLP_MODEL": config("NLP_MODEL", default="gpt-4o-mini", cast=str),
     "NLP_EXTRACTION_CONFIDENCE_THRESHOLD": config("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", default=0.7, cast=float),
     "NLP_MAX_TOKENS": config("NLP_MAX_TOKENS", default=2000, cast=int),
     "NLP_FALLBACK_TO_REGEX": config("NLP_FALLBACK_TO_REGEX", default=True, cast=bool),
@@ -413,7 +412,13 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                 
                 if task_text:
                     task_lower = task_text.lower().strip()
-                    if task_lower and task_lower not in seen_services:
+                    # Check for duplicates more aggressively
+                    is_duplicate = False
+                    for seen in seen_services:
+                        if task_lower == seen or task_lower in seen or seen in task_lower:
+                            is_duplicate = True
+                            break
+                    if not is_duplicate:
                         seen_services.add(task_lower)
                         result["services"].append({"task": task_text})
     
@@ -1770,7 +1775,12 @@ def summarize_report(data: Dict[str, Any]) -> str:
             for i in valid_issues:
                 desc = capitalize_first(i["description"])
                 by = i.get("caused_by", "")
-                photo = " 📸" if i.get("has_photo") else ""
+                # Only show photo emoji if photos are actually attached
+                has_actual_photo = False
+                if i.get("has_photo") and chat_id and chat_id in session_data:
+                    photos = session_data[chat_id].get("photos", [])
+                    has_actual_photo = any(p.get("issue_ref") == str(idx+1) for idx, issue in enumerate(data.get("issues", [])) if issue == i for p in photos)
+                photo = " 📸" if has_actual_photo else ""
                 extra = f" (by {by})" if by else ""
                 lines.append(f"  • {desc}{extra}{photo}")
         else:
@@ -2684,6 +2694,9 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result["people"] = []
                     result["roles"] = []
                     
+                    # Clean up the people text - remove command prefixes
+                    people_text = re.sub(r'^(add|include|insert)\s+', '', people_text, flags=re.IGNORECASE)
+
                     # Check if there's a role specified
                     if " as " in people_text.lower():
                         # Parse "Name as Role" pattern - handle commas in roles
@@ -3302,6 +3315,20 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             changes.append(f"corrected company '{old_value}' to '{new_value}'")
                             break
                     
+                    # If no match found, try to find closest match for feedback
+                    if not matched and result[field]:
+                        closest_match = None
+                        best_score = 0
+                        for company in result[field]:
+                            if isinstance(company, dict) and company.get("name"):
+                                score = string_similarity(company["name"].lower(), old_value.lower())
+                                if score > best_score:
+                                    best_score = score
+                                    closest_match = company["name"]
+                        
+                        if closest_match and best_score > 0.3:
+                            log_event("correction_no_match_found", old=old_value, closest=closest_match, score=best_score)
+
                     if not matched:
                         # If no match, add the new company
                         result[field].append({"name": new_value})
@@ -3528,7 +3555,13 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             
                     if not already_exists:
                         result[field].append(item)
-                        changes.append(f"added person '{item}'" if field == "people" else f"added {field[:-1]} '{item}'")
+                        # REPLACE THE LINE BELOW
+                        if field == "people":
+                            changes.append(f"added person '{item}'")
+                        elif field == "activities":
+                            changes.append(f"added activity '{item}'")
+                        else:
+                            changes.append(f"added {field[:-1]} '{item}'")
                     else:
                         log_event("skipped_duplicate", field=field, value=item)
     
@@ -4188,6 +4221,16 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             send_message(chat_id, f"{message}\n\n{summary}")
             return "ok", 200
 
+        # Always send summary after delete or correct operations
+        if "delete" in extracted or "correct" in extracted:
+            summary = summarize_report(session["structured_data"])
+            if "correct" in extracted:
+                message = "✅ Corrected information in your report."
+            elif "delete" in extracted:
+                message = "✅ Deleted information from your report."
+            send_message(chat_id, f"{message}\n\n{summary}")
+            return "ok", 200
+
         # Prepare feedback
         changed_fields = [field for field in extracted.keys() 
                         if field not in ["help", "reset", "undo", "status", "export_pdf", 
@@ -4382,6 +4425,16 @@ def webhook() -> tuple[str, int]:
                 # Handle both caption and regular text response to photo prompt
                 pending_photos = [p for p in session_data[chat_id].get("photos", []) if p.get("pending")]
                 
+                # ADD THESE LINES HERE - THIS IS THE ONLY ADDITION
+                number_words = {
+                    'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
+                    'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10'
+                }
+                text_normalized = text.strip().lower().rstrip('.')
+                if text_normalized in number_words:
+                    text = number_words[text_normalized]
+                # END OF ADDITION
+
                 if pending_photos and text and text.strip().isdigit():
                     issue_index = int(text.strip()) - 1
                     issues = session_data[chat_id]["structured_data"].get("issues", [])
@@ -4580,7 +4633,8 @@ def index():
     return jsonify({
         "name": "Construction Site Report Bot",
         "status": "running",
-        "endpoints": ["/webhook", "/health"]
+        "endpoints": ["/", "/webhook", "/health"]
+
     }), 200
 
 # Start Flask server if running directly
