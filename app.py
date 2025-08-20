@@ -4595,7 +4595,6 @@ def webhook() -> tuple[str, int]:
                     })
                     
                     # Check if there are any issues in the report
-                    # Check if there are any issues in the report
                     issues = session_data[chat_id]["structured_data"].get("issues", [])
                     if issues:
                         # Create a nicely formatted bullet list
@@ -4607,15 +4606,23 @@ def webhook() -> tuple[str, int]:
                                 desc = desc[0].upper() + desc[1:] if len(desc) > 1 else desc.upper()
                             # Add photo indicator if issue already has a photo
                             photo_indicator = " 📷" if issue.get('has_photo') else ""
-                            issue_list.append(f"**{i+1}.** {desc}{photo_indicator}")
+                            issue_list.append(f"  • {desc}{photo_indicator}")
                         
                         formatted_list = "\\n".join(issue_list)
                         
-                        send_message(chat_id, 
-                            f"📸 **Photo received!**\\n\\n"
-                            f"Select which issue this photo belongs to:\\n\\n"
-                            f"{formatted_list}\\n\\n"
-                            f"💡 _Reply with the issue number (1, 2, 3...) or say 'new' to create a new issue_")
+                        # Adjust message based on number of issues
+                        if len(issues) == 1:
+                            send_message(chat_id, 
+                                f"📸 Photo received!\\n\\n"
+                                f"Assign to this issue?\\n"
+                                f"{formatted_list}\\n\\n"
+                                f"Reply '1' to confirm or add a new issue")
+                        else:
+                            send_message(chat_id, 
+                                f"📸 Photo received!\\n\\n"
+                                f"Select issue number:\\n\\n"
+                                f"{formatted_list}\\n\\n"
+                                f"Reply with 1, 2, 3... or 'new' for new issue")
                     else:
                         send_message(chat_id, 
                             "📸 Photo received! Add an issue description for this photo "
@@ -4623,6 +4630,8 @@ def webhook() -> tuple[str, int]:
                 
                 save_session(session_data)
                 return "ok", 200
+
+
             except Exception as e:
                 log_event("photo_processing_error", error=str(e), traceback=traceback.format_exc())
                 send_message(chat_id, "⚠️ Error processing photo. Please try again.")
