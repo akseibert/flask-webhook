@@ -957,7 +957,8 @@ def send_message(chat_id: str, text: str) -> None:
     """Send message to Telegram with enhanced error handling"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+        # Don't use parse_mode for messages with newlines - it can break formatting
+        payload = {"chat_id": chat_id, "text": text}
         
         # First try with Markdown
         response = requests.post(url, json=payload)
@@ -4597,32 +4598,33 @@ def webhook() -> tuple[str, int]:
                     # Check if there are any issues in the report
                     issues = session_data[chat_id]["structured_data"].get("issues", [])
                     if issues:
-                        # Create a nicely formatted bullet list
-                        issue_list = []
-                        for i, issue in enumerate(issues):
-                            desc = issue.get('description', '')
-                            # Capitalize first letter of description
+                        # Create a simple numbered list
+                        lines = ["📸 Photo received!", ""]
+                        
+                        if len(issues) == 1:
+                            lines.append("Assign to this issue?")
+                            lines.append("")
+                            desc = issues[0].get('description', '')
                             if desc:
                                 desc = desc[0].upper() + desc[1:] if len(desc) > 1 else desc.upper()
-                            # Add photo indicator if issue already has a photo
-                            photo_indicator = " 📷" if issue.get('has_photo') else ""
-                            issue_list.append(f"  • {desc}{photo_indicator}")
-                        
-                        formatted_list = "\\n".join(issue_list)
-                        
-                        # Adjust message based on number of issues
-                        if len(issues) == 1:
-                            send_message(chat_id, 
-                                f"📸 Photo received!\\n\\n"
-                                f"Assign to this issue?\\n"
-                                f"{formatted_list}\\n\\n"
-                                f"Reply '1' to confirm or add a new issue")
+                            photo_mark = " 📷" if issues[0].get('has_photo') else ""
+                            lines.append(f"1. {desc}{photo_mark}")
+                            lines.append("")
+                            lines.append("Reply '1' to confirm or add a new issue")
                         else:
-                            send_message(chat_id, 
-                                f"📸 Photo received!\\n\\n"
-                                f"Select issue number:\\n\\n"
-                                f"{formatted_list}\\n\\n"
-                                f"Reply with 1, 2, 3... or 'new' for new issue")
+                            lines.append("Select issue number:")
+                            lines.append("")
+                            for i, issue in enumerate(issues):
+                                desc = issue.get('description', '')
+                                if desc:
+                                    desc = desc[0].upper() + desc[1:] if len(desc) > 1 else desc.upper()
+                                photo_mark = " 📷" if issue.get('has_photo') else ""
+                                lines.append(f"{i+1}. {desc}{photo_mark}")
+                            lines.append("")
+                            lines.append("Reply with 1, 2, 3... or 'new' for new issue")
+                        
+                        message = "\n".join(lines)
+                        send_message(chat_id, message)
                     else:
                         send_message(chat_id, 
                             "📸 Photo received! Add an issue description for this photo "
