@@ -4595,13 +4595,27 @@ def webhook() -> tuple[str, int]:
                     })
                     
                     # Check if there are any issues in the report
+                    # Check if there are any issues in the report
                     issues = session_data[chat_id]["structured_data"].get("issues", [])
                     if issues:
-                        issue_list = "\\n".join([f"{i+1}. {issue.get('description', '')}" 
-                                               for i, issue in enumerate(issues)])
+                        # Create a nicely formatted bullet list
+                        issue_list = []
+                        for i, issue in enumerate(issues):
+                            desc = issue.get('description', '')
+                            # Capitalize first letter of description
+                            if desc:
+                                desc = desc[0].upper() + desc[1:] if len(desc) > 1 else desc.upper()
+                            # Add photo indicator if issue already has a photo
+                            photo_indicator = " 📷" if issue.get('has_photo') else ""
+                            issue_list.append(f"**{i+1}.** {desc}{photo_indicator}")
+                        
+                        formatted_list = "\\n".join(issue_list)
+                        
                         send_message(chat_id, 
-                            f"📸 Photo received! Which issue does this belong to?\\n\\n{issue_list}\\n\\n"
-                            "Reply with the issue number (e.g., '1') or add a new issue with the photo.")
+                            f"📸 **Photo received!**\\n\\n"
+                            f"Select which issue this photo belongs to:\\n\\n"
+                            f"{formatted_list}\\n\\n"
+                            f"💡 _Reply with the issue number (1, 2, 3...) or say 'new' to create a new issue_")
                     else:
                         send_message(chat_id, 
                             "📸 Photo received! Add an issue description for this photo "
