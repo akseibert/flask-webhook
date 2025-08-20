@@ -399,21 +399,23 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
     
 
     # Services - deduplicate
+    
     if "services" in data:
         if isinstance(data["services"], list):
             result["services"] = []
             seen_services = set()
             for service in data["services"]:
+                task_text = None
                 if isinstance(service, dict) and "task" in service:
-                    task = service["task"].lower().strip()
-                    if task not in seen_services:
-                        seen_services.add(task)
-                        result["services"].append({"task": service["task"]})
+                    task_text = service["task"]
                 elif isinstance(service, str):
-                    task = service.lower().strip()
-                    if task not in seen_services:
-                        seen_services.add(task)
-                        result["services"].append({"task": service})
+                    task_text = service
+                
+                if task_text:
+                    task_lower = task_text.lower().strip()
+                    if task_lower and task_lower not in seen_services:
+                        seen_services.add(task_lower)
+                        result["services"].append({"task": task_text})
     
     # Activities
     if "activities" in data:
@@ -3040,7 +3042,9 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 changes.append(f"cleared {category}")
             
             # Make sure to update and return here
+            # Log the deletion
             log_event("deleted_category", category=category)
+            # Don't return here - let the function continue to the end
             return result
         
         if not value and not category:
@@ -3281,6 +3285,8 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 elif field == "companies":
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                     
+                    matched = False  # Initialize matched variable
+
                     # Check if we're correcting based on the old value matching
                     if old_value.lower() == "of electro mayer" or "of " in old_value.lower():
                         # Remove "of " prefix if present
@@ -3506,7 +3512,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             
                     if not already_exists:
                         result[field].append(item)
-                        changes.append(f"added {field[:-1]} '{item}'")
+                        changes.append(f"added person '{item}'" if field == "people" else f"added {field[:-1]} '{item}'")
                     else:
                         log_event("skipped_duplicate", field=field, value=item)
     
@@ -4154,22 +4160,24 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         session["structured_data"] = enrich_date(session["structured_data"])
         save_session(session_data)
 
+        # Check if we just did a delete or correct operation
+        if "delete" in extracted or "correct" in extracted:
+            summary = summarize_report(session["structured_data"])
+            if "correct" in extracted:
+                message = "✅ Corrected information in your report."
+            elif "delete" in extracted:
+                message = "✅ Deleted information from your report."
+            else:
+                message = "✅ Updated report."
+            send_message(chat_id, f"{message}\n\n{summary}")
+            return "ok", 200
+
         # Prepare feedback
         changed_fields = [field for field in extracted.keys() 
                         if field not in ["help", "reset", "undo", "status", "export_pdf", 
                                         "summary", "detailed", "undo_last", "error",
                                         "yes_confirm", "no_confirm", "spelling_correction"]]
         
-        # Handle delete and correct operations first - they need summaries
-        if "delete" in extracted or "correct" in extracted:
-            summary = summarize_report(session["structured_data"])
-            if "correct" in extracted:
-                message = "✅ Corrected information in your report."
-            else:
-                message = "✅ Deleted information from your report."
-            send_message(chat_id, f"{message}\n\n{summary}")
-            return "ok", 200
-            
         # Always show summary after corrections or deletions
         if "correct" in extracted or "delete" in extracted:
             summary = summarize_report(session["structured_data"])
@@ -4180,15 +4188,20 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             send_message(chat_id, f"{message}\n\n{summary}")
             return "ok", 200
         
-        # Always show summary after corrections or deletions
-        if "correct" in extracted or "delete" in extracted:
+        if changed_fields:
+            message = "✅ Updated report."
             summary = summarize_report(session["structured_data"])
-            if "correct" in extracted:
-                message = "✅ Corrected information in your report."
-            else:
-                message = "✅ Deleted information from your report."
             send_message(chat_id, f"{message}\n\n{summary}")
-            return "ok", 200
+            
+            # Add intelligent suggestions only if changes were actually made
+            missing_suggestions = suggest_missing_fields(session["structured_data"])
+            if missing_suggestions:
+                suggestion_text = "You might also want to add: " + ", ".join(missing_suggestions)
+                send_message(chat_id, suggestion_text)
+        else:
+            send_message(chat_id, "⚠️ No changes were made to your report.")
+
+        return "ok", 200
         
         if changed_fields:
             message = "✅ Updated report."
