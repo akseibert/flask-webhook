@@ -4266,30 +4266,36 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         save_session(session_data)
 
         # Check if we just did a delete or correct operation
-        if "delete" in extracted or "correct" in extracted:
-            summary = summarize_report(session["structured_data"])
-            if "correct" in extracted:
-                message = "✅ Corrected information in your report."
-            elif "delete" in extracted:
-                message = "✅ Deleted information from your report."
-            else:
-                message = "✅ Updated report."
-            send_message(chat_id, f"{message}\n\n{summary}")
-            return "ok", 200
-
-        # Prepare feedback
+        # Prepare feedback - check what was actually changed
         changed_fields = [field for field in extracted.keys() 
                         if field not in ["help", "reset", "undo", "status", "export_pdf", 
                                         "summary", "detailed", "undo_last", "error",
-                                        "yes_confirm", "no_confirm", "spelling_correction"]]
+                                        "yes_confirm", "no_confirm", "spelling_correction",
+                                        "delete", "correct"]]
         
-        # Always show summary after corrections or deletions
-        if "correct" in extracted or "delete" in extracted:
+        # Check if we did a delete or correct operation
+        if "delete" in extracted:
             summary = summarize_report(session["structured_data"])
-            if "correct" in extracted:
-                message = "✅ Corrected information in your report."
+            # Check what was deleted from the merged_data changes
+            delete_info = extracted.get("delete", {})
+            if delete_info.get("category"):
+                message = f"✅ Deleted {delete_info['category']}."
+            elif delete_info.get("value"):
+                message = f"✅ Deleted '{delete_info['value']}' from your report."
             else:
                 message = "✅ Deleted information from your report."
+            send_message(chat_id, f"{message}\n\n{summary}")
+            return "ok", 200
+            
+        if "correct" in extracted:
+            summary = summarize_report(session["structured_data"])
+            # Get correction details
+            corrections = extracted.get("correct", [])
+            if corrections and len(corrections) > 0:
+                corr = corrections[0]
+                message = f"✅ Corrected {corr.get('field', 'field')}: '{corr.get('old', '')}' → '{corr.get('new', '')}'."
+            else:
+                message = "✅ Corrected information in your report."
             send_message(chat_id, f"{message}\n\n{summary}")
             return "ok", 200
         
@@ -4304,7 +4310,9 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                 suggestion_text = "You might also want to add: " + ", ".join(missing_suggestions)
                 send_message(chat_id, suggestion_text)
         else:
-            send_message(chat_id, "⚠️ No changes were made to your report.")
+            # Only say "no changes" if we didn't already handle delete/correct above
+            if "delete" not in extracted and "correct" not in extracted:
+                send_message(chat_id, "⚠️ No changes were made to your report.")
 
         return "ok", 200
         
