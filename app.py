@@ -335,10 +335,16 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(data["people"], list):
             result["people"] = []
             for person in data["people"]:
+                person_name = None
                 if isinstance(person, str):
-                    result["people"].append(person)
+                    person_name = person
                 elif isinstance(person, dict) and "name" in person:
-                    result["people"].append(person["name"])
+                    person_name = person["name"]
+                
+                # Clean up "myself" references - this would need chat context to work properly
+                # For now, just add the name as-is
+                if person_name:
+                    result["people"].append(person_name)
     
     # Roles
     if "roles" in data:
@@ -348,15 +354,48 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                 if isinstance(role, dict) and "name" in role and "role" in role:
                     result["roles"].append({"name": role["name"], "role": role["role"]})
     
-    # Tools
+    # Tools - deduplicate
     if "tools" in data:
         if isinstance(data["tools"], list):
             result["tools"] = []
+            seen_tools = set()
             for tool in data["tools"]:
                 if isinstance(tool, dict) and "item" in tool:
-                    result["tools"].append({"item": tool["item"]})
+                    item = tool["item"].lower().strip()
+                    if item not in seen_tools:
+                        seen_tools.add(item)
+                        result["tools"].append({"item": tool["item"]})
                 elif isinstance(tool, str):
-                    result["tools"].append({"item": tool})
+                    item = tool.lower().strip()
+                    if item not in seen_tools:
+                        seen_tools.add(item)
+                        result["tools"].append({"item": tool})
+    
+    # Fix misclassified items - move activities from tools to activities
+    if "tools" in result:
+        tools_to_remove = []
+        activities_to_add = []
+        activity_keywords = ['pouring', 'laying', 'installing', 'building', 'constructing', 'assembling']
+        
+        for tool in result["tools"]:
+            if isinstance(tool, dict) and "item" in tool:
+                # Check if this "tool" is actually an activity
+                tool_text = tool["item"].lower()
+                if any(keyword in tool_text for keyword in activity_keywords):
+                    activities_to_add.append(tool["item"])
+                    tools_to_remove.append(tool)
+        
+        # Remove misclassified items from tools
+        for tool in tools_to_remove:
+            result["tools"].remove(tool)
+        
+        # Add them to activities if not already there
+        if activities_to_add:
+            if "activities" not in result:
+                result["activities"] = []
+            for activity in activities_to_add:
+                if activity not in result["activities"]:
+                    result["activities"].append(activity)
     
 
     # Services - deduplicate
@@ -4121,7 +4160,16 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                                         "summary", "detailed", "undo_last", "error",
                                         "yes_confirm", "no_confirm", "spelling_correction"]]
         
-   
+        # Handle delete and correct operations first - they need summaries
+        if "delete" in extracted or "correct" in extracted:
+            summary = summarize_report(session["structured_data"])
+            if "correct" in extracted:
+                message = "✅ Corrected information in your report."
+            else:
+                message = "✅ Deleted information from your report."
+            send_message(chat_id, f"{message}\n\n{summary}")
+            return "ok", 200
+            
         # Always show summary after corrections or deletions
         if "correct" in extracted or "delete" in extracted:
             summary = summarize_report(session["structured_data"])
@@ -4132,18 +4180,18 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             send_message(chat_id, f"{message}\n\n{summary}")
             return "ok", 200
         
-        if changed_fields or "delete" in extracted:
-            # Determine the appropriate message
-            if "delete" in extracted:
-                message = "✅ Deleted information from your report."
-            elif "delete_entire" in extracted:
-                message = "✅ Cleared entire field from your report."
-            elif "correct" in extracted:
+        # Always show summary after corrections or deletions
+        if "correct" in extracted or "delete" in extracted:
+            summary = summarize_report(session["structured_data"])
+            if "correct" in extracted:
                 message = "✅ Corrected information in your report."
             else:
-                message = "✅ Updated report."
-
-            # Always show summary for any changes
+                message = "✅ Deleted information from your report."
+            send_message(chat_id, f"{message}\n\n{summary}")
+            return "ok", 200
+        
+        if changed_fields:
+            message = "✅ Updated report."
             summary = summarize_report(session["structured_data"])
             send_message(chat_id, f"{message}\n\n{summary}")
             
