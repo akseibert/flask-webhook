@@ -640,7 +640,7 @@ FIELD_PATTERNS = {
     "role_parentheses": r'^roles?:\s*([A-Za-z\s]+)\s*\(([^)]+)\)$',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
     "company": r'^(?:(?:add|insert)\s+)?(?:compan(?:y|ies)|firms?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
-    "service": r'^(?:(?:add|insert)\s+)?(?:services?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
+    "service": r'^(?:(?:add|insert)\s+)?(?:services?)\s*[:,]?\s*(.+?)$',
     "tool": r'^(?:.*?)?(?:tools?|used?|using)\s*[:,]?\s*(.+?)$|^(?:we|I|they|he|she|[A-Za-z]+)\s+(?:used?|using)\s+(.+?)$',
     "activity": r'^(?:(?:add|insert)\s+)?(?:activit(?:y|ies))\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "issue": r'^(?:(?:add|insert)\s+)?(?:issues?|problems?|delays?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
@@ -2622,8 +2622,28 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     services_text = re.sub(r'^add\s+', '', services_text, flags=re.IGNORECASE)
                     services_text = re.sub(r'^services?\s*[:,]?\s*', '', services_text, flags=re.IGNORECASE)
                     
+                    # Fix common misheard service names
+                    services_text = services_text.replace('Lei Ying Foundation', 'laying foundation')
+                    services_text = services_text.replace('lei ying foundation', 'laying foundation')
+                    services_text = services_text.replace('Lane Foundation', 'laying foundation')
+                    services_text = services_text.replace('lane foundation', 'laying foundation')
+                    
                     # Split on commas and 'and'
-                    services = [s.strip() for s in re.split(r',|\s+and\s+', services_text)]
+                    services = []
+                    for s in re.split(r',|\s+and\s+', services_text):
+                        service = s.strip()
+                        if service:
+                            # Capitalize properly
+                            if service.lower() == 'laying foundation':
+                                service = 'Laying Foundation'
+                            elif service.lower() == 'electric wiring':
+                                service = 'Electrical Wiring'
+                            elif service.lower() == 'electrical wiring':
+                                service = 'Electrical Wiring'
+                            else:
+                                service = ' '.join(word.capitalize() for word in service.split())
+                            services.append(service)
+                    
                     result["services"] = [{"task": service} for service in services if service]
                     return result
                     
@@ -3461,8 +3481,10 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             # Check if this item already exists
                             already_exists = False
                             for existing_value in existing_values:
-                                if string_similarity(item_value, existing_value) >= 0.8:  # Higher threshold for services
+                                similarity = string_similarity(item_value, existing_value)
+                                if similarity >= 0.75:  # Lowered threshold to catch "lei ying" vs "laying"
                                     already_exists = True
+                                    log_event("skipped_duplicate", field=field, value=task, existing=existing_value, similarity=similarity)
                                     break
                                     
                             if not already_exists:
@@ -3470,8 +3492,6 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                 changes.append(f"added service '{task}'")
                                 # Add to existing_values to prevent duplicates in same operation
                                 existing_values.append(item_value)
-                            else:
-                                log_event("skipped_duplicate", field=field, value=task)
 
                 elif field == "issues":
                     key = "description"
