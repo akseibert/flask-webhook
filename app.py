@@ -4431,6 +4431,7 @@ def webhook() -> tuple[str, int]:
             save_session(session_data)
         
         # Handle voice messages
+        # Handle voice messages
         if "voice" in message:
             try:
                 file_id = message["voice"]["file_id"]
@@ -4438,13 +4439,40 @@ def webhook() -> tuple[str, int]:
                     send_message(chat_id, "I'm processing your detailed report. This may take a moment...")
                 text, confidence = transcribe_voice(file_id)
 
+                # Special handling for number responses (for photo assignment)
+                # Handle both with and without period
+                text_cleaned = text.strip().lower().rstrip('.')
+                number_map = {
+                    'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
+                    'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10',
+                    'first': '1', 'second': '2', 'third': '3', 'fourth': '4', 'fifth': '5'
+                }
                 
-                # Special handling for single digit responses (for photo assignment)
-                if text.strip().lower() in ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']:
-                    number_map = {'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
-                                  'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10'}
-                    text = number_map.get(text.strip().lower(), text)
+                # Check if we're expecting a photo assignment response
+                pending_photos = [p for p in session_data.get(chat_id, {}).get("photos", []) if p.get("pending")]
+                
+                if pending_photos and text_cleaned in number_map:
+                    text = number_map[text_cleaned]
                     confidence = 1.0  # Override confidence for these simple commands
+                    # Now process it as a text response instead of going through normal command processing
+                    issue_index = int(text) - 1
+                    issues = session_data[chat_id]["structured_data"].get("issues", [])
+                    if 0 <= issue_index < len(issues):
+                        # Update the pending photo
+                        for photo in session_data[chat_id]["photos"]:
+                            if photo.get("pending"):
+                                photo["pending"] = False
+                                photo["issue_ref"] = str(issue_index + 1)
+                                photo["caption"] = f"Photo for issue {issue_index + 1}"
+                                # Mark this issue as having a photo
+                                issues[issue_index]["has_photo"] = True
+                                break
+                        send_message(chat_id, f"📸 Photo attached to issue {issue_index + 1}")
+                        save_session(session_data)
+                        return "ok", 200
+                    else:
+                        send_message(chat_id, f"Issue {text} not found. Please enter a valid issue number.")
+                        return "ok", 200
                 
                 # For short commands (less than 5 words), lower the threshold
                 if len(text.split()) < 5 and any(cmd in text.lower() for cmd in ["delete", "add", "category", "reset", "export", "segment", "site", "new", "yes", "no"]):
