@@ -2503,20 +2503,43 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                              item=last_item)
         
         # Handle simple spelling corrections for companies
-        correct_simple = re.match(r'^(?:correct\s+spelling\s+)?(?:companies?\s+)?(.+?)\s+(?:to|with)\s+(.+?)(?:\s*(?:,|\.|$))', normalized_text, re.IGNORECASE)
-        if correct_simple:
-            old_value = correct_simple.group(1).strip()
-            new_value = correct_simple.group(2).strip()
-            
-            # Clean up the old value - remove "companies" if it got included
-            old_value = re.sub(r'^companies?\s+', '', old_value, flags=re.IGNORECASE)
-            
-            # For "Key, Back" style corrections, handle as a single company
-            if ',' in old_value and ',' not in new_value:
-                # This is correcting a multi-word company name to a single name
-                return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
-            else:
-                return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
+    
+        correct_patterns = [
+            r'^correct\s+spelling\s+(.+?)\s+(?:to|with)\s+(.+?)$',
+            r'^correct\s+(.+?)\s+(?:to|with)\s+(.+?)$',
+            r'^(?:companies?\s+)?correct\s+spelling\s+(.+?)\s+(?:to|with)\s+(.+?)$'
+        ]
+        
+        for pattern in correct_patterns:
+            correct_match = re.match(pattern, normalized_text, re.IGNORECASE)
+            if correct_match:
+                old_value = correct_match.group(1).strip()
+                new_value = correct_match.group(2).strip()
+                
+                # Clean up values
+                old_value = re.sub(r'^(?:of\s+|for\s+)?', '', old_value, flags=re.IGNORECASE)
+                old_value = re.sub(r'^companies?\s+', '', old_value, flags=re.IGNORECASE)
+                
+                # Determine field based on content
+                field = None
+                if any(suffix in old_value.lower() or suffix in new_value.lower() 
+                       for suffix in ['ag', 'gmbh', 'ltd', 'inc', 'corp', 'llc']):
+                    field = "companies"
+                else:
+                    # Try to guess field from existing data
+                    if chat_id and chat_id in session_data:
+                        existing_data = session_data[chat_id].get("structured_data", {})
+                        # Check companies
+                        for company in existing_data.get("companies", []):
+                            if isinstance(company, dict) and company.get("name"):
+                                if string_similarity(company["name"].lower(), old_value.lower()) >= 0.5:
+                                    field = "companies"
+                                    break
+                
+                if not field:
+                    field = "companies"  # Default to companies for now
+                
+                return {"correct": [{"field": field, "old": old_value, "new": new_value}]}
         
         # Check for basic commands first
         if normalized_text.lower() in ("yes", "y", "ya", "yeah", "yep", "yup", "okay", "ok"):
