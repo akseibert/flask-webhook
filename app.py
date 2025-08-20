@@ -3492,6 +3492,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                     
                             if not already_exists:
                                 result[field].append({"task": task})
+                                existing_values.append(item_value)  # ADD THIS LINE to prevent duplicates within same operation
                                 changes.append(f"added service '{task}'")
                             else:
                                 log_event("skipped_duplicate", field=field, value=task)
@@ -4220,8 +4221,8 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         session["structured_data"] = enrich_date(session["structured_data"])
         save_session(session_data)
 
-        # Check if we just did a delete or correct operation
-        if "delete" in extracted or "correct" in extracted:
+        # Always show report after delete or correct operations
+        if "delete" in extracted or "correct" in extracted or "spelling_correction" in extracted:
             summary = summarize_report(session["structured_data"])
             if "correct" in extracted:
                 message = "✅ Corrected information in your report."
@@ -4232,21 +4233,13 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             send_message(chat_id, f"{message}\n\n{summary}")
             return "ok", 200
 
-        # Always send summary after delete or correct operations
-        if "delete" in extracted or "correct" in extracted:
-            summary = summarize_report(session["structured_data"])
-            if "correct" in extracted:
-                message = "✅ Corrected information in your report."
-            elif "delete" in extracted:
-                message = "✅ Deleted information from your report."
-            send_message(chat_id, f"{message}\n\n{summary}")
-            return "ok", 200
+        
 
         # Prepare feedback
         changed_fields = [field for field in extracted.keys() 
                         if field not in ["help", "reset", "undo", "status", "export_pdf", 
                                         "summary", "detailed", "undo_last", "error",
-                                        "yes_confirm", "no_confirm", "spelling_correction"]]
+                                        "yes_confirm", "no_confirm"]] 
         
         # Always show summary after corrections or deletions
         if "correct" in extracted or "delete" in extracted:
