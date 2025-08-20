@@ -3285,12 +3285,28 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 elif field == "companies":
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                     
-                    matched = False  # Initialize matched variable
-
-                    # Check if we're correcting based on the old value matching
-                    if old_value.lower() == "of electro mayer" or "of " in old_value.lower():
-                        # Remove "of " prefix if present
-                        clean_old = old_value.replace("of ", "").strip()
+                    matched = False
+                    
+                    # Handle special case for spelling corrections like "correct spelling of X to Y"
+                    if "spelling of " in old_value.lower():
+                        # Extract the actual old name by removing "spelling of "
+                        old_name = re.sub(r'^(correct )?spelling of ', '', old_value, flags=re.IGNORECASE).strip()
+                    else:
+                        old_name = old_value.strip()
+                    
+                    for i, company in enumerate(result[field]):
+                        if isinstance(company, dict) and company.get("name") and \
+                        string_similarity(company["name"].lower(), old_name.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                            company["name"] = new_value
+                            matched = True
+                            changes.append(f"corrected company '{old_value}' to '{new_value}'")
+                            break
+                    
+                    if not matched:
+                        # If no match, add the new company
+                        result[field].append({"name": new_value})
+                        changes.append(f"added corrected company '{new_value}'")
+                        
                         
                         # Find the best match
                         for i, company in enumerate(result[field]):
@@ -4484,7 +4500,6 @@ def webhook() -> tuple[str, int]:
                     handle_reset(chat_id, session_data[chat_id])
                     session_data[chat_id]["awaiting_reset_confirmation"] = False
                     save_session(session_data)
-                    send_message(chat_id, "✅ Report reset to blank.")
                 elif text.lower() in ['no', 'nope', 'nah', 'negative', 'nein', 'nee', 'no thanks']:
                     session_data[chat_id]["awaiting_reset_confirmation"] = False
                     save_session(session_data)
