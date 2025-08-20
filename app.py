@@ -689,7 +689,7 @@ FIELD_PATTERNS = {
     "delete_specific": r'^(?:delete|remove)\s+(.+?)\s+from\s+(\w+)(?:\s*(?:,|\.|$))',
     "delete_field": r'^(?:delete|remove|clear)\s+(.+?)(?:\s*(?:,|\.|$))',
     "delete_item": r'^(?:delete|remove)\s+(?:company|firm)\s+(.+?)(?:\s*(?:,|\.|$))',
-    "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+(.+?)(?:\s+in\s+(.+?))?\s*(?:to\s+(.+?))?(?:\s*(?:,|\.|$))',
+    "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+(.+?)\s+(?:in\s+(.+?)\s+)?to\s+(.+?)(?:\s*(?:,|\.|$))',
     "correct_simple": r'^(?:companies?\s+)?correct\s+spelling\s+(.+?)(?:\s*(?:,|\.|$))',
     "help": r'^help(?:\s+on\s+([a-z_]+))?$|^\/help(?:\s+([a-z_]+))?$',
     "undo_last": r'^undo\s+last\s*[.!]?$|^undo\s+last\s+(?:change|modification|edit)\s*[.!]?$',
@@ -2140,6 +2140,14 @@ def debug_command_matching(text: str, chat_id: str) -> List[Dict[str, Any]]:
 def string_similarity(a: str, b: str) -> float:
     """Calculate string similarity ratio between two strings"""
     try:
+        # Handle None values
+        if a is None or b is None:
+            return 0.0
+        
+        # Convert to strings and handle empty strings
+        a = str(a).strip()
+        b = str(b).strip()
+        
         if not a or not b:
             return 0.0
             
@@ -2978,16 +2986,30 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return {}
                     
                 elif field == "correct":
-                    raw_field = match.group(1).lower() if match.group(1) else None
-                    old_value = match.group(2).strip() if match.group(2) else None
-                    new_value = match.group(3).strip() if match.group(3) else None
-                    field_name = FIELD_MAPPING.get(raw_field, raw_field) if raw_field else None
+                    # Safely extract groups
+                    groups = match.groups()
+                    old_value = groups[0].strip() if len(groups) > 0 and groups[0] else None
+                    field_name = groups[1].strip() if len(groups) > 1 and groups[1] else None
+                    new_value = groups[2].strip() if len(groups) > 2 and groups[2] else None
+                    
+                    # Map field name if provided
+                    if field_name:
+                        field_name = FIELD_MAPPING.get(field_name.lower(), field_name.lower())
                     
                     if old_value:
                         if new_value:
-                            return {"correct": [{"field": field_name, "old": old_value, "new": new_value}]}
+                            # If we have all three parts
+                            if field_name:
+                                return {"correct": [{"field": field_name, "old": old_value, "new": new_value}]}
+                            else:
+                                # Try to guess the field from context
+                                return {"correct": [{"field": None, "old": old_value, "new": new_value}]}
                         else:
+                            # Only old value provided, entering correction mode
                             return {"spelling_correction": {"field": field_name, "old_value": old_value}}
+                    
+                    # If nothing matched properly, return empty
+                    return {}
                             
                 elif field == "reset":
                     return {"reset": True}
@@ -3379,6 +3401,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
             new_data.pop(field)
     
     # Handle correcting values
+    # Handle correcting values
     if "correct" in new_data:
         corrections = new_data.pop("correct")
         for correction in corrections:
@@ -3386,7 +3409,29 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
             old_value = correction.get("old")
             new_value = correction.get("new")
             
+            # If field is None, try to find which field contains the old value
+            if not field and old_value and new_value:
+                # Try to find the value in any field
+                for check_field in LIST_FIELDS + SCALAR_FIELDS:
+                    if check_field in result:
+                        if check_field in SCALAR_FIELDS:
+                            if string_similarity(result[check_field].lower(), old_value.lower()) >= 0.7:
+                                field = check_field
+                                break
+                        elif check_field == "companies":
+                            for company in result.get("companies", []):
+                                if isinstance(company, dict) and company.get("name"):
+                                    if string_similarity(company["name"].lower(), old_value.lower()) >= 0.7:
+                                        field = "companies"
+                                        break
+                        elif check_field == "people":
+                            for person in result.get("people", []):
+                                if string_similarity(person.lower(), old_value.lower()) >= 0.7:
+                                    field = "people"
+                                    break
+            
             if not field or not old_value or not new_value:
+                log_event("correction_incomplete", field=field, old=old_value, new=new_value)
                 continue
                 
             if field in SCALAR_FIELDS:
@@ -3496,7 +3541,12 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                     closest_match = company["name"]
                         
                         if closest_match and best_score > 0.3:
-                            log_event("correction_no_match_found", old=old_value, closest=closest_match, score=best_score)
+                            log_event("correction_no_match_found", 
+                                    old=old_value, 
+                                    closest=closest_match, 
+                                    score=best_score)
+                            # Suggest the closest match to the user
+                            send_message(chat_id, f"Could not find exact match for '{old_value}'. Did you mean '{closest_match}'?")
 
                     if not matched:
                         # If no match, add the new company
