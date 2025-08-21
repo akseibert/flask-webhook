@@ -2792,6 +2792,45 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result["people"] = []
                     result["roles"] = []
                     
+                    # Check if there's "as" in the text indicating roles
+                    if " as " in people_text.lower():
+                        # Parse "Name as Role" pattern for multiple people
+                        # Handle "Anna as supervisor" or "Anna, Marcus as supervisors"
+                        parts = people_text.split(',')
+                        
+                        for part in parts:
+                            part = part.strip()
+                            if " as " in part.lower():
+                                as_match = re.match(r'(.+?)\s+as\s+(.+)', part, re.IGNORECASE)
+                                if as_match:
+                                    name = as_match.group(1).strip()
+                                    role = as_match.group(2).strip()
+                                    
+                                    # Handle plural roles like "supervisors"
+                                    if role.lower().endswith('s') and role.lower() != "progress":
+                                        role = role[:-1]  # Remove 's' to singularize
+                                    
+                                    result["people"].append(name)
+                                    result["roles"].append({"name": name, "role": role.title()})
+                            else:
+                                # Just a name without role
+                                if part:
+                                    result["people"].append(part)
+                    else:
+                        # No roles, just parse names
+                        people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
+                        result["people"] = [p for p in people if p]
+                    
+                    return result
+                    
+                    
+                    # Clean up the people text
+                    people_text = re.sub(r'^add\s+', '', people_text, flags=re.IGNORECASE)
+                    people_text = re.sub(r'^people\s*,?\s*', '', people_text, flags=re.IGNORECASE)
+                    
+                    result["people"] = []
+                    result["roles"] = []
+                    
                     # Check if there's a role specified
                     if " as " in people_text.lower():
                         # Parse "Name as Role" pattern - handle commas in roles
@@ -4305,12 +4344,12 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         # Check if we did a delete or correct operation
         if "delete" in extracted:
             summary = summarize_report(session["structured_data"])
-            # Check what was deleted from the merged_data changes
+            # Always show success for delete operations
             delete_info = extracted.get("delete", {})
-            if delete_info.get("category"):
-                message = f"✅ Deleted {delete_info['category']}."
-            elif delete_info.get("value"):
+            if delete_info.get("value"):
                 message = f"✅ Deleted '{delete_info['value']}' from your report."
+            elif delete_info.get("category"):
+                message = f"✅ Cleared all {delete_info['category']}."
             else:
                 message = "✅ Deleted information from your report."
             send_message(chat_id, f"{message}\n\n{summary}")
