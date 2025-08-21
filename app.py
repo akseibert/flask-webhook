@@ -165,8 +165,8 @@ Extract information into these fields (only include fields that are explicitly m
 - segment: string - specific section or area within the site (e.g., "5", "North Wing", "Foundation")
 - category: string - classification of work or report (e.g., "Bestand", "Safety", "Progress", "Mängelerfassung")
 - companies: list of objects with company names [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}]
-- people: list of strings with names of individuals on site ["Anna Keller", "John Smith"]
-- roles: list of objects associating people with roles [{"name": "Anna Keller", "role": "Supervisor"}]
+- people: list of strings with ALL names of individuals mentioned (extract every person) ["Anna Keller", "John Smith", "Maxwell", "Stefan", "me"]
+- roles: list of objects associating ALL people with their roles - extract every person-role pair mentioned [{"name": "Anna Keller", "role": "Supervisor"}, {"name": "Maxwell", "role": "Technical Engineer"}, {"name": "Stefan", "role": "Worker"}]
 - tools: list of objects with equipment/tools [{"item": "mobile crane"}, {"item": "welding equipment"}]
 - services: list of objects with services provided [{"task": "electrical wiring"}, {"task": "HVAC installation"}]
 - activities: list of strings describing work performed ["laying foundations", "setting up scaffolding"]
@@ -193,6 +193,12 @@ Deletion commands (parse these accurately):
 
 Correction commands:
 - If input is "correct X in Y to Z" or similar: return {"correct": [{"field": "Y", "old": "X", "new": "Z"}]}
+CRITICAL for people and roles extraction:
+- When you see patterns like "X as Y, A as B, C was doing D, and me as E", extract ALL people mentioned
+- Extract "me" as a person (keep it as "me" unless context provides a specific name)
+- Don't stop after finding the first person - continue parsing the entire sentence
+- "Stefan was laying the electrical wiring" means Stefan is a person with implied role
+- Always extract ALL people mentioned, even if their role isn't specified
 - For spelling corrections like "correct spelling of X to Y" in companies or other fields, treat as correction in that field
 
 For voice inputs, handle common transcription errors like:
