@@ -2502,7 +2502,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
             # Skip non-field patterns
             if raw_field in ["reset", "delete", "correct", "clear", "help", 
                         "undo_last", "context_add", "summary", "detailed", 
-                        "delete_entire", "export_pdf",  "yes_confirm", "no_confirm",
+                        "delete_entire", "export_pdf", "yes_confirm", "no_confirm",
                         "delete_category", "delete_field", "delete_item", "delete_specific",
                         "update_field", "greeting", "conversation", "export",
                         "voice_add_site", "voice_companies", "voice_people_roles",
@@ -2517,9 +2517,8 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
             field = FIELD_MAPPING.get(raw_field, raw_field)
             log_event("field_matched", raw_field=raw_field, mapped_field=field)
             
-            # Process each field type independently
+            # Handle each field type with independent if statements
             if field == "site_name":
-                # Skip site_name matches that look like commands
                 if re.search(r'\b(add|insert|delete|remove|correct|adjust|update|spell|none|as|role|new|reset)\b', cmd.lower()):
                     log_event("skipped_site_name", reason="command-like input")
                     continue
@@ -2549,9 +2548,9 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     if role:
                         result["roles"] = [{"name": name, "role": role.title()}]
                     return result
+                continue
             
             if field == "roles":
-                # Check if this is the supervisor pattern
                 if raw_field == "supervisor":
                     value = clean_value(match.group(1), "roles")
                     supervisor_names = [name.strip() for name in re.split(r'\s+and\s+|,', value) if name.strip()]
@@ -2559,7 +2558,6 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     result["people"] = supervisor_names
                     return result
                 
-                # Regular role handling
                 name = None
                 role = None
                 
@@ -2568,7 +2566,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                         group_text = match.group(i)
                         if not name and re.match(r'^[A-Za-z]+(\s+[A-Za-z]+)?$', group_text):
                             name = clean_value(group_text, field)
-                        elif name and not role:
+                        if name and not role:
                             role_text = re.sub(r'^(?:the|a|an)\s+', '', group_text)
                             role = clean_value(role_text, field).title()
                 
@@ -2577,6 +2575,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     result["people"] = [name]
                     result["roles"] = [{"name": name, "role": role}]
                     return result
+                continue
             
             if field == "companies":
                 captured = clean_value(match.group(1) if match.group(1) else "", field)
@@ -2651,7 +2650,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                 result[field_name] = [] if field_name in LIST_FIELDS else ""
                 return result
             
-            # Default handler for any other fields
+            # Default handler
             value = clean_value(match.group(1), field) if match.group(1) else ""
             if value.lower() == "none":
                 result[field] = "" if field in SCALAR_FIELDS else []
@@ -2666,29 +2665,20 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
             category = None
             value = None
             
-            # Parse different delete syntax patterns
-            if groups[0]:  # "delete category value"
-                category = FIELD_MAPPING.get(groups[0].lower(), groups[0])
-                value = groups[1].strip() if groups[1] else None
-            elif groups[2] and groups[3]:  # "delete value from category"
-                category = FIELD_MAPPING.get(groups[3].lower(), groups[3])
-                value = groups[2].strip()
-            elif groups[4] and groups[5]:  # "category delete value"
-                category = FIELD_MAPPING.get(groups[4].lower(), groups[4])
-                value = groups[5].strip() if groups[5] else None
-            elif groups[6]:  # "delete value" (no category)
-                value = groups[6].strip()
+            if groups[0]:
+                value = groups[0].strip()
+            if len(groups) > 1 and groups[1]:
+                category = groups[1].strip()
             
             return {"delete": {"category": category, "value": value}}
-
-            
+        
         # Check for delete entire category
         delete_entire_match = re.match(FIELD_PATTERNS["delete_entire"], cmd, re.IGNORECASE)
         if delete_entire_match:
             field = delete_entire_match.group(1).lower()
             mapped_field = FIELD_MAPPING.get(field, field)
             return {mapped_field: {"delete": True}}
-            
+        
         # Check for correction commands
         correct_match = re.match(FIELD_PATTERNS["correct"], cmd, re.IGNORECASE)
         if correct_match:
@@ -2703,10 +2693,9 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                 if new_value:
                     return {"correct": [{"field": field, "old": clean_value(old_value, field), "new": clean_value(new_value, field)}]}
                 else:
-                    # If no new value provided, we'll enter the correction mode
                     return {"spelling_correction": {"field": field, "old_value": clean_value(old_value, field)}}
         
-        # If we get here, no pattern matched for this command
+        # If we get here, no pattern matched
         return {}
     except Exception as e:
         log_event("extract_single_command_error", input=cmd, error=str(e))
@@ -3904,7 +3893,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             result[field][best_index]["name"] = new_value
                             matched = True
                             changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
-                            log_event("corrected_company", old=old_company_name, new=new_value)
+                            log_event("corrected_company", o    ld=old_company_name, new=new_value)
                         else:
                             matched = True  # Mark as matched but don't add duplicate change
                     
