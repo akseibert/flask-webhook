@@ -159,6 +159,13 @@ You understand specific construction terminology, abbreviations, and common miss
 CRITICAL: You're processing input from a construction site worker who might be using voice recognition in a noisy environment, 
 so account for audio transcription errors and construction-specific terminology.
 
+IMPORTANT: Voice transcription often incorrectly adds commas between words that belong together. For example:
+- "Build, Tech AG" should be understood as "BuildTech AG"
+- "Construction, Bro, GmbH" should be understood as "ConstructionBro GmbH" or "Construction Bro GmbH"
+- "Electric Solutions, Ltd" should be understood as "Electric Solutions Ltd"
+
+When you see company names with AG, GmbH, Ltd, Inc, LLC, Corp suffixes, treat the words before the suffix as part of the company name, even if separated by commas.
+
 Extract information into these fields (only include fields that are explicitly mentioned):
 
 - site_name: string - physical location or project name (e.g., "Downtown Project", "Building 7")
@@ -334,29 +341,48 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
     
     # Handle structured list fields
     # Companies
+    # Companies
     if "companies" in data:
         if isinstance(data["companies"], list):
             result["companies"] = []
             for company in data["companies"]:
                 if isinstance(company, dict) and "name" in company:
-                    # Clean up company name - handle cases like "Electric Maya, GMBH" 
-                    company_name = company["name"]
-                    # Don't split if it's a single company with GMBH/AG/etc
-                    if not (company_name.count(',') == 1 and any(suffix in company_name.upper() for suffix in ['GMBH', 'AG', 'LTD', 'INC', 'LLC'])):
-                        # Split on comma if there are multiple companies
-                        for comp in re.split(r',\s*', company_name):
-                            if comp.strip():
-                                result["companies"].append({"name": comp.strip()})
-                    else:
+                    company_name = company["name"].strip()
+                    
+                    # Skip empty or invalid company names
+                    if not company_name or company_name.lower() in ['build', 'tech', 'electric', 'construction']:
+                        continue
+                    
+                    # Check if this looks like a complete company name
+                    has_suffix = any(suffix in company_name.upper() for suffix in ['GMBH', 'AG', 'LTD', 'INC', 'LLC', 'CORP'])
+                    
+                    if has_suffix:
+                        # It's a complete company name, add as-is
                         result["companies"].append({"name": company_name})
-                elif isinstance(company, str):
-                    # Same logic for string companies
-                    if not (company.count(',') == 1 and any(suffix in company.upper() for suffix in ['GMBH', 'AG', 'LTD', 'INC', 'LLC'])):
-                        for comp in re.split(r',\s*', company):
-                            if comp.strip():
-                                result["companies"].append({"name": comp.strip()})
                     else:
-                        result["companies"].append({"name": company})
+                        # Might be multiple companies or needs cleaning
+                        # But don't split single words
+                        if ',' in company_name and ' ' in company_name:
+                            # Could be multiple companies
+                            for comp in re.split(r',\s*(?=\w+\s+\w+)', company_name):
+                                if comp.strip() and len(comp.strip()) > 3:
+                                    result["companies"].append({"name": comp.strip()})
+                        else:
+                            # Single company without suffix
+                            if len(company_name) > 3:  # Skip very short names
+                                result["companies"].append({"name": company_name})
+                elif isinstance(company, str):
+                    company_name = company.strip()
+                    
+                    # Skip empty or invalid company names
+                    if not company_name or company_name.lower() in ['build', 'tech', 'electric', 'construction']:
+                        continue
+                        
+                    # Same logic for string companies
+                    has_suffix = any(suffix in company_name.upper() for suffix in ['GMBH', 'AG', 'LTD', 'INC', 'LLC', 'CORP'])
+                    
+                    if has_suffix or len(company_name) > 3:
+                        result["companies"].append({"name": company_name})
     
     # People
     if "people" in data:
@@ -380,7 +406,11 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
             result["roles"] = []
             for role in data["roles"]:
                 if isinstance(role, dict) and "name" in role and "role" in role:
-                    result["roles"].append({"name": role["name"], "role": role["role"]})
+                    # Capitalize the role title properly
+                    role_title = role["role"]
+                    # Capitalize first letter of each word in the role
+                    role_title = ' '.join(word.capitalize() for word in role_title.split())
+                    result["roles"].append({"name": role["name"], "role": role_title})
     
     # Tools - deduplicate
     if "tools" in data:
@@ -1224,6 +1254,26 @@ def normalize_transcription(text: str) -> str:
     
     return text.strip()
 
+def normalize_voice_companies(text: str) -> str:
+    """Fix common voice transcription errors in company names"""
+    # Pattern to fix company names split by commas before suffixes
+    company_suffixes = ['AG', 'GmbH', 'Ltd', 'Limited', 'Inc', 'LLC', 'Corp', 'Corporation', 'S.A.', 'S.L.', 'B.V.', 'N.V.']
+    
+    for suffix in company_suffixes:
+        # Fix patterns like "Build, Tech AG" -> "BuildTech AG"
+        pattern = r'(\w+),\s*(\w+),?\s*(' + re.escape(suffix) + r')\b'
+        text = re.sub(pattern, r'\1\2 \3', text, flags=re.IGNORECASE)
+        
+        # Fix patterns like "Electric Solutions, Ltd" -> "Electric Solutions Ltd"
+        pattern = r'(\w+\s+\w+),\s*(' + re.escape(suffix) + r')\b'
+        text = re.sub(pattern, r'\1 \2', text, flags=re.IGNORECASE)
+        
+        # Fix patterns like "Construction, Bro, GmbH" -> "Construction Bro GmbH"
+        pattern = r'(\w+),\s*(\w+),\s*(' + re.escape(suffix) + r')\b'
+        text = re.sub(pattern, r'\1 \2 \3', text, flags=re.IGNORECASE)
+    
+    return text
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def send_pdf(chat_id: str, pdf_buffer: io.BytesIO, report_type: str = "standard") -> bool:
     """Send PDF report to user"""
@@ -1951,36 +2001,58 @@ def suggest_missing_fields(data: Dict[str, Any]) -> List[str]:
     """Intelligently suggest missing fields based on report context"""
     suggestions = []
     
-    # Basic required fields
+    # Check if this is basically an empty report (only has date and maybe one field)
+    non_empty_fields = sum(1 for field, value in data.items() 
+                          if field != "date" and value and 
+                          (value != [] if isinstance(value, list) else value != ""))
+    
+    # If report is mostly empty, suggest the most important fields first
+    if non_empty_fields <= 2:
+        if not data.get("site_name"):
+            suggestions.append("site name")
+        if not data.get("segment"):
+            suggestions.append("segment")
+        if not data.get("category"):
+            suggestions.append("category")
+        return suggestions[:3]  # Only suggest top 3 for empty reports
+    
+    # Otherwise, use context-based suggestions for reports with more content
+    # Basic required field (only if not already added above)
     if not data.get("site_name"):
         suggestions.append("site name")
-        
+    
     # Context-based suggestions
     if data.get("activities") and not data.get("time"):
         suggestions.append("time spent")
-        
+    
     if data.get("activities") and not data.get("companies") and not data.get("people"):
         suggestions.append("people or companies involved")
-        
+    
     if data.get("issues") and not data.get("impression"):
         suggestions.append("overall impression")
-        
-    if data.get("site_name") and not data.get("weather") and not data.get("activities"):
-        suggestions.append("activities performed")
-        
+    
+    # Only suggest activities if we have a site but no activities yet
+    if data.get("site_name") and not data.get("activities"):
+        if not data.get("weather"):
+            suggestions.append("weather conditions")
+        else:
+            suggestions.append("activities performed")
+    
     if len(data.get("activities", [])) > 2 and not data.get("tools"):
         suggestions.append("tools used")
-        
+    
     # Site context suggestions
-    if data.get("site_name") and "install" in " ".join(data.get("activities", [])).lower():
-        if not data.get("services"):
+    if data.get("site_name") and data.get("activities"):
+        activities_text = " ".join(data.get("activities", [])).lower()
+        if "install" in activities_text and not data.get("services"):
             suggestions.append("services provided")
-            
-    if data.get("site_name") and any(issue.get("description", "").lower().find("delay") >= 0 
-                                     for issue in data.get("issues", [])):
-        if not data.get("comments"):
+    
+    if data.get("issues"):
+        has_delay = any(issue.get("description", "").lower().find("delay") >= 0 
+                       for issue in data.get("issues", []))
+        if has_delay and not data.get("comments"):
             suggestions.append("comments on how to address delays")
-            
+    
     return suggestions[:3]  # Limit to 3 suggestions
 
 # --- Data Processing ---
@@ -4559,6 +4631,7 @@ def webhook() -> tuple[str, int]:
         chat_id = str(message["chat"]["id"])
         
         # Initialize session if not exists
+        # Initialize session if not exists
         if chat_id not in session_data:
             session_data[chat_id] = {
                 "structured_data": blank_report(),
@@ -4580,6 +4653,12 @@ def webhook() -> tuple[str, int]:
                 "photos": [],
             }
             save_session(session_data)
+            
+            # Send welcome message for new session
+            send_message(chat_id, 
+                "👋 Welcome! I'll help you create a construction site report.\n\n"
+                "Start by adding your site name: 'site: [location]'\n"
+                "Or say 'help' for more information.")
         
         # Handle voice messages
         # Handle voice messages
@@ -4589,6 +4668,10 @@ def webhook() -> tuple[str, int]:
                 if message["voice"].get("duration", 0) > 20:  # If longer than 20 seconds
                     send_message(chat_id, "I'm processing your detailed report. This may take a moment...")
                 text, confidence = transcribe_voice(file_id)
+                
+                # Normalize company names that were incorrectly split by voice transcription
+                text = normalize_voice_companies(text)
+                log_event("voice_normalized", original=text, normalized=text)
 
                 # Special handling for number responses (for photo assignment)
                 # Handle both with and without period
