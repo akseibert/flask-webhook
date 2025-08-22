@@ -4355,7 +4355,7 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     )
                     save_session(session_data)
                     summary = summarize_report(session_data[chat_id]["structured_data"])
-                    send_message(chat_id, f"✅ I've extracted the following information from your report:\n\n{summary}")
+                    send_message(chat_id, f"📋 Report:\n{summary}")
                     return "ok", 200
 
         # For complex commands with multiple fields (especially from voice)
@@ -4375,12 +4375,6 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     save_session(session_data)
                     summary = summarize_report(session["structured_data"])
                     send_message(chat_id, f"✅ Processed multiple commands.\n\n{summary}")
-                    
-                    # Suggest missing fields if applicable
-                    missing_suggestions = suggest_missing_fields(session["structured_data"])
-                    if missing_suggestions:
-                        suggestion_text = "You might also want to add: " + ", ".join(missing_suggestions)
-                        send_message(chat_id, suggestion_text)
                     
                     return "ok", 200
         
@@ -4515,67 +4509,16 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                                         "delete", "correct"]]
         
         # Check if we did a delete or correct operation
-        # Check if we did a delete or correct operation
-        if "delete" in extracted:
-            summary = summarize_report(session["structured_data"])
-            # Always show success for delete operations
-            delete_info = extracted.get("delete", {})
-            if delete_info.get("value"):
-                message = f"✅ Deleted '{delete_info['value']}' from your report."
-            elif delete_info.get("category"):
-                message = f"✅ Cleared all {delete_info['category']}."
-            else:
-                message = "✅ Deleted information from your report."
-            
-            # Always show the full updated report
-            send_message(chat_id, f"{message}\n\n**Updated Report:**\n{summary}")
-            return "ok", 200
-            
-        if "correct" in extracted:
-            summary = summarize_report(session["structured_data"])
-            # Get correction details
-            corrections = extracted.get("correct", [])
-            if corrections and len(corrections) > 0:
-                corr = corrections[0]
-                message = f"✅ Corrected {corr.get('field', 'field')}: '{corr.get('old', '')}' → '{corr.get('new', '')}'."
-            else:
-                message = "✅ Corrected information in your report."
-            
-            # Always show the full updated report
-            send_message(chat_id, f"{message}\n\n**Updated Report:**\n{summary}")
-            return "ok", 200
+        # Prepare feedback - check what was actually changed
+        changed_fields = [field for field in extracted.keys() 
+                        if field not in ["help", "reset", "undo", "status", "export_pdf", 
+                                        "summary", "detailed", "undo_last", "error",
+                                        "yes_confirm", "no_confirm", "spelling_correction",
+                                        "delete", "correct"]]
         
-        if changed_fields:
-            message = "✅ Updated report."
-            summary = summarize_report(session["structured_data"])
-            send_message(chat_id, f"{message}\n\n**Updated Report:**\n{summary}")
-            
-            # Add intelligent suggestions only if changes were actually made
-            missing_suggestions = suggest_missing_fields(session["structured_data"])
-            if missing_suggestions:
-                suggestion_text = "You might also want to add: " + ", ".join(missing_suggestions)
-                send_message(chat_id, suggestion_text)
-        else:
-            # Only say "no changes" if we didn't already handle delete/correct above
-            if "delete" not in extracted and "correct" not in extracted:
-                send_message(chat_id, "⚠️ No changes were made to your report.")
-
-        return "ok", 200
-        
-        if changed_fields:
-            message = "✅ Updated report."
-            summary = summarize_report(session["structured_data"])
-            send_message(chat_id, f"{message}\n\n{summary}")
-            
-            # Add intelligent suggestions only if changes were actually made
-            if changed_fields:
-                missing_suggestions = suggest_missing_fields(session["structured_data"])
-                if missing_suggestions:
-                    suggestion_text = "You might also want to add: " + ", ".join(missing_suggestions)
-                    send_message(chat_id, suggestion_text)
-            else:
-                send_message(chat_id, "⚠️ No changes were made to your report.")
-
+        # ALWAYS show the report after any command, regardless of what happened
+        summary = summarize_report(session["structured_data"])
+        send_message(chat_id, f"📋 Report:\n{summary}")
         return "ok", 200
         
     except Exception as e:
@@ -4654,13 +4597,8 @@ def webhook() -> tuple[str, int]:
             }
             save_session(session_data)
             
-            # Send welcome message for new session
-            send_message(chat_id, 
-                "👋 Welcome! I'll help you create a construction site report.\n\n"
-                "Start by adding your site name: 'site: [location]'\n"
-                "Or say 'help' for more information.")
         
-        # Handle voice messages
+    
         # Handle voice messages
         if "voice" in message:
             try:
