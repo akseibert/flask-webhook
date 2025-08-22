@@ -233,6 +233,8 @@ Extract information into these fields (only include fields that are explicitly m
 - roles: list of {"name": "person", "role": "their role"} for ALL people with specific roles mentioned
   CRITICAL: When you see "John Smith as site manager, Anna Weber as safety officer", extract BOTH:
   [{"name": "John Smith", "role": "Site Manager"}, {"name": "Anna Weber", "role": "Safety Officer"}]
+  When you see "Lisa Maya as co-worker", extract: [{"name": "Lisa Maya", "role": "Co-Worker"}]
+  Handle hyphenated roles like "co-worker" as "Co-Worker"
   NEVER stop after the first person - extract ALL people and their roles
 - tools: list of objects with equipment/tools [{"item": "mobile crane"}, {"item": "welding equipment"}]
 - services: list of objects with services provided [{"task": "electrical wiring"}, {"task": "HVAC installation"}]
@@ -471,7 +473,6 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                         seen_people.add(person_name.lower())
     
     # Roles
-   
     if "roles" in data:
         if isinstance(data["roles"], list):
             result["roles"] = []
@@ -479,11 +480,15 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                 if isinstance(role, dict) and "name" in role and "role" in role:
                     # Capitalize the role title properly
                     role_title = role["role"]
-                    # Capitalize first letter of each word in the role
-                    role_title = ' '.join(word.capitalize() for word in role_title.split())
+                    # Handle hyphenated roles like "co-worker"
+                    if '-' in role_title:
+                        role_title = '-'.join(word.capitalize() for word in role_title.split('-'))
+                    else:
+                        # Capitalize first letter of each word in the role
+                        role_title = ' '.join(word.capitalize() for word in role_title.split())
                     result["roles"].append({"name": role["name"], "role": role_title})
     
-    # Tools - deduplicate
+
     # Tools - deduplicate and filter out category keywords
     if "tools" in data:
         if isinstance(data["tools"], list):
@@ -538,7 +543,6 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
     
 
     # Services - deduplicate
-    
     if "services" in data:
         if isinstance(data["services"], list):
             result["services"] = []
@@ -551,10 +555,13 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     task_text = service
                 
                 if task_text:
-                    # Clean up service text - remove leading/trailing punctuation
+                    # Clean up service text - remove ALL leading/trailing punctuation and spaces
                     task_text = task_text.strip()
-                    task_text = re.sub(r'^[.,;:\s]+', '', task_text)  # Remove leading punctuation
-                    task_text = re.sub(r'[.,;:\s]+$', '', task_text)  # Remove trailing punctuation
+                    # Remove any leading periods, commas, colons, semicolons, spaces
+                    task_text = re.sub(r'^[.,;:\s!?]+', '', task_text)  # Remove leading punctuation
+                    task_text = re.sub(r'[.,;:\s!?]+$', '', task_text)  # Remove trailing punctuation
+                    # Also clean up any double spaces
+                    task_text = re.sub(r'\s+', ' ', task_text)
                 
                 if task_text:
                     task_lower = task_text.lower().strip()
@@ -2759,6 +2766,28 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
             r'^(?:companies?\s+)?correct\s+spelling\s+(.+?)\s+(?:to|with)\s+(.+?)$'
         ]
         
+        # Special pattern for correcting words within fields
+        word_correct_pattern = r'^correct\s+(.+?)\s+to\s+(.+?)$'
+        word_correct_match = re.match(word_correct_pattern, normalized_text, re.IGNORECASE)
+        
+        if word_correct_match:
+            old_word = word_correct_match.group(1).strip()
+            new_word = word_correct_match.group(2).strip()
+            
+            # Check if old_word appears in any field
+            if chat_id and chat_id in session_data:
+                existing_data = session_data[chat_id].get("structured_data", {})
+                
+                # Check site_name for partial match
+                if "site_name" in existing_data and existing_data["site_name"]:
+                    if old_word.lower() in existing_data["site_name"].lower():
+                        # Replace the word in site_name
+                        new_site_name = existing_data["site_name"].replace(old_word, new_word)
+                        # Also try case-insensitive replacement
+                        import re as regex
+                        new_site_name = regex.sub(re.escape(old_word), new_word, existing_data["site_name"], flags=re.IGNORECASE)
+                        return {"correct": [{"field": "site_name", "old": existing_data["site_name"], "new": new_site_name}]}
+        
         for pattern in correct_patterns:
             correct_match = re.match(pattern, normalized_text, re.IGNORECASE)
             if correct_match:
@@ -4035,7 +4064,14 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 
                 for role in new_data[field]:
                     if isinstance(role, dict) and "name" in role and "role" in role:
-                        role_tuple = (role["name"].lower(), role["role"].lower())
+                        # Clean up role name - handle co-worker, Co-Worker, etc.
+                        role_name = role["role"]
+                        if '-' in role_name:
+                            role_name = '-'.join(word.capitalize() for word in role_name.split('-'))
+                        else:
+                            role_name = ' '.join(word.capitalize() for word in role_name.split())
+                        
+                        role_tuple = (role["name"].lower(), role_name.lower())
                         
                         # Check if this role already exists
                         already_exists = False
