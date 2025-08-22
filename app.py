@@ -3900,7 +3900,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                 best_similarity = similarity
                                 best_match = company_name
                                 best_index = i
-                    
+
                     # Use match if similarity is >= 0.4 (lowered from 0.8 for voice errors)
                     if best_match and best_similarity >= 0.4:
                         old_company_name = best_match
@@ -3909,10 +3909,10 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             result[field][best_index]["name"] = new_value
                             matched = True
                             changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
-                            log_event("corrected_company", o    ld=old_company_name, new=new_value)
+                            log_event("corrected_company", old=old_company_name, new=new_value)
                     else:
                         matched = True  # Mark as matched but don't add duplicate change
-                    
+
                     # Try to find and correct the company
                     for i, company in enumerate(result[field]):
                         if isinstance(company, dict) and company.get("name"):
@@ -3923,7 +3923,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                 matched = True
                                 changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
                                 break
-                    
+
                     if not matched:
                         # If no match found, try partial matching
                         for i, company in enumerate(result[field]):
