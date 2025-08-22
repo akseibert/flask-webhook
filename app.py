@@ -163,8 +163,16 @@ IMPORTANT: Voice transcription often incorrectly adds commas between words that 
 - "Build, Tech AG" should be understood as "BuildTech AG"
 - "Construction, Bro, GmbH" should be understood as "ConstructionBro GmbH" or "Construction Bro GmbH"
 - "Electric Solutions, Ltd" should be understood as "Electric Solutions Ltd"
+- "Electric Maya Game Behave" might be "Electric-Meier GmbH" (voice errors)
+- "Companies Electric Maya Game Behave" means add company "Electric-Meier GmbH"
 
 When you see company names with AG, GmbH, Ltd, Inc, LLC, Corp suffixes, treat the words before the suffix as part of the company name, even if separated by commas.
+
+CRITICAL FOR COMPANY EXTRACTION:
+- If you see "Companies" followed by unclear words, try to identify if it could be a company name
+- Common voice errors: "Maya" → "Meier", "Game Behave" → "GmbH", "are gay" → "AG"
+- If the text starts with "Companies" and has no clear suffix, still treat it as a company name
+- "Electric Maya Game Behave" should be extracted as company: "Electric Maya Game Behave" (let the user correct later)
 
 Extract information into these fields (only include fields that are explicitly mentioned):
 CRITICAL RULES FOR PEOPLE EXTRACTION:
@@ -383,8 +391,8 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                 if isinstance(company, dict) and "name" in company:
                     company_name = company["name"].strip()
                     
-                    # Skip empty or invalid company names
-                    if not company_name or company_name.lower() in ['build', 'tech', 'electric', 'construction']:
+                    # Skip empty names but DON'T skip voice-garbled names
+                    if not company_name:
                         continue
                     
                     # Check if this looks like a complete company name
@@ -2641,11 +2649,17 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return nlp_data
         
         # Handle simple delete commands FIRST - before any pattern matching
-        delete_category_pattern = r'^delete\s+(services|tools|companies|people|activities|issues|roles|segment|category|weather|time|impression|comments)$'
-        delete_match = re.match(delete_category_pattern, normalized_text.lower())
+        delete_value_pattern = r'^delete\s+(.+?)$'
+        delete_match = re.match(delete_value_pattern, normalized_text.lower())
         if delete_match:
-            category = delete_match.group(1)
-            return {"delete": {"value": None, "category": category}}
+            value = delete_match.group(1).strip()
+            
+            # Check if value is a category name
+            if value in ['services', 'tools', 'companies', 'people', 'activities', 'issues', 'roles', 'segment', 'category', 'weather', 'time', 'impression', 'comments']:
+                return {"delete": {"value": None, "category": value}}
+            else:
+                # It's a value to delete (like "delete meier")
+                return {"delete": {"value": value, "category": None}}
         
         # Also handle "clear" as delete
         clear_category_pattern = r'^clear\s+(services|tools|companies|people|activities|issues|roles|segment|category|weather|time|impression|comments)$'
@@ -2653,7 +2667,6 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         if clear_match:
             category = clear_match.group(1)
             return {"delete": {"value": None, "category": category}}
-        
         # GET CONTEXT if chat_id is provided
         context = None
         if chat_id and chat_id in session_data:
@@ -3354,6 +3367,39 @@ def preserve_existing_data(chat_id, new_data):
                 new_data[field] = existing_data[field]
     return new_data
 
+def find_item_in_report(value: str, report_data: Dict[str, Any]) -> Tuple[Optional[str], Optional[Any]]:
+    """Find an item in the report data and return its category and full value"""
+    value_lower = value.lower().strip()
+    
+    # Check companies
+    for company in report_data.get("companies", []):
+        if isinstance(company, dict) and company.get("name"):
+            if value_lower in company["name"].lower() or string_similarity(company["name"].lower(), value_lower) >= 0.5:
+                return "companies", company["name"]
+    
+    # Check people
+    for person in report_data.get("people", []):
+        if value_lower in person.lower() or string_similarity(person.lower(), value_lower) >= 0.6:
+            return "people", person
+    
+    # Check tools
+    for tool in report_data.get("tools", []):
+        if isinstance(tool, dict) and tool.get("item"):
+            if value_lower in tool["item"].lower() or string_similarity(tool["item"].lower(), value_lower) >= 0.6:
+                return "tools", tool["item"]
+    
+    # Check services
+    for service in report_data.get("services", []):
+        if isinstance(service, dict) and service.get("task"):
+            if value_lower in service["task"].lower() or string_similarity(service["task"].lower(), value_lower) >= 0.6:
+                return "services", service["task"]
+    
+    # Check activities
+    for activity in report_data.get("activities", []):
+        if value_lower in activity.lower() or string_similarity(activity.lower(), value_lower) >= 0.6:
+            return "activities", activity
+    
+    return None, None
 # Part 10 - b Merge Data Function
 
 def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id: str) -> Dict[str, Any]:
@@ -3403,6 +3449,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
         
         
         # Clean up values safely
+        # Clean up values safely
         if value:
             value = value.strip()
         if category:
@@ -3412,7 +3459,25 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
         if value and not category:
             if value.lower() in ['services', 'tools', 'companies', 'people', 'activities', 'issues', 'roles', 'segment', 'category']:
                 category = value.lower()
-                value = ""
+                value = None
+            else:
+                # Try to find what category this value belongs to by searching all fields
+                # This handles "delete meier" without specifying it's a company
+                value_lower = value.lower()
+                
+                # Check companies first (most common)
+                for company in result.get("companies", []):
+                    if isinstance(company, dict) and company.get("name"):
+                        if value_lower in company["name"].lower() or string_similarity(company["name"].lower(), value_lower) >= 0.5:
+                            category = "companies"
+                            break
+                
+                # Check people if not found in companies
+                if not category:
+                    for person in result.get("people", []):
+                        if value_lower in person.lower() or string_similarity(person.lower(), value_lower) >= 0.6:
+                            category = "people"
+                            break
         
         # Map the category
         if category:
@@ -3536,6 +3601,11 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
         
         else:
             # No category specified - search all fields for a match
+            found_category, found_value = find_item_in_report(value, result)
+            if found_category:
+                category = found_category
+                value = found_value  # Use the full value for deletion
+                
             # Try companies first (most likely target for names with AG, GmbH, etc.)
             if any(suffix in value_lower for suffix in ['ag', 'gmbh', 'ltd', 'inc', 'corp']):
                 for company in list(result.get("companies", [])):
@@ -3676,28 +3746,38 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     matched = False
                     old_name = old_value.strip()
                     
-                    # Find the company that contains the old_name or is 80% similar
+                    # Find the company that contains the old_name or is similar
                     best_match = None
                     best_similarity = 0
                     best_index = -1
                     
                     for i, company in enumerate(result[field]):
                         if isinstance(company, dict) and company.get("name"):
-                            # Check exact substring match first
-                            if old_name.lower() in company["name"].lower():
-                                best_match = company["name"]
+                            company_name = company["name"]
+                            
+                            # Check exact match first (case insensitive)
+                            if company_name.lower() == old_name.lower():
+                                best_match = company_name
                                 best_index = i
                                 best_similarity = 1.0
                                 break
-                            # Check similarity
-                            similarity = string_similarity(company["name"].lower(), old_name.lower())
+                            
+                            # Check if old_name is a substring (for partial matches like "Meier" in "Electric-Meier GmbH")
+                            if old_name.lower() in company_name.lower():
+                                best_match = company_name
+                                best_index = i
+                                best_similarity = 0.9
+                                break
+                            
+                            # Check similarity (lowered threshold for voice errors)
+                            similarity = string_similarity(company_name.lower(), old_name.lower())
                             if similarity > best_similarity:
                                 best_similarity = similarity
-                                best_match = company["name"]
+                                best_match = company_name
                                 best_index = i
                     
-                    # Use match if similarity is >= 0.8
-                    if best_match and best_similarity >= 0.8:
+                    # Use match if similarity is >= 0.4 (lowered from 0.8 for voice errors)
+                    if best_match and best_similarity >= 0.4:
                         old_company_name = best_match
                         result[field][best_index]["name"] = new_value
                         matched = True
