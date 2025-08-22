@@ -204,10 +204,15 @@ CRITICAL RULES FOR PEOPLE EXTRACTION:
   - people: ["John Smith", "Anna Weber"]  
   - roles: [{"name": "John Smith", "role": "Site Manager"}, {"name": "Anna Weber", "role": "Safety Officer"}]
 - NEVER stop after the first person - continue parsing the entire sentence for all people
-- Common voice errors: "honor" might be "Anna", "are gay" might be "AG"
-CRITICAL: When you see "Lisa worked as co-worker" or "Lisa as co-worker":
-- people: ["Lisa"] (NOT "Lisa worked")  
-- roles: [{"name": "Lisa", "role": "Co-worker"}]
+- Common voice errors: "honor" might be "Anna", "are gay" might be "AG", "Maya" might be "Meier"
+CRITICAL: When you see patterns like:
+- "People Lisa Maya as co-worker" means:
+  - people: ["Lisa Maya"]
+  - roles: [{"name": "Lisa Maya", "role": "Co-Worker"}]
+- "Lisa worked as co-worker" or "Lisa as co-worker":
+  - people: ["Lisa"] (NOT "Lisa worked")  
+  - roles: [{"name": "Lisa", "role": "Co-Worker"}]
+- ALWAYS extract BOTH the person AND their role when "as" is present
 The word "worked" or "as" is just grammar, not part of the name!
 
 CRITICAL RULES FOR ISSUES/ACTIVITIES:
@@ -264,7 +269,16 @@ Special commands to detect (return these as single-field objects, do not combine
 Deletion commands (parse these accurately):
 - If input is "delete X from Y" or "remove X from Y": return {"delete": {"target": "X", "field": "Y"}}
 - If input is "delete all X" or "clear X": return {"X": {"delete": true}} where X is the field name
-
+CRITICAL: When you see "Correct X to Y as Z" patterns:
+- This means: correct person name X to Y, and their role is Z
+- DO NOT add Z as a separate person
+- Example: "Correct Sandra Maia to Sandra Meier as mural artist" means:
+  - correct: [{"field": "people", "old": "Sandra Maia", "new": "Sandra Meier"}]
+  - roles: [{"name": "Sandra Meier", "role": "Mural Artist"}]
+  - NOT adding "mural artist" as a person!
+- If X doesn't exist in people list, just add Y with role Z:
+  - people: ["Sandra Meier"]
+  - roles: [{"name": "Sandra Meier", "role": "Mural Artist"}]
 
 Correction commands:
 - If input is "correct X in Y to Z" or similar: return {"correct": [{"field": "Y", "old": "X", "new": "Z"}]}
@@ -3797,27 +3811,29 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         # More complex handling for list fields
                         elif field == "people":
                             session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
-                    # Find and replace the old person name
-                    matched = False
-                    for i, person in enumerate(result["people"]):
-                        if string_similarity(person.lower(), old_value.lower()) >= 0.6:
-                            result["people"][i] = new_value
-                            matched = True
-                            changes.append(f"corrected person '{person}' to '{new_value}'")
                             
-                            # Also update roles that refer to this person
-                            for role in result["roles"]:
-                                if (isinstance(role, dict) and role.get("name") and 
-                                    string_similarity(role["name"].lower(), person.lower()) >= 0.6):
-                                    role["name"] = new_value
-                            break
-                    
-                    if not matched:
-                        # Old value not found, just add the new one
-                        result["people"].append(new_value)
-                        changes.append(f"added person '{new_value}'")
-                    
+                            # Find and replace the old person name
+                            matched = False
+                            for i, person in enumerate(result["people"]):
+                                if string_similarity(person.lower(), old_value.lower()) >= 0.6:
+                                    result["people"][i] = new_value
+                                    matched = True
+                                    changes.append(f"corrected person '{person}' to '{new_value}'")
+                                    
+                                    # Also update roles that refer to this person
+                                    if "roles" in result:
+                                        for role in result["roles"]:
+                                            if (isinstance(role, dict) and role.get("name") and 
+                                                string_similarity(role["name"].lower(), person.lower()) >= 0.6):
+                                                role["name"] = new_value
+                                    break
+                            
+                            if not matched:
+                                # Don't add as new person if not found - log as error
+                                log_event("person_not_found_for_correction", old=old_value, new=new_value)
+                                # Don't add the person, just skip
+                                continue
+                            
                 elif field == "roles":
                     # Interpret as correcting a role for a person
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
@@ -4723,8 +4739,40 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     
                     return "ok", 200
         
+        # Special handling for "correct X to Y as Z" pattern
+        correct_with_role_pattern = r'^correct\s+(.+?)\s+to\s+(.+?)\s+as\s+(.+?)$'
+        correct_role_match = re.match(correct_with_role_pattern, text, re.IGNORECASE)
+        if correct_role_match:
+            old_name = correct_role_match.group(1).strip()
+            new_name = correct_role_match.group(2).strip()
+            role_name = correct_role_match.group(3).strip()
+            
+            # Build the correction data
+            extracted = {
+                "correct": [{"field": "people", "old": old_name, "new": new_name}],
+                "roles": [{"name": new_name, "role": role_name.title()}]
+            }
+            
+            # Process this special case
+            session["command_history"].append(session["structured_data"].copy())
+            
+            # First do the correction
+            session["structured_data"] = merge_data(session["structured_data"], 
+                                                   {"correct": extracted["correct"]}, chat_id)
+            
+            # Then add the role
+            session["structured_data"] = merge_data(session["structured_data"], 
+                                                   {"roles": extracted["roles"]}, chat_id)
+            
+            session["structured_data"] = enrich_date(session["structured_data"])
+            save_session(session_data)
+            summary = summarize_report(session["structured_data"])
+            send_message(chat_id, f"📋 Report:\n{summary}")
+            return "ok", 200
+        
         # Extract fields from input (single command processing)
         extracted = extract_fields(text, chat_id)
+
         
         # Handle empty or invalid extractions
         if not extracted:
