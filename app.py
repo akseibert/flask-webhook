@@ -174,7 +174,30 @@ CRITICAL FOR COMPANY EXTRACTION:
 - If the text starts with "Companies" and has no clear suffix, still treat it as a company name
 - "Electric Maya Game Behave" should be extracted as company: "Electric Maya Game Behave" (let the user correct later)
 
+
 Extract information into these fields (only include fields that are explicitly mentioned):
+CRITICAL CATEGORY SEPARATION RULES:
+- When you see a category keyword (tools, services, activities, issues, people, companies, time, weather), it marks the START of that category
+- NEVER include the category name itself as a value
+- Example: "tools hammer saw activities installing" means:
+  - tools: ["hammer", "saw"] 
+  - activities: ["installing"]
+  - NOT tools: ["hammer", "saw", "activities", "installing"]
+- The word after a category keyword belongs to THAT category, not the previous one
+- Common patterns:
+  - "services plumbing activities installing" → services: ["plumbing"], activities: ["installing"]
+  - "tools hammer activities drilling issues cracks" → tools: ["hammer"], activities: ["drilling"], issues: ["cracks"]
+  - "issues water leak time 8am" → issues: ["water leak"], time: "8am"
+- Category keywords: tools, services, activities, issues, people, companies, time, weather, segment, category, site, impression, comments
+IMPORTANT: If you see text like "Tools, hammer, saw, electric wiring, activities, installing loose cables":
+- Split at the word "activities" because it's a category keyword
+- Result should be:
+  - tools: [{"item": "hammer"}, {"item": "saw"}, {"item": "electric wiring"}]
+  - activities: ["installing loose cables"]
+- NOT tools including "activities" or "installing loose cables"
+When parsing comma-separated lists, watch for category transitions:
+- "services inspection, tools hammer" → services: ["inspection"], tools: ["hammer"]
+- "issues cracks, time 8am" → issues: ["cracks"], time: "8am"
 CRITICAL RULES FOR PEOPLE EXTRACTION:
 - When you see "People, [Name1] as [Role1], [Name2] as [Role2]", extract ALL people mentioned
 - "John Smith as site manager, Anna Weber as safety officer" means:
@@ -460,18 +483,28 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     result["roles"].append({"name": role["name"], "role": role_title})
     
     # Tools - deduplicate
+    # Tools - deduplicate and filter out category keywords
     if "tools" in data:
         if isinstance(data["tools"], list):
             result["tools"] = []
             seen_tools = set()
+            category_keywords = ['activities', 'services', 'issues', 'people', 'companies', 
+                               'time', 'weather', 'segment', 'category', 'impression', 'comments']
+            
             for tool in data["tools"]:
                 if isinstance(tool, dict) and "item" in tool:
                     item = tool["item"].lower().strip()
+                    # Skip if it's a category keyword
+                    if item in category_keywords:
+                        continue
                     if item not in seen_tools:
                         seen_tools.add(item)
                         result["tools"].append({"item": tool["item"]})
                 elif isinstance(tool, str):
                     item = tool.lower().strip()
+                    # Skip if it's a category keyword
+                    if item in category_keywords:
+                        continue
                     if item not in seen_tools:
                         seen_tools.add(item)
                         result["tools"].append({"item": tool})
@@ -515,6 +548,12 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     task_text = service["task"]
                 elif isinstance(service, str):
                     task_text = service
+                
+                if task_text:
+                    # Clean up service text - remove leading/trailing punctuation
+                    task_text = task_text.strip()
+                    task_text = re.sub(r'^[.,;:\s]+', '', task_text)  # Remove leading punctuation
+                    task_text = re.sub(r'[.,;:\s]+$', '', task_text)  # Remove trailing punctuation
                 
                 if task_text:
                     task_lower = task_text.lower().strip()
@@ -3684,30 +3723,28 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
             elif field in LIST_FIELDS:
                 # More complex handling for list fields
-                if field == "people":
+                elif field == "people":
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                     
-                    # Split people text properly
-                    people_parts = re.split(r',|\s+and\s+', new_value.strip())
-                    added_people = []
-                    for part in people_parts:
-                        person = part.strip()
-                        if person and person.lower() not in [p.lower() for p in result["people"]]:
-                            result["people"].append(person)
-                            added_people.append(person)
+                    # Find and replace the old person name
+                    matched = False
+                    for i, person in enumerate(result["people"]):
+                        if string_similarity(person.lower(), old_value.lower()) >= 0.6:
+                            result["people"][i] = new_value
+                            matched = True
+                            changes.append(f"corrected person '{person}' to '{new_value}'")
+                            
+                            # Also update roles that refer to this person
+                            for role in result["roles"]:
+                                if (isinstance(role, dict) and role.get("name") and 
+                                    string_similarity(role["name"].lower(), person.lower()) >= 0.6):
+                                    role["name"] = new_value
+                            break
                     
-                    if added_people:
-                        changes.append(f"added person: {', '.join(added_people)}")
-                    else:
-                        changes.append("no new people added (duplicates skipped)")
-                        
-                    # Also update roles that refer to this person
-                    for role in result["roles"]:
-                        if (isinstance(role, dict) and role.get("name") and 
-                            string_similarity(role["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
-                            role["name"] = new_value
-                    
-                    changes.append(f"corrected person '{old_value}' to '{new_value}'")
+                    if not matched:
+                        # Old value not found, just add the new one
+                        result["people"].append(new_value)
+                        changes.append(f"added person '{new_value}'")
                     
                 elif field == "roles":
                     # Interpret as correcting a role for a person
@@ -3779,10 +3816,14 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     # Use match if similarity is >= 0.4 (lowered from 0.8 for voice errors)
                     if best_match and best_similarity >= 0.4:
                         old_company_name = best_match
-                        result[field][best_index]["name"] = new_value
-                        matched = True
-                        changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
-                        log_event("corrected_company", old=old_company_name, new=new_value)
+                        # Only correct if the new value is actually different
+                        if old_company_name.lower() != new_value.lower():
+                            result[field][best_index]["name"] = new_value
+                            matched = True
+                            changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
+                            log_event("corrected_company", old=old_company_name, new=new_value)
+                        else:
+                            matched = True  # Mark as matched but don't add duplicate change
                     
                     # Try to find and correct the company
                     for i, company in enumerate(result[field]):
