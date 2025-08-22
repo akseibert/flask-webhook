@@ -3910,8 +3910,8 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             matched = True
                             changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
                             log_event("corrected_company", o    ld=old_company_name, new=new_value)
-                        else:
-                            matched = True  # Mark as matched but don't add duplicate change
+                    else:
+                        matched = True  # Mark as matched but don't add duplicate change
                     
                     # Try to find and correct the company
                     for i, company in enumerate(result[field]):
