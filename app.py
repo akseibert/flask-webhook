@@ -193,8 +193,10 @@ Deletion commands (parse these accurately):
 
 Correction commands:
 - If input is "correct X in Y to Z" or similar: return {"correct": [{"field": "Y", "old": "X", "new": "Z"}]}
-- If input is "correct spelling of X to Y": detect the field containing X and return {"correct": [{"field": "detected_field", "old": "X", "new": "Y"}]}
-- If input is "correct X to Y": detect the field containing X and return {"correct": [{"field": "detected_field", "old": "X", "new": "Y"}]}
+- If input is "correct spelling of X to Y": return {"correct": [{"field": "companies", "old": "X", "new": "Y"}]} (default to companies field for spelling corrections)
+- If input is "correct spelling X to Y" or "correct X to Y": return {"correct": [{"field": "companies", "old": "X", "new": "Y"}]}
+- For "correct spelling KeyBag AG to KIBAG AG": return {"correct": [{"field": "companies", "old": "KeyBag AG", "new": "KIBAG AG"}]}
+- For "correct spelling Electric Maya, GMBH to Electric-Meier GmbH": return {"correct": [{"field": "companies", "old": "Electric Maya", "new": "Electric-Meier GmbH"}]} (handle comma-separated company names properly)
 CRITICAL for people and roles extraction:
 - When you see patterns like "X as Y, A as B, C was doing D, and me as E", extract ALL people mentioned
 - When you see "X was a Y" or "X was working as Y", extract X as a person and Y as their role
@@ -337,9 +339,24 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
             result["companies"] = []
             for company in data["companies"]:
                 if isinstance(company, dict) and "name" in company:
-                    result["companies"].append({"name": company["name"]})
+                    # Clean up company name - handle cases like "Electric Maya, GMBH" 
+                    company_name = company["name"]
+                    # Don't split if it's a single company with GMBH/AG/etc
+                    if not (company_name.count(',') == 1 and any(suffix in company_name.upper() for suffix in ['GMBH', 'AG', 'LTD', 'INC', 'LLC'])):
+                        # Split on comma if there are multiple companies
+                        for comp in re.split(r',\s*', company_name):
+                            if comp.strip():
+                                result["companies"].append({"name": comp.strip()})
+                    else:
+                        result["companies"].append({"name": company_name})
                 elif isinstance(company, str):
-                    result["companies"].append({"name": company})
+                    # Same logic for string companies
+                    if not (company.count(',') == 1 and any(suffix in company.upper() for suffix in ['GMBH', 'AG', 'LTD', 'INC', 'LLC'])):
+                        for comp in re.split(r',\s*', company):
+                            if comp.strip():
+                                result["companies"].append({"name": comp.strip()})
+                    else:
+                        result["companies"].append({"name": company})
     
     # People
     if "people" in data:
@@ -3521,11 +3538,12 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     # Try to find and correct the company
                     for i, company in enumerate(result[field]):
                         if isinstance(company, dict) and company.get("name"):
-                            # Check for similarity
-                            if string_similarity(company["name"].lower(), old_name.lower()) >= 0.5:
+                            # Check for exact or high similarity match
+                            if company["name"].lower() == old_name.lower() or string_similarity(company["name"].lower(), old_name.lower()) >= 0.8:
+                                old_company_name = company["name"]  # Save the old name for the message
                                 company["name"] = new_value
                                 matched = True
-                                changes.append(f"corrected company '{company['name']}' to '{new_value}'")
+                                changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
                                 break
                     
                     if not matched:
@@ -4458,7 +4476,7 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
         if changed_fields:
             message = "✅ Updated report."
             summary = summarize_report(session["structured_data"])
-            send_message(chat_id, f"{message}\n\n{summary}")
+            send_message(chat_id, f"{message}\n\n**Updated Report:**\n{summary}")
             
             # Add intelligent suggestions only if changes were actually made
             missing_suggestions = suggest_missing_fields(session["structured_data"])
