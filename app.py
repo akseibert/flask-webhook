@@ -2512,7 +2512,6 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     continue
                 
                 # Handle people field
-                # Handle people field
                 if field == "people":
                     name = clean_value(match.group(1), field)
                     role = clean_value(match.group(2), field) if len(match.groups()) > 1 and match.group(2) else None
@@ -2526,6 +2525,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     # If a role is specified, add it to roles as well
                     if role:
                         result["roles"] = [{"name": name, "role": role.title()}]
+                    return result
                         
                 # Handle role field
                 if field == "roles":
@@ -2552,6 +2552,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     log_event("role_extraction", name=name, role=role)
                     result["people"] = [name]
                     result["roles"] = [{"name": name, "role": role}]
+                    return result
 
                 # Handle supervisor field
                 if field == "roles" and raw_field == "supervisor":
@@ -2559,9 +2560,10 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     supervisor_names = [name.strip() for name in re.split(r'\s+and\s+|,', value) if name.strip()]
                     result["roles"] = [{"name": name, "role": "Supervisor"} for name in supervisor_names]
                     result["people"] = supervisor_names
+                    return result
                 
                 # Handle company field
-                elif field == "companies":
+                if field == "companies":
                     captured = clean_value(match.group(1) if len(match.groups()) >= 1 and match.group(1) else "", field)
                     # If the first group is empty or starts with 'are/is', try the second group
                     if (not captured or captured.lower().startswith(('are', 'is', 'were'))) and len(match.groups()) >= 2:
@@ -2573,56 +2575,61 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     company_names = [name.strip() for name in re.split(r'\s+and\s+|,', captured) if name.strip()]
                     log_event("company_extraction", captured=captured, company_names=company_names)
                     result["companies"] = [{"name": name} for name in company_names]
+                    return result
                 
                 # Handle service/services field
-                elif field in ["services", "service"]:
+                if field in ["services", "service"]:
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result["services"] = []
                     else:
                         services = [service.strip() for service in re.split(r',|\band\b', value) if service.strip()]
                         result["services"] = [{"task": service} for service in services]
+                    return result
                 
                 # Handle tool/tools field
-                elif field in ["tools", "tool"]:
+                if field in ["tools", "tool"]:
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result["tools"] = []
                     else:
                         tools = [tool.strip() for tool in re.split(r',|\band\b', value) if tool.strip()]
                         result["tools"] = [{"item": tool} for tool in tools]
+                    return result
                 
                 # Handle issue field
-                elif field == "issues":
+                if field == "issues":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result["issues"] = []
                     else:
                         issues = [issue.strip() for issue in re.split(r';', value) if issue.strip()]
                         result["issues"] = [{"description": issue} for issue in issues]
+                    return result
                 
                 # Handle activity field
-                elif field == "activities":
+                if field == "activities":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result["activities"] = []
                     else:
                         activities = [activity.strip() for activity in re.split(r',|\band\b', value) if activity.strip()]
                         result["activities"] = activities
+                    return result
                 
                 # Handle clear command
-                elif raw_field == "clear":
+                if raw_field == "clear":
                     field_name = match.group(1).lower() 
                     field_name = FIELD_MAPPING.get(field_name, field_name)
                     result[field_name] = [] if field_name in LIST_FIELDS else ""
+                    return result
                 
                 # Handle other fields (scalar fields)
+                value = clean_value(match.group(1), field)
+                if value.lower() == "none":
+                    result[field] = "" if field in SCALAR_FIELDS else []
                 else:
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result[field] = "" if field in SCALAR_FIELDS else []
-                    else:
-                        result[field] = value
+                    result[field] = value
                 
                 return result
         
