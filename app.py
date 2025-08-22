@@ -471,6 +471,7 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                         seen_people.add(person_name.lower())
     
     # Roles
+   
     if "roles" in data:
         if isinstance(data["roles"], list):
             result["roles"] = []
@@ -2490,128 +2491,138 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                 continue
                 
             match = re.match(pattern, cmd, re.IGNORECASE)
-            if match:
-                field = FIELD_MAPPING.get(raw_field, raw_field)
-                log_event("field_matched", raw_field=raw_field, mapped_field=field)
+            if not match:
+                continue
                 
-                # Skip site_name matches that look like commands
-                if field == "site_name" and re.search(r'\b(add|insert|delete|remove|correct|adjust|update|spell|none|as|role|new|reset)\b', cmd.lower()):
-                    log_event("skipped_site_name", reason="command-like input")
+            field = FIELD_MAPPING.get(raw_field, raw_field)
+            log_event("field_matched", raw_field=raw_field, mapped_field=field)
+            
+            # Skip site_name matches that look like commands
+            if field == "site_name" and re.search(r'\b(add|insert|delete|remove|correct|adjust|update|spell|none|as|role|new|reset)\b', cmd.lower()):
+                log_event("skipped_site_name", reason="command-like input")
+                continue
+            
+            # Handle people field
+            if field == "people":
+                name = clean_value(match.group(1), field)
+                role = clean_value(match.group(2), field) if len(match.groups()) > 1 and match.group(2) else None
+                
+                # Skip if it's just "supervisor"
+                if name.lower() == "supervisor":
                     continue
                 
-                # Handle people field
-                if field == "people":
-                    name = clean_value(match.group(1), field)
-                    role = clean_value(match.group(2), field) if len(match.groups()) > 1 and match.group(2) else None
+                result["people"] = [name]
+                
+                # If a role is specified, add it to roles as well
+                if role:
+                    result["roles"] = [{"name": name, "role": role.title()}]
+                return result
                     
-                    # Skip if it's just "supervisor"
-                    if name.lower() == "supervisor":
-                        continue
-                    
-                    result["people"] = [name]
-                    
-                    # If a role is specified, add it to roles as well
-                    if role:
-                        result["roles"] = [{"name": name, "role": role.title()}]
-                        
-                # Handle role field
-                elif field == "roles":
-                    # Groups vary depending on which pattern matched
-                    name = None
-                    role = None
-                    
-                    # Process through all groups to find name and role
-                    for i in range(1, len(match.groups()) + 1):
-                        if match.group(i):
-                            group_text = match.group(i)
-                            # If this looks like a name and we don't have one yet
-                            if not name and re.match(r'^[A-Za-z]+(\s+[A-Za-z]+)?$', group_text):
-                                name = clean_value(group_text, field)
-                            # If we have a name but no role yet, this must be the role
-                            elif name and not role:
-                                # Clean up role text by removing "the", "a", "an"
-                                role_text = re.sub(r'^(?:the|a|an)\s+', '', group_text)
-                                role = clean_value(role_text, field).title()
-                    
-                    if not name or not role or name.lower() == "supervisor":
-                        continue
-                        
-                    log_event("role_extraction", name=name, role=role)
-                    result["people"] = [name]
-                    result["roles"] = [{"name": name, "role": role}]
-
-                # Handle supervisor field
-                elif field == "roles" and raw_field == "supervisor":
+            # Handle role field
+            if field == "roles":
+                # Special handling for supervisor pattern
+                if raw_field == "supervisor":
                     value = clean_value(match.group(1), "roles")
                     supervisor_names = [name.strip() for name in re.split(r'\s+and\s+|,', value) if name.strip()]
                     result["roles"] = [{"name": name, "role": "Supervisor"} for name in supervisor_names]
                     result["people"] = supervisor_names
+                    return result
                 
-                # Handle company field
-                elif field == "companies":
-                    captured = clean_value(match.group(1) if len(match.groups()) >= 1 and match.group(1) else "", field)
-                    # If the first group is empty or starts with 'are/is', try the second group
-                    if (not captured or captured.lower().startswith(('are', 'is', 'were'))) and len(match.groups()) >= 2:
-                        captured = clean_value(match.group(2), field)
+                # Regular role handling
+                name = None
+                role = None
+                
+                # Process through all groups to find name and role
+                for i in range(1, len(match.groups()) + 1):
+                    if match.group(i):
+                        group_text = match.group(i)
+                        # If this looks like a name and we don't have one yet
+                        if not name and re.match(r'^[A-Za-z]+(\s+[A-Za-z]+)?$', group_text):
+                            name = clean_value(group_text, field)
+                        # If we have a name but no role yet, this must be the role
+                        elif name and not role:
+                            # Clean up role text by removing "the", "a", "an"
+                            role_text = re.sub(r'^(?:the|a|an)\s+', '', group_text)
+                            role = clean_value(role_text, field).title()
+                
+                if not name or not role or name.lower() == "supervisor":
+                    continue
                     
-                    # Remove leading "are", "is", etc.
-                    captured = re.sub(r'^(?:are|is|were|include[ds]?)\s+', '', captured)
-                    
-                    company_names = [name.strip() for name in re.split(r'\s+and\s+|,', captured) if name.strip()]
-                    log_event("company_extraction", captured=captured, company_names=company_names)
-                    result["companies"] = [{"name": name} for name in company_names]
-                
-                # Handle service/services field
-                elif field in ["services", "service"]:
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result["services"] = []
-                    else:
-                        services = [service.strip() for service in re.split(r',|\band\b', value) if service.strip()]
-                        result["services"] = [{"task": service} for service in services]
-                
-                # Handle tool/tools field
-                elif field in ["tools", "tool"]:
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result["tools"] = []
-                    else:
-                        tools = [tool.strip() for tool in re.split(r',|\band\b', value) if tool.strip()]
-                        result["tools"] = [{"item": tool} for tool in tools]
-                
-                # Handle issue field
-                elif field == "issues":
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result["issues"] = []
-                    else:
-                        issues = [issue.strip() for issue in re.split(r';', value) if issue.strip()]
-                        result["issues"] = [{"description": issue} for issue in issues]
-                
-                # Handle activity field
-                elif field == "activities":
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result["activities"] = []
-                    else:
-                        activities = [activity.strip() for activity in re.split(r',|\band\b', value) if activity.strip()]
-                        result["activities"] = activities
-                
-                # Handle clear command
-                elif raw_field == "clear":
-                    field_name = match.group(1).lower() 
-                    field_name = FIELD_MAPPING.get(field_name, field_name)
-                    result[field_name] = [] if field_name in LIST_FIELDS else ""
-                
-                # Handle other fields (scalar fields)
-                else:
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result[field] = "" if field in SCALAR_FIELDS else []
-                    else:
-                        result[field] = value
-                
+                log_event("role_extraction", name=name, role=role)
+                result["people"] = [name]
+                result["roles"] = [{"name": name, "role": role}]
                 return result
+            
+            # Handle company field
+            if field == "companies":
+                captured = clean_value(match.group(1) if len(match.groups()) >= 1 and match.group(1) else "", field)
+                # If the first group is empty or starts with 'are/is', try the second group
+                if (not captured or captured.lower().startswith(('are', 'is', 'were'))) and len(match.groups()) >= 2:
+                    captured = clean_value(match.group(2), field)
+                
+                # Remove leading "are", "is", etc.
+                captured = re.sub(r'^(?:are|is|were|include[ds]?)\s+', '', captured)
+                
+                company_names = [name.strip() for name in re.split(r'\s+and\s+|,', captured) if name.strip()]
+                log_event("company_extraction", captured=captured, company_names=company_names)
+                result["companies"] = [{"name": name} for name in company_names]
+                return result
+            
+            # Handle service/services field
+            if field in ["services", "service"]:
+                value = clean_value(match.group(1), field)
+                if value.lower() == "none":
+                    result["services"] = []
+                else:
+                    services = [service.strip() for service in re.split(r',|\band\b', value) if service.strip()]
+                    result["services"] = [{"task": service} for service in services]
+                return result
+            
+            # Handle tool/tools field
+            if field in ["tools", "tool"]:
+                value = clean_value(match.group(1), field)
+                if value.lower() == "none":
+                    result["tools"] = []
+                else:
+                    tools = [tool.strip() for tool in re.split(r',|\band\b', value) if tool.strip()]
+                    result["tools"] = [{"item": tool} for tool in tools]
+                return result
+            
+            # Handle issue field
+            if field == "issues":
+                value = clean_value(match.group(1), field)
+                if value.lower() == "none":
+                    result["issues"] = []
+                else:
+                    issues = [issue.strip() for issue in re.split(r';', value) if issue.strip()]
+                    result["issues"] = [{"description": issue} for issue in issues]
+                return result
+            
+            # Handle activity field
+            if field == "activities":
+                value = clean_value(match.group(1), field)
+                if value.lower() == "none":
+                    result["activities"] = []
+                else:
+                    activities = [activity.strip() for activity in re.split(r',|\band\b', value) if activity.strip()]
+                    result["activities"] = activities
+                return result
+            
+            # Handle clear command
+            if raw_field == "clear":
+                field_name = match.group(1).lower() 
+                field_name = FIELD_MAPPING.get(field_name, field_name)
+                result[field_name] = [] if field_name in LIST_FIELDS else ""
+                return result
+            
+            # Handle other fields (scalar fields)
+            value = clean_value(match.group(1), field)
+            if value.lower() == "none":
+                result[field] = "" if field in SCALAR_FIELDS else []
+            else:
+                result[field] = value
+            
+            return result
         
         # Check for deletion commands
         delete_match = re.match(FIELD_PATTERNS["delete"], cmd, re.IGNORECASE)
