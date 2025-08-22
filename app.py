@@ -3793,10 +3793,10 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         result[field] = new_value
                         changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
 
-            elif field in LIST_FIELDS:
-                # More complex handling for list fields
-                elif field == "people":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
+                elif field in LIST_FIELDS:
+                    # More complex handling for list fields
+                    elif field == "people":
+                        session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                     
                     # Find and replace the old person name
                     matched = False
