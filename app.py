@@ -193,12 +193,18 @@ Deletion commands (parse these accurately):
 
 Correction commands:
 - If input is "correct X in Y to Z" or similar: return {"correct": [{"field": "Y", "old": "X", "new": "Z"}]}
+- If input is "correct spelling of X to Y": detect the field containing X and return {"correct": [{"field": "detected_field", "old": "X", "new": "Y"}]}
+- If input is "correct X to Y": detect the field containing X and return {"correct": [{"field": "detected_field", "old": "X", "new": "Y"}]}
 CRITICAL for people and roles extraction:
 - When you see patterns like "X as Y, A as B, C was doing D, and me as E", extract ALL people mentioned
+- When you see "X was a Y" or "X was working as Y", extract X as a person and Y as their role
 - Extract "me" as a person (keep it as "me" unless context provides a specific name)
 - Don't stop after finding the first person - continue parsing the entire sentence
 - "Stefan was laying the electrical wiring" means Stefan is a person with implied role
+- "Lisa Malone was a safety officer" means Lisa Malone is a person with role "Safety Officer"
+- "Marcus Smith was working as an electrical engineer" means Marcus Smith is a person with role "Electrical Engineer"
 - Always extract ALL people mentioned, even if their role isn't specified
+- For patterns like "NAME was a ROLE" or "NAME was working as ROLE", always extract both the person and their role
 - For spelling corrections like "correct spelling of X to Y" in companies or other fields, treat as correction in that field
 
 For voice inputs, handle common transcription errors like:
@@ -2242,6 +2248,8 @@ def find_name_match(name: str, name_list: List[str]) -> Optional[str]:
     
     if best_match:
         log_event("name_match_found", search=name, match=best_match, score=best_score)
+    
+    return best_match
 
 def extract_single_command(cmd: str) -> Dict[str, Any]:
     """Extract structured data from a single command with enhanced error handling"""
@@ -2449,7 +2457,6 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
         return {}
     
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
     """Extract fields from text input with enhanced error handling and field validation"""
     try:
@@ -2459,6 +2466,16 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         
         result: Dict[str, Any] = {}
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
+        
+        # Try NLP extraction first if enabled and text doesn't look like a command
+        if CONFIG.get("ENABLE_NLP_EXTRACTION", False):
+            # Skip NLP for obvious commands
+            if not re.match(r'^(?:yes|no|help|new|reset|undo|export|summarize|detailed|delete|clear)\b', normalized_text.lower()):
+                nlp_data, confidence = extract_with_nlp(text)
+                if confidence >= CONFIG.get("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", 0.7):
+                    log_event("using_nlp_extraction", confidence=confidence, fields=list(nlp_data.keys()))
+                    # Return the NLP data directly if confidence is high
+                    return nlp_data
         
         # Handle simple delete commands FIRST - before any pattern matching
         delete_category_pattern = r'^delete\s+(services|tools|companies|people|activities|issues|roles|segment|category|weather|time|impression|comments)$'
@@ -2508,11 +2525,11 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                              resolved=normalized_text,
                              item=last_item)
         
-        # Handle simple spelling corrections for companies
-    
+        
+        # Handle spelling corrections - enhanced to detect field automatically
         correct_patterns = [
-            r'^correct\s+spelling\s+(.+?)\s+(?:to|with)\s+(.+?)$',
-            r'^correct\s+(.+?)\s+(?:to|with)\s+(.+?)$',
+            r'^correct\s+spelling\s+of\s+(.+?)\s+to\s+(.+?)$',
+            r'^correct\s+(.+?)\s+to\s+(.+?)$',
             r'^(?:companies?\s+)?correct\s+spelling\s+(.+?)\s+(?:to|with)\s+(.+?)$'
         ]
         
@@ -2526,24 +2543,65 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 old_value = re.sub(r'^(?:of\s+|for\s+)?', '', old_value, flags=re.IGNORECASE)
                 old_value = re.sub(r'^companies?\s+', '', old_value, flags=re.IGNORECASE)
                 
-                # Determine field based on content
+                # Auto-detect field by searching through existing data
                 field = None
-                if any(suffix in old_value.lower() or suffix in new_value.lower() 
-                       for suffix in ['ag', 'gmbh', 'ltd', 'inc', 'corp', 'llc']):
-                    field = "companies"
-                else:
-                    # Try to guess field from existing data
-                    if chat_id and chat_id in session_data:
-                        existing_data = session_data[chat_id].get("structured_data", {})
-                        # Check companies
+                if chat_id and chat_id in session_data:
+                    existing_data = session_data[chat_id].get("structured_data", {})
+                    
+                    # Check all fields for the old value
+                    # Check scalar fields
+                    for scalar_field in SCALAR_FIELDS:
+                        if scalar_field in existing_data and existing_data[scalar_field]:
+                            if string_similarity(existing_data[scalar_field].lower(), old_value.lower()) >= 0.6:
+                                field = scalar_field
+                                break
+                    
+                    # Check companies
+                    if not field:
                         for company in existing_data.get("companies", []):
                             if isinstance(company, dict) and company.get("name"):
                                 if string_similarity(company["name"].lower(), old_value.lower()) >= 0.5:
                                     field = "companies"
                                     break
+                    
+                    # Check people
+                    if not field:
+                        for person in existing_data.get("people", []):
+                            if string_similarity(person.lower(), old_value.lower()) >= 0.6:
+                                field = "people"
+                                break
+                    
+                    # Check tools
+                    if not field:
+                        for tool in existing_data.get("tools", []):
+                            if isinstance(tool, dict) and tool.get("item"):
+                                if string_similarity(tool["item"].lower(), old_value.lower()) >= 0.6:
+                                    field = "tools"
+                                    break
+                    
+                    # Check services
+                    if not field:
+                        for service in existing_data.get("services", []):
+                            if isinstance(service, dict) and service.get("task"):
+                                if string_similarity(service["task"].lower(), old_value.lower()) >= 0.6:
+                                    field = "services"
+                                    break
+                    
+                    # Check activities
+                    if not field:
+                        for activity in existing_data.get("activities", []):
+                            if string_similarity(activity.lower(), old_value.lower()) >= 0.6:
+                                field = "activities"
+                                break
                 
+                # If field still not found, try to guess by suffix
                 if not field:
-                    field = "companies"  # Default to companies for now
+                    if any(suffix in old_value.lower() or suffix in new_value.lower() 
+                           for suffix in ['ag', 'gmbh', 'ltd', 'inc', 'corp', 'llc']):
+                        field = "companies"
+                    else:
+                        # Return error if we can't find the field
+                        return {"error": f"Could not find '{old_value}' in any field. Please check the spelling."}
                 
                 return {"correct": [{"field": field, "old": old_value, "new": new_value}]}
         
@@ -2832,11 +2890,12 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     result["roles"] = []
                     
                     # Check if there's a role specified
+                  
                     if " as " in people_text.lower():
                         # Parse "Name as Role" pattern - handle commas in roles
                         role_pattern = r'([A-Za-z\s]+?)\s+as\s+([A-Za-z\s\-,]+?)(?:,\s*(?:also|and)|$)'
                         role_matches = re.findall(role_pattern, people_text, re.IGNORECASE)
-                        
+
                         if role_matches:
                             for name, role in role_matches:
                                 name = name.strip().replace(",", "")  # Remove trailing comma
@@ -3014,6 +3073,17 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         if len(text) > 50:
             log_event("detected_free_form_report", length=len(text))
             
+            # Use NLP for free-form extraction
+            if CONFIG.get("ENABLE_NLP_EXTRACTION", False):
+                nlp_data, confidence = extract_with_nlp(text)
+                if confidence >= 0.5:  # Lower threshold for free-form text
+                    log_event("free_form_nlp_extraction", confidence=confidence, fields=list(nlp_data.keys()))
+                    # Add date if not present
+                    if not nlp_data.get("date"):
+                        nlp_data["date"] = datetime.now().strftime("%d-%m-%Y")
+                    return nlp_data
+            
+            # Fallback to pattern-based extraction if NLP didn't work
             # Extract site name
             site_pattern = r'(?:from|at|on|reporting\s+(?:from|at))\s+(?:the\s+)?([A-Za-z0-9\s]+?)(?:\s*(?:project|site|location)(?:,|\.|$|\s+section|\s+segment))'
             site_match = re.search(site_pattern, text, re.IGNORECASE)
@@ -3028,7 +3098,14 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 result["date"] = datetime.now().strftime("%d-%m-%Y")
                 return result
         
-        # If we reach here, no structured or free-form extraction worked
+        
+        # If we reach here with no results but NLP is enabled, try NLP as last resort
+        if not result and CONFIG.get("ENABLE_NLP_EXTRACTION", False):
+            nlp_data, confidence = extract_with_nlp(text)
+            if confidence >= 0.5:  # Lower threshold for fallback
+                log_event("nlp_fallback_extraction", confidence=confidence, fields=list(nlp_data.keys()))
+                return nlp_data
+        
         log_event("fields_extracted", result_fields=len(result))
         return result
         
@@ -4218,10 +4295,10 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     return "ok", 200
         
         # Extract fields from input (single command processing)
-        extracted = extract_fields(text)
+        extracted = extract_fields(text, chat_id)
         
         # Handle empty or invalid extractions
-        if not extracted or "error" in extracted:
+        if not extracted:
             # Don't clear session, just inform user
             suggestions = []
             
@@ -4244,6 +4321,12 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             send_message(chat_id, message)
             
             # Important: Keep session intact and allow next command
+            save_session(session_data)
+            return "ok", 200
+        
+        # Handle error in extraction (e.g., item not found for correction)
+        if "error" in extracted:
+            send_message(chat_id, f"⚠️ {extracted['error']}")
             save_session(session_data)
             return "ok", 200
         
@@ -4342,6 +4425,7 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                                         "delete", "correct"]]
         
         # Check if we did a delete or correct operation
+        # Check if we did a delete or correct operation
         if "delete" in extracted:
             summary = summarize_report(session["structured_data"])
             # Always show success for delete operations
@@ -4352,7 +4436,9 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                 message = f"✅ Cleared all {delete_info['category']}."
             else:
                 message = "✅ Deleted information from your report."
-            send_message(chat_id, f"{message}\n\n{summary}")
+            
+            # Always show the full updated report
+            send_message(chat_id, f"{message}\n\n**Updated Report:**\n{summary}")
             return "ok", 200
             
         if "correct" in extracted:
@@ -4364,7 +4450,9 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                 message = f"✅ Corrected {corr.get('field', 'field')}: '{corr.get('old', '')}' → '{corr.get('new', '')}'."
             else:
                 message = "✅ Corrected information in your report."
-            send_message(chat_id, f"{message}\n\n{summary}")
+            
+            # Always show the full updated report
+            send_message(chat_id, f"{message}\n\n**Updated Report:**\n{summary}")
             return "ok", 200
         
         if changed_fields:
@@ -4578,14 +4666,17 @@ def webhook() -> tuple[str, int]:
                     'first': '1', 'second': '2', 'third': '3', 'fourth': '4', 'fifth': '5'
                 }
                 
-                text_lower = text.lower().strip().rstrip('.')
-                if text_lower in number_words:
-                    text = number_words[text_lower]
+                # Only process if caption exists and looks like a number word
+                if caption:
+                    caption_lower = caption.lower().strip().rstrip('.')
+                    if caption_lower in number_words:
+                        caption = number_words[caption_lower]
                 
                 # Check if this is a response to a photo question
                 pending_photos = [p for p in session_data[chat_id].get("photos", []) if p.get("pending")]
                 
-                if pending_photos and text.strip().isdigit():
+                if pending_photos and caption and caption.strip().isdigit():
+                    issue_index = int(caption.strip()) - 1
                     issue_index = int(text.strip()) - 1
                     issues = session_data[chat_id]["structured_data"].get("issues", [])
                     if 0 <= issue_index < len(issues):
