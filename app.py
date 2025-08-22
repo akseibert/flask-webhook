@@ -3790,36 +3790,36 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 
                 # For site_name, handle partial word replacements
                 if field == "site_name" and result[field]:
-                    # Check if old_value is a word within the site_name
-                    if old_value.lower() in result[field].lower():
-                        # Replace the word in the site name
-                        import re as regex
-                        new_site_name = regex.sub(re.escape(old_value), new_value, result[field], flags=re.IGNORECASE)
-                        result[field] = new_site_name
-                        changes.append(f"corrected {field} from '{existing_data[field]}' to '{new_site_name}'")
-                    elif string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                        # Full replacement if similarity is high
-                        result[field] = new_value
-                        changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
-                else:
-                    # Simple replace for other scalar fields
-                    if string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                        result[field] = new_value
-                        changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
+                        # Check if old_value is a word within the site_name
+                        if old_value.lower() in result[field].lower():
+                            # Replace the word in the site name
+                            import re as regex
+                            new_site_name = regex.sub(re.escape(old_value), new_value, result[field], flags=re.IGNORECASE)
+                            result[field] = new_site_name
+                            changes.append(f"corrected {field} from '{existing_data[field]}' to '{new_site_name}'")
+                        elif string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                            # Full replacement if similarity is high
+                            result[field] = new_value
+                            changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
+                    else:
+                        # Simple replace for other scalar fields
+                        if string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                            result[field] = new_value
+                            changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
+                
+                if field in LIST_FIELDS:
+                    # More complex handling for list fields
+                    if field == "people":
+                        session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
+                        
+                        # Find and replace the old person name
+                        matched = False
+                        for i, person in enumerate(result["people"]):
+                            if string_similarity(person.lower(), old_value.lower()) >= 0.6:
+                                result["people"][i] = new_value
+                                matched = True
+                                changes.append(f"corrected person '{person}' to '{new_value}'")
 
-                    elif field in LIST_FIELDS:
-                        # More complex handling for list fields
-                        elif field == "people":
-                            session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                            
-                            # Find and replace the old person name
-                            matched = False
-                            for i, person in enumerate(result["people"]):
-                                if string_similarity(person.lower(), old_value.lower()) >= 0.6:
-                                    result["people"][i] = new_value
-                                    matched = True
-                                    changes.append(f"corrected person '{person}' to '{new_value}'")
-                                    
                                     # Also update roles that refer to this person
                                     if "roles" in result:
                                         for role in result["roles"]:
