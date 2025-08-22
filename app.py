@@ -3801,11 +3801,11 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             # Full replacement if similarity is high
                             result[field] = new_value
                             changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
-                    else:
-                        # Simple replace for other scalar fields
-                        if string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                            result[field] = new_value
-                            changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
+                else:
+                    # Simple replace for other scalar fields
+                    if string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                        result[field] = new_value
+                        changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
                 
                 if field in LIST_FIELDS:
                     # More complex handling for list fields
