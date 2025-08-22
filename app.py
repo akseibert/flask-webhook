@@ -2512,6 +2512,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     continue
                 
                 # Handle people field
+                # Handle people field
                 if field == "people":
                     name = clean_value(match.group(1), field)
                     role = clean_value(match.group(2), field) if len(match.groups()) > 1 and match.group(2) else None
@@ -2527,7 +2528,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                         result["roles"] = [{"name": name, "role": role.title()}]
                         
                 # Handle role field
-                elif field == "roles":
+                if field == "roles":
                     # Groups vary depending on which pattern matched
                     name = None
                     role = None
@@ -2553,7 +2554,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     result["roles"] = [{"name": name, "role": role}]
 
                 # Handle supervisor field
-                elif field == "roles" and raw_field == "supervisor":
+                if field == "roles" and raw_field == "supervisor":
                     value = clean_value(match.group(1), "roles")
                     supervisor_names = [name.strip() for name in re.split(r'\s+and\s+|,', value) if name.strip()]
                     result["roles"] = [{"name": name, "role": "Supervisor"} for name in supervisor_names]
