@@ -167,19 +167,42 @@ IMPORTANT: Voice transcription often incorrectly adds commas between words that 
 When you see company names with AG, GmbH, Ltd, Inc, LLC, Corp suffixes, treat the words before the suffix as part of the company name, even if separated by commas.
 
 Extract information into these fields (only include fields that are explicitly mentioned):
+CRITICAL RULES FOR PEOPLE EXTRACTION:
+- When you see "People, [Name1] as [Role1], [Name2] as [Role2]", extract ALL people mentioned
+- "John Smith as site manager, Anna Weber as safety officer" means:
+  - people: ["John Smith", "Anna Weber"]  
+  - roles: [{"name": "John Smith", "role": "Site Manager"}, {"name": "Anna Weber", "role": "Safety Officer"}]
+- NEVER stop after the first person - continue parsing the entire sentence for all people
+- Common voice errors: "honor" might be "Anna", "are gay" might be "AG"
 
+CRITICAL RULES FOR ISSUES/ACTIVITIES:
+- When you see "Issues, [issue1] and [issue2]", treat as SEPARATE issues
+- "water leak in basement and delayed material delivery" = TWO issues, not one
+- When you see "Activities [activity1], [activity2]", extract ALL activities
+- "Pouring Concrete, Installing Windows" = TWO activities
+
+CRITICAL RULES FOR COMBINED FIELDS:
+- If you see "weather [condition] time [duration]" in one input, SPLIT them:
+  - weather: only the weather condition
+  - time: only the time duration
+- Example: "weather sunny with occasional clouds time full day eight hours"
+  - weather: "sunny with occasional clouds"
+  - time: "full day eight hours"
+
+Extract information into these fields (only include fields that are explicitly mentioned):
 - site_name: string - physical location or project name (e.g., "Downtown Project", "Building 7")
 - segment: string - specific section or area within the site (e.g., "5", "North Wing", "Foundation")
 - category: string - classification of work or report (e.g., "Bestand", "Safety", "Progress", "Mängelerfassung")
 - companies: list of objects with company names [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}]
-- people: list of strings with ALL names of individuals mentioned (extract every person) ["Anna Keller", "John Smith", "Maxwell", "Stefan", "me"]
+- people: list of strings with ALL names of individuals mentioned (extract every person, including when listed with "and") ["Anna Keller", "John Smith", "Maxwell", "Stefan", "me"]
 - roles: list of objects associating ALL people with their roles - extract every person-role pair mentioned [{"name": "Anna Keller", "role": "Supervisor"}, {"name": "Maxwell", "role": "Technical Engineer"}, {"name": "Stefan", "role": "Worker"}]
 - tools: list of objects with equipment/tools [{"item": "mobile crane"}, {"item": "welding equipment"}]
 - services: list of objects with services provided [{"task": "electrical wiring"}, {"task": "HVAC installation"}]
 - activities: list of strings describing work performed ["laying foundations", "setting up scaffolding"]
 - issues: list of objects with problems and their attributes [{"description": "power outage at 10 AM", "has_photo": false}]
-- time: string - duration or time period (e.g., "morning", "full day", "8 hours")
-- weather: string - weather conditions (e.g., "cloudy with intermittent rain")
+- time: string - duration or time period (e.g., "morning", "full day", "8 hours", "full day 8 hours", "full day eight hours")
+- weather: string - weather conditions (e.g., "cloudy with intermittent rain", "sunny with occasional clouds")
+IMPORTANT: If you see "weather [condition] time [duration]" in one sentence, split them into separate fields
 - impression: string - overall assessment (e.g., "productive despite setbacks")
 - comments: string - additional notes or observations
 - date: string - in dd-mm-yyyy format
@@ -385,9 +408,11 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                         result["companies"].append({"name": company_name})
     
     # People
+
     if "people" in data:
         if isinstance(data["people"], list):
             result["people"] = []
+            seen_people = set()
             for person in data["people"]:
                 person_name = None
                 if isinstance(person, str):
@@ -395,10 +420,9 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                 elif isinstance(person, dict) and "name" in person:
                     person_name = person["name"]
                 
-                # Clean up "myself" references - this would need chat context to work properly
-                # For now, just add the name as-is
-                if person_name:
+                if person_name and person_name.lower() not in seen_people:
                     result["people"].append(person_name)
+                    seen_people.add(person_name.lower())
     
     # Roles
     if "roles" in data:
@@ -476,30 +500,59 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                         result["services"].append({"task": task_text})
     
     # Activities
+    # Activities
     if "activities" in data:
         if isinstance(data["activities"], list):
             result["activities"] = []
             for activity in data["activities"]:
                 if isinstance(activity, str):
-                    result["activities"].append(activity)
-    
+                    # Check if multiple activities are combined with commas
+                    if ", " in activity:
+                        parts = activity.split(", ")
+                        for part in parts:
+                            part = part.strip()
+                            if part and part not in result["activities"]:
+                                result["activities"].append(part)
+                    else:
+                        if activity not in result["activities"]:
+                            result["activities"].append(activity)
+
     # Issues
     if "issues" in data:
         if isinstance(data["issues"], list):
             result["issues"] = []
             for issue in data["issues"]:
                 if isinstance(issue, dict) and "description" in issue:
-                    issue_obj = {"description": issue["description"]}
-                    if "has_photo" in issue:
-                        issue_obj["has_photo"] = bool(issue["has_photo"])
+                    desc = issue["description"]
+                    # Check if this is actually multiple issues combined with "and"
+                    if " and " in desc and "delayed" in desc.lower():
+                        # Split on "and" for common pattern like "water leak and delayed delivery"
+                        parts = desc.split(" and ")
+                        for part in parts:
+                            part = part.strip()
+                            if part:
+                                has_photo = "photo" in part.lower() or "picture" in part.lower()
+                                result["issues"].append({"description": part, "has_photo": has_photo})
                     else:
-                        # Check for photo reference in description
-                        has_photo = "photo" in issue["description"].lower() or "picture" in issue["description"].lower()
-                        issue_obj["has_photo"] = has_photo
-                    result["issues"].append(issue_obj)
+                        issue_obj = {"description": desc}
+                        if "has_photo" in issue:
+                            issue_obj["has_photo"] = bool(issue["has_photo"])
+                        else:
+                            has_photo = "photo" in desc.lower() or "picture" in desc.lower()
+                            issue_obj["has_photo"] = has_photo
+                        result["issues"].append(issue_obj)
                 elif isinstance(issue, str):
-                    has_photo = "photo" in issue.lower() or "picture" in issue.lower()
-                    result["issues"].append({"description": issue, "has_photo": has_photo})
+                    # Same logic for string issues
+                    if " and " in issue and "delayed" in issue.lower():
+                        parts = issue.split(" and ")
+                        for part in parts:
+                            part = part.strip()
+                            if part:
+                                has_photo = "photo" in part.lower() or "picture" in part.lower()
+                                result["issues"].append({"description": part, "has_photo": has_photo})
+                    else:
+                        has_photo = "photo" in issue.lower() or "picture" in issue.lower()
+                        result["issues"].append({"description": issue, "has_photo": has_photo})
     
     # Handle date field
     if "date" in data:
