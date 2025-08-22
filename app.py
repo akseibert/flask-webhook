@@ -209,13 +209,7 @@ CRITICAL: When you see "Lisa worked as co-worker" or "Lisa as co-worker":
 - people: ["Lisa"] (NOT "Lisa worked")  
 - roles: [{"name": "Lisa", "role": "Co-worker"}]
 The word "worked" or "as" is just grammar, not part of the name!
-CRITICAL: When you see "Correct X to Y as Z" patterns:
-- This means: correct person name X to Y, and their role is Z
-- DO NOT add Z as a separate person
-- Example: "Correct Sandra Maia to Sandra Meier as mural artist" means:
-  - correct: [{"field": "people", "old": "Sandra Maia", "new": "Sandra Meier"}]
-  - roles: [{"name": "Sandra Meier", "role": "Mural Artist"}]
-  - NOT adding "mural artist" as a person!
+
 CRITICAL RULES FOR ISSUES/ACTIVITIES:
 - When you see "Issues, [issue1] and [issue2]", treat as SEPARATE issues
 - "water leak in basement and delayed material delivery" = TWO issues, not one
@@ -471,14 +465,8 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     # Clean up person names - remove "worked" and similar artifacts
                     if " worked" in person_name.lower():
                         person_name = person_name.replace(" worked", "").replace(" Worked", "")
-                    
-                    # Skip if it's a role title, not a name
-                    role_titles = ['artist', 'engineer', 'supervisor', 'manager', 'worker', 
-                                  'operator', 'officer', 'inspector', 'electrician', 'plumber']
-                    is_role = any(role in person_name.lower() for role in role_titles)
-                    
-                    # Only add if it's a valid name (not just "me" or role titles)
-                    if person_name and person_name.lower() != "me" and not is_role:
+                    # Only add if it's a valid name (not just "me" or single word artifacts)
+                    if person_name and person_name.lower() != "me":
                         result["people"].append(person_name.strip())
                         seen_people.add(person_name.lower())
     
@@ -2525,10 +2513,9 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     # If a role is specified, add it to roles as well
                     if role:
                         result["roles"] = [{"name": name, "role": role.title()}]
-                    return result
                         
                 # Handle role field
-                if field == "roles":
+                elif field == "roles":
                     # Groups vary depending on which pattern matched
                     name = None
                     role = None
@@ -2552,18 +2539,16 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     log_event("role_extraction", name=name, role=role)
                     result["people"] = [name]
                     result["roles"] = [{"name": name, "role": role}]
-                    return result
 
                 # Handle supervisor field
-                if field == "roles" and raw_field == "supervisor":
+                elif field == "roles" and raw_field == "supervisor":
                     value = clean_value(match.group(1), "roles")
                     supervisor_names = [name.strip() for name in re.split(r'\s+and\s+|,', value) if name.strip()]
                     result["roles"] = [{"name": name, "role": "Supervisor"} for name in supervisor_names]
                     result["people"] = supervisor_names
-                    return result
                 
                 # Handle company field
-                if field == "companies":
+                elif field == "companies":
                     captured = clean_value(match.group(1) if len(match.groups()) >= 1 and match.group(1) else "", field)
                     # If the first group is empty or starts with 'are/is', try the second group
                     if (not captured or captured.lower().startswith(('are', 'is', 'were'))) and len(match.groups()) >= 2:
@@ -2575,61 +2560,56 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     company_names = [name.strip() for name in re.split(r'\s+and\s+|,', captured) if name.strip()]
                     log_event("company_extraction", captured=captured, company_names=company_names)
                     result["companies"] = [{"name": name} for name in company_names]
-                    return result
                 
                 # Handle service/services field
-                if field in ["services", "service"]:
+                elif field in ["services", "service"]:
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result["services"] = []
                     else:
                         services = [service.strip() for service in re.split(r',|\band\b', value) if service.strip()]
                         result["services"] = [{"task": service} for service in services]
-                    return result
                 
                 # Handle tool/tools field
-                if field in ["tools", "tool"]:
+                elif field in ["tools", "tool"]:
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result["tools"] = []
                     else:
                         tools = [tool.strip() for tool in re.split(r',|\band\b', value) if tool.strip()]
                         result["tools"] = [{"item": tool} for tool in tools]
-                    return result
                 
                 # Handle issue field
-                if field == "issues":
+                elif field == "issues":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result["issues"] = []
                     else:
                         issues = [issue.strip() for issue in re.split(r';', value) if issue.strip()]
                         result["issues"] = [{"description": issue} for issue in issues]
-                    return result
                 
                 # Handle activity field
-                if field == "activities":
+                elif field == "activities":
                     value = clean_value(match.group(1), field)
                     if value.lower() == "none":
                         result["activities"] = []
                     else:
                         activities = [activity.strip() for activity in re.split(r',|\band\b', value) if activity.strip()]
                         result["activities"] = activities
-                    return result
                 
                 # Handle clear command
-                if raw_field == "clear":
+                elif raw_field == "clear":
                     field_name = match.group(1).lower() 
                     field_name = FIELD_MAPPING.get(field_name, field_name)
                     result[field_name] = [] if field_name in LIST_FIELDS else ""
-                    return result
                 
                 # Handle other fields (scalar fields)
-                value = clean_value(match.group(1), field)
-                if value.lower() == "none":
-                    result[field] = "" if field in SCALAR_FIELDS else []
                 else:
-                    result[field] = value
+                    value = clean_value(match.group(1), field)
+                    if value.lower() == "none":
+                        result[field] = "" if field in SCALAR_FIELDS else []
+                    else:
+                        result[field] = value
                 
                 return result
         
@@ -3430,22 +3410,16 @@ def find_item_in_report(value: str, report_data: Dict[str, Any]) -> Tuple[Option
     """Find an item in the report data and return its category and full value"""
     value_lower = value.lower().strip()
     
-    # Check people FIRST (most common delete target)
-    for person in report_data.get("people", []):
-        # Exact match or high similarity
-        if value_lower == person.lower() or string_similarity(person.lower(), value_lower) >= 0.7:
-            return "people", person
-    
-    # Then check companies - but with higher threshold to avoid false matches
+    # Check companies
     for company in report_data.get("companies", []):
         if isinstance(company, dict) and company.get("name"):
-            # Only match if it's really similar or contains company suffixes
-            if value_lower in company["name"].lower() or string_similarity(company["name"].lower(), value_lower) >= 0.6:
-                # Double-check it's not matching a person-like name to a company
-                if any(suffix in company["name"].lower() for suffix in ['ag', 'gmbh', 'ltd', 'inc', 'corp']):
-                    return "companies", company["name"]
-                elif string_similarity(company["name"].lower(), value_lower) >= 0.8:  # Higher threshold for non-suffix companies
-                    return "companies", company["name"]
+            if value_lower in company["name"].lower() or string_similarity(company["name"].lower(), value_lower) >= 0.5:
+                return "companies", company["name"]
+    
+    # Check people
+    for person in report_data.get("people", []):
+        if value_lower in person.lower() or string_similarity(person.lower(), value_lower) >= 0.6:
+            return "people", person
     
     # Check tools
     for tool in report_data.get("tools", []):
