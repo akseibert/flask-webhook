@@ -174,6 +174,10 @@ CRITICAL RULES FOR PEOPLE EXTRACTION:
   - roles: [{"name": "John Smith", "role": "Site Manager"}, {"name": "Anna Weber", "role": "Safety Officer"}]
 - NEVER stop after the first person - continue parsing the entire sentence for all people
 - Common voice errors: "honor" might be "Anna", "are gay" might be "AG"
+CRITICAL: When you see "Lisa worked as co-worker" or "Lisa as co-worker":
+- people: ["Lisa"] (NOT "Lisa worked")  
+- roles: [{"name": "Lisa", "role": "Co-worker"}]
+The word "worked" or "as" is just grammar, not part of the name!
 
 CRITICAL RULES FOR ISSUES/ACTIVITIES:
 - When you see "Issues, [issue1] and [issue2]", treat as SEPARATE issues
@@ -206,7 +210,8 @@ Extract information into these fields (only include fields that are explicitly m
   CRITICAL: "water leak in basement and delayed material delivery" = TWO separate issues:
   [{"description": "water leak in basement", "has_photo": false}, {"description": "delayed material delivery", "has_photo": false}]
   Always split issues connected by "and" into separate items
-- time: string - duration or time period (e.g., "morning", "full day", "8 hours", "full day 8 hours", "full day eight hours")
+- time: string - duration or time period (e.g., "7am to 4pm", "7 a.m. to 4 p.m.", "all day from 8 to 5", "full day", "8 hours")
+  IMPORTANT: Extract the COMPLETE time phrase including "a.m."/"p.m." - "7 a.m. to 4 p.m." NOT just "7 a"
 - weather: string - weather conditions (e.g., "cloudy with intermittent rain", "sunny with occasional clouds")
 IMPORTANT: If you see "weather [condition] time [duration]" in one sentence, split them into separate fields
 - impression: string - overall assessment (e.g., "productive despite setbacks")
@@ -414,7 +419,6 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                         result["companies"].append({"name": company_name})
     
     # People
-
     if "people" in data:
         if isinstance(data["people"], list):
             result["people"] = []
@@ -427,8 +431,13 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     person_name = person["name"]
                 
                 if person_name and person_name.lower() not in seen_people:
-                    result["people"].append(person_name)
-                    seen_people.add(person_name.lower())
+                    # Clean up person names - remove "worked" and similar artifacts
+                    if " worked" in person_name.lower():
+                        person_name = person_name.replace(" worked", "").replace(" Worked", "")
+                    # Only add if it's a valid name (not just "me" or single word artifacts)
+                    if person_name and person_name.lower() != "me":
+                        result["people"].append(person_name.strip())
+                        seen_people.add(person_name.lower())
     
     # Roles
     if "roles" in data:
@@ -3667,17 +3676,33 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     matched = False
                     old_name = old_value.strip()
                     
-                    # Find the company that contains the old_name as substring
+                    # Find the company that contains the old_name or is 80% similar
+                    best_match = None
+                    best_similarity = 0
+                    best_index = -1
+                    
                     for i, company in enumerate(result[field]):
                         if isinstance(company, dict) and company.get("name"):
-                            # Check if old_name is part of the company name
+                            # Check exact substring match first
                             if old_name.lower() in company["name"].lower():
-                                old_company_name = company["name"]
-                                company["name"] = new_value
-                                matched = True
-                                changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
-                                log_event("corrected_company", old=old_company_name, new=new_value)
+                                best_match = company["name"]
+                                best_index = i
+                                best_similarity = 1.0
                                 break
+                            # Check similarity
+                            similarity = string_similarity(company["name"].lower(), old_name.lower())
+                            if similarity > best_similarity:
+                                best_similarity = similarity
+                                best_match = company["name"]
+                                best_index = i
+                    
+                    # Use match if similarity is >= 0.8
+                    if best_match and best_similarity >= 0.8:
+                        old_company_name = best_match
+                        result[field][best_index]["name"] = new_value
+                        matched = True
+                        changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
+                        log_event("corrected_company", old=old_company_name, new=new_value)
                     
                     # Try to find and correct the company
                     for i, company in enumerate(result[field]):
