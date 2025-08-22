@@ -194,12 +194,18 @@ Extract information into these fields (only include fields that are explicitly m
 - segment: string - specific section or area within the site (e.g., "5", "North Wing", "Foundation")
 - category: string - classification of work or report (e.g., "Bestand", "Safety", "Progress", "Mängelerfassung")
 - companies: list of objects with company names [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}]
-- people: list of strings with ALL names of individuals mentioned (extract every person, including when listed with "and") ["Anna Keller", "John Smith", "Maxwell", "Stefan", "me"]
-- roles: list of objects associating ALL people with their roles - extract every person-role pair mentioned [{"name": "Anna Keller", "role": "Supervisor"}, {"name": "Maxwell", "role": "Technical Engineer"}, {"name": "Stefan", "role": "Worker"}]
+- people: list of strings with ALL names of individuals mentioned (extract every person, but NEVER include "me" as a person name) ["Anna Keller", "John Smith", "Maxwell", "Stefan"]
+- roles: list of {"name": "person", "role": "their role"} for ALL people with specific roles mentioned
+  CRITICAL: When you see "John Smith as site manager, Anna Weber as safety officer", extract BOTH:
+  [{"name": "John Smith", "role": "Site Manager"}, {"name": "Anna Weber", "role": "Safety Officer"}]
+  NEVER stop after the first person - extract ALL people and their roles
 - tools: list of objects with equipment/tools [{"item": "mobile crane"}, {"item": "welding equipment"}]
 - services: list of objects with services provided [{"task": "electrical wiring"}, {"task": "HVAC installation"}]
 - activities: list of strings describing work performed ["laying foundations", "setting up scaffolding"]
-- issues: list of objects with problems and their attributes [{"description": "power outage at 10 AM", "has_photo": false}]
+- issues: list of {"description": "issue description", "has_photo": boolean} for problems encountered
+  CRITICAL: "water leak in basement and delayed material delivery" = TWO separate issues:
+  [{"description": "water leak in basement", "has_photo": false}, {"description": "delayed material delivery", "has_photo": false}]
+  Always split issues connected by "and" into separate items
 - time: string - duration or time period (e.g., "morning", "full day", "8 hours", "full day 8 hours", "full day eight hours")
 - weather: string - weather conditions (e.g., "cloudy with intermittent rain", "sunny with occasional clouds")
 IMPORTANT: If you see "weather [condition] time [duration]" in one sentence, split them into separate fields
@@ -1019,8 +1025,14 @@ Fields to extract (omit if not present):
 - people: list of strings (e.g., ["Anna", "Tobias"])
 - roles: list of objects with "name" and "role" (e.g., [{"name": "Anna", "role": "Supervisor"}])
 - tools: list of objects with "item" (e.g., [{"item": "Crane"}])
-- services: list of objects with "task" (e.g., [{"task": "Excavation"}])
-- activities: list of strings (e.g., ["Concrete pouring"])
+- services: list of strings for services provided ["plumbing", "electrical work", "foundation laying"]
+  NEVER put activities like "pouring concrete" or "installing windows" in services
+- activities: list of strings for activities performed ["pouring concrete", "installing windows", "painting walls"]
+  NEVER put services like "plumbing" or "electrical wiring" in activities
+  
+  CRITICAL: When you see "services, foundation laying, electrical wiring, and activities pouring concrete, installing windows":
+  - services: ["foundation laying", "electrical wiring"]
+  - activities: ["pouring concrete", "installing windows"]
 - issues: list of objects with "description" (required), "caused_by" (optional), "has_photo" (optional, default false)
 - time: string (e.g., "morning", "full day")
 - weather: string (e.g., "cloudy")
@@ -3242,14 +3254,15 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         
         
         # If we reach here with no results but NLP is enabled, try NLP as last resort
-        if not result and CONFIG.get("ENABLE_NLP_EXTRACTION", False):
-            nlp_data, confidence = extract_with_nlp(text)
-            if confidence >= 0.5:  # Lower threshold for fallback
+            if confidence >= 0.6:
+                # Remove "me" from people if it got added
+                if "people" in nlp_data and "me" in nlp_data["people"]:
+                    nlp_data["people"] = [p for p in nlp_data["people"] if p.lower() != "me"]
+                if "roles" in nlp_data:
+                    nlp_data["roles"] = [r for r in nlp_data["roles"] if r.get("name", "").lower() != "me"]
+                
                 log_event("nlp_fallback_extraction", confidence=confidence, fields=list(nlp_data.keys()))
                 return nlp_data
-        
-        log_event("fields_extracted", result_fields=len(result))
-        return result
         
     except Exception as e:
         log_event("extract_fields_error", input=text[:100], error=str(e), traceback=traceback.format_exc())
@@ -3652,13 +3665,19 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                     
                     matched = False
+                    old_name = old_value.strip()
                     
-                    # Handle special case for spelling corrections like "correct spelling of X to Y"
-                    if "spelling of " in old_value.lower():
-                        # Extract the actual old name by removing "spelling of "
-                        old_name = re.sub(r'^(correct )?spelling of ', '', old_value, flags=re.IGNORECASE).strip()
-                    else:
-                        old_name = old_value.strip()
+                    # Find the company that contains the old_name as substring
+                    for i, company in enumerate(result[field]):
+                        if isinstance(company, dict) and company.get("name"):
+                            # Check if old_name is part of the company name
+                            if old_name.lower() in company["name"].lower():
+                                old_company_name = company["name"]
+                                company["name"] = new_value
+                                matched = True
+                                changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
+                                log_event("corrected_company", old=old_company_name, new=new_value)
+                                break
                     
                     # Try to find and correct the company
                     for i, company in enumerate(result[field]):
