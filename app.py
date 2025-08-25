@@ -293,6 +293,18 @@ Correction commands:
   - "correct Lisa Maya to Lisa Meier": {"correct": [{"field": "people", "old": "Lisa Maya", "new": "Lisa Meier"}]}
   - "correct Hartbrücke to Hardbrücke" when site is "Zurich Bike Tunnel Hartbrücke": {"correct": [{"field": "site_name", "old": "Zurich Bike Tunnel Hartbrücke", "new": "Zurich Bike Tunnel Hardbrücke"}]}
 - For "correct spelling Electric Maya, GMBH to Electric-Meier GmbH": return {"correct": [{"field": "companies", "old": "Electric Maya", "new": "Electric-Meier GmbH"}]} (handle comma-separated company names properly)
+- CRITICAL for multiple corrections in one command:
+  When you see "correct spelling X to Y, A to B, C to D", you must parse EACH correction pair separately.
+  For example: "correct spelling Emplenier AG to Implenia AG, Kieberg AG to KIBAG AG, Malti AG to Marti AG"
+  Must return:
+  {"correct": [
+    {"field": "companies", "old": "Emplenier AG", "new": "Implenia AG"},
+    {"field": "companies", "old": "Kieberg AG", "new": "KIBAG AG"},
+    {"field": "companies", "old": "Malti AG", "new": "Marti AG"}
+  ]}
+  - Each comma-separated "old to new" pair becomes a separate object in the correct array
+  - Preserve company suffixes (AG, GmbH, Ltd, etc.) in both old and new values
+  - The field should be "companies" when the values contain company suffixes
 CRITICAL for people and roles extraction:
 - When you see patterns like "X as Y, A as B, C was doing D, and me as E", extract ALL people mentioned
 - When you see "X was a Y" or "X was working as Y", extract X as a person and Y as their role
@@ -754,6 +766,46 @@ def calculate_extraction_confidence(data: Dict[str, Any], original_text: str) ->
     # Final confidence score bounded between 0 and 1
     return max(0.0, min(1.0, confidence))
 
+def process_multiple_corrections(text: str) -> Dict[str, Any]:
+    """Process multiple spelling corrections in one command"""
+    # Pattern for "correct spelling X to Y, A to B, C to D"
+    pattern = r'correct\s+spelling\s+(.+)'
+    match = re.match(pattern, text, re.IGNORECASE)
+    
+    if not match:
+        return {}
+    
+    corrections_text = match.group(1)
+    corrections = []
+    
+    # Split by commas that are followed by a word and "to"
+    # This regex looks for ", Word" where Word is followed by " to "
+    parts = re.split(r',\s+(?=[A-Z][^,]+\s+to\s+)', corrections_text)
+    
+    for part in parts:
+        # Extract "old to new" pattern
+        correction_match = re.match(r'(.+?)\s+to\s+(.+)', part.strip())
+        if correction_match:
+            old_value = correction_match.group(1).strip()
+            new_value = correction_match.group(2).strip()
+            
+            # Determine field based on suffixes
+            field = "companies"  # Default to companies for AG, GmbH, etc.
+            if any(suffix in old_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
+                field = "companies"
+            elif not any(suffix in old_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
+                # Check if it's a person name (no company suffix)
+                field = "people"
+            
+            corrections.append({
+                "field": field,
+                "old": old_value,
+                "new": new_value
+            })
+    
+    if corrections:
+        return {"correct": corrections}
+    return {}
 
 REQUIRED_ENV_VARS = ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"]
 
@@ -2788,8 +2840,20 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                              original=text, 
                              resolved=normalized_text,
                              item=last_item)
-        
-        
+
+
+            # Check for multiple corrections first
+            if "correct spelling" in normalized_text.lower() and normalized_text.count(" to ") > 1:
+                multi_corrections = process_multiple_corrections(normalized_text)
+                if multi_corrections:
+                    session["command_history"].append(session["structured_data"].copy())
+                    session["structured_data"] = merge_data(session["structured_data"], multi_corrections, chat_id)
+                    session["structured_data"] = enrich_date(session["structured_data"])
+                    save_session(session_data)
+                    summary = summarize_report(session["structured_data"])
+                    send_message(chat_id, f"✅ Processed multiple corrections.\n\n{summary}")
+                    return multi_corrections
+
         # Handle spelling corrections - enhanced to detect field automatically
         correct_patterns = [
             r'^correct\s+spelling\s+of\s+(.+?)\s+to\s+(.+?)$',
@@ -3866,7 +3930,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             changes.append(f"added person '{old_value}' with role '{new_value}'")
                             
                 elif field == "companies":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
+                    session_data[chat_id]["last_change_history"].append((field, existing_data.get(field, []).copy()))
                     
                     matched = False
                     old_name = old_value.strip()
@@ -3900,7 +3964,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                 best_similarity = similarity
                                 best_match = company_name
                                 best_index = i
-
+                    
                     # Use match if similarity is >= 0.4 (lowered from 0.8 for voice errors)
                     if best_match and best_similarity >= 0.4:
                         old_company_name = best_match
@@ -3910,99 +3974,13 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             matched = True
                             changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
                             log_event("corrected_company", old=old_company_name, new=new_value)
-                    else:
-                        matched = True  # Mark as matched but don't add duplicate change
-
-                    # Try to find and correct the company
-                    for i, company in enumerate(result[field]):
-                        if isinstance(company, dict) and company.get("name"):
-                            # Check for exact or high similarity match
-                            if company["name"].lower() == old_name.lower() or string_similarity(company["name"].lower(), old_name.lower()) >= 0.8:
-                                old_company_name = company["name"]  # Save the old name for the message
-                                company["name"] = new_value
-                                matched = True
-                                changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
-                                break
-
-                    if not matched:
-                        # If no match found, try partial matching
-                        for i, company in enumerate(result[field]):
-                            if isinstance(company, dict) and company.get("name"):
-                                # Check if the old value is part of the company name
-                                if old_name.lower() in company["name"].lower():
-                                    company["name"] = new_value
-                                    matched = True
-                                    changes.append(f"corrected company '{company['name']}' to '{new_value}'")
-                                    break
-                    
-                    elif field == "companies":
-                        session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                        
-                        matched = False
-                        old_name = old_value.strip()
-                        
-                        # Find the company that contains the old_name or is similar
-                        best_match = None
-                        best_similarity = 0
-                        best_index = -1
-                        
-                        for i, company in enumerate(result[field]):
-                            if isinstance(company, dict) and company.get("name"):
-                                company_name = company["name"]
-                                
-                                # Check exact match first (case insensitive)
-                                if company_name.lower() == old_name.lower():
-                                    best_match = company_name
-                                    best_index = i
-                                    best_similarity = 1.0
-                                    break
-                                
-                                # Check if old_name is a substring (for partial matches)
-                                if old_name.lower() in company_name.lower():
-                                    best_match = company_name
-                                    best_index = i
-                                    best_similarity = 0.9
-                                    break
-                                
-                                # Check similarity
-                                similarity = string_similarity(company_name.lower(), old_name.lower())
-                                if similarity > best_similarity:
-                                    best_similarity = similarity
-                                    best_match = company_name
-                                    best_index = i
-                        
-                        # Use match if similarity is >= 0.4 (lowered from 0.8 for voice errors)
-                        if best_match and best_similarity >= 0.4:
-                            old_company_name = best_match
-                            # Only correct if the new value is actually different
-                            if old_company_name.lower() != new_value.lower():
-                                result[field][best_index]["name"] = new_value
-                                matched = True
-                                changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
-                                log_event("corrected_company", old=old_company_name, new=new_value)
-                            else:
-                                matched = True  # Mark as matched but don't add duplicate change
-                        
-                        if not matched:
-                            # DON'T add as new company if it wasn't found - this is likely an error
-                            log_event("correction_not_found", field=field, old=old_value, new=new_value)
-                            changes.append(f"could not find '{old_value}' in companies to correct")
-                    else:
-                        # Normal matching logic
-                        for i, company in enumerate(result[field]):
-                            if (isinstance(company, dict) and company.get("name") and 
-                                string_similarity(company["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
-                                company["name"] = new_value
-                                matched = True
-                                changes.append(f"corrected company '{old_value}' to '{new_value}'")
-                                break
                     
                     if not matched:
-                        # If no match, add the new company
-                        result[field].append({"name": new_value})
-                
-                        changes.append(f"added corrected company '{new_value}'")
-                        
+                        # DON'T add as new company if it wasn't found - this is likely an error
+                        log_event("correction_not_found", field=field, old=old_value, new=new_value)
+                        changes.append(f"could not find '{old_value}' in companies to correct")
+                    
+                    
                 elif field == "tools":
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                     
