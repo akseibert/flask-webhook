@@ -516,6 +516,7 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                         seen_people.add(person_name.lower())
     
     # Roles
+    # Roles
     if "roles" in data:
         if isinstance(data["roles"], list):
             result["roles"] = []
@@ -536,7 +537,6 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                         result["people"] = []
                     if role["name"] not in result["people"]:
                         result["people"].append(role["name"])
-    
 
     # Tools - deduplicate and filter out category keywords
     if "tools" in data:
