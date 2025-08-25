@@ -241,6 +241,15 @@ Extract information into these fields (only include fields that are explicitly m
   When you see "Lisa Maya as co-worker", extract: [{"name": "Lisa Maya", "role": "Co-Worker"}]
   Handle hyphenated roles like "co-worker" as "Co-Worker"
   NEVER stop after the first person - extract ALL people and their roles
+  CRITICAL: When you see "people [Name] as [Role]" or "person [Name] as [Role]", you MUST extract BOTH:
+- Add the name to the "people" list
+- Add the name-role pair to the "roles" list
+Example: "people Lisa Miller as co-worker" should return:
+{
+  "people": ["Lisa Miller"],
+  "roles": [{"name": "Lisa Miller", "role": "Co-Worker"}]
+}
+NEVER extract just the person without their role when "as" is present in the text.
 - tools: list of objects with equipment/tools [{"item": "mobile crane"}, {"item": "welding equipment"}]
 - services: list of objects with services provided [{"task": "electrical wiring"}, {"task": "HVAC installation"}]
 - activities: list of strings describing work performed ["laying foundations", "setting up scaffolding"]
@@ -508,19 +517,25 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
     
     # Roles
     if "roles" in data:
-        if isinstance(data["roles"], list):
-            result["roles"] = []
-            for role in data["roles"]:
-                if isinstance(role, dict) and "name" in role and "role" in role:
-                    # Capitalize the role title properly
-                    role_title = role["role"]
-                    # Handle hyphenated roles like "co-worker"
-                    if '-' in role_title:
-                        role_title = '-'.join(word.capitalize() for word in role_title.split('-'))
-                    else:
-                        # Capitalize first letter of each word in the role
-                        role_title = ' '.join(word.capitalize() for word in role_title.split())
-                    result["roles"].append({"name": role["name"], "role": role_title})
+    if isinstance(data["roles"], list):
+        result["roles"] = []
+        for role in data["roles"]:
+            if isinstance(role, dict) and "name" in role and "role" in role:
+                # Capitalize the role title properly
+                role_title = role["role"]
+                # Handle hyphenated roles like "co-worker"
+                if '-' in role_title:
+                    role_title = '-'.join(word.capitalize() for word in role_title.split('-'))
+                else:
+                    # Capitalize first letter of each word in the role
+                    role_title = ' '.join(word.capitalize() for word in role_title.split())
+                result["roles"].append({"name": role["name"], "role": role_title})
+                
+                # ALSO make sure the person is in the people list
+                if "people" not in result:
+                    result["people"] = []
+                if role["name"] not in result["people"]:
+                    result["people"].append(role["name"])
     
 
     # Tools - deduplicate and filter out category keywords
@@ -3929,18 +3944,25 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             result[field].append({"name": old_value, "role": new_value.title()})
                             changes.append(f"added person '{old_value}' with role '{new_value}'")
                             
+          
                 elif field == "companies":
                     session_data[chat_id]["last_change_history"].append((field, existing_data.get(field, []).copy()))
                     
                     matched = False
                     old_name = old_value.strip()
+
+                    # Debug log to see what we're trying to match
+                    existing_companies = [c.get("name") for c in result.get(field, []) if isinstance(c, dict)]
+                    log_event("company_correction_attempt", 
+                             looking_for=old_name,
+                             in_companies=existing_companies)
                     
                     # Find the company that contains the old_name or is similar
                     best_match = None
                     best_similarity = 0
                     best_index = -1
                     
-                    for i, company in enumerate(result[field]):
+                    for i, company in enumerate(result.get(field, [])):
                         if isinstance(company, dict) and company.get("name"):
                             company_name = company["name"]
                             
@@ -3951,21 +3973,21 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                 best_similarity = 1.0
                                 break
                             
-                            # Check if old_name is a substring (for partial matches like "Meier" in "Electric-Meier GmbH")
+                            # Check if old_name is a substring
                             if old_name.lower() in company_name.lower():
                                 best_match = company_name
                                 best_index = i
                                 best_similarity = 0.9
                                 break
                             
-                            # Check similarity (lowered threshold for voice errors)
+                            # Check similarity
                             similarity = string_similarity(company_name.lower(), old_name.lower())
                             if similarity > best_similarity:
                                 best_similarity = similarity
                                 best_match = company_name
                                 best_index = i
                     
-                    # Use match if similarity is >= 0.4 (lowered from 0.8 for voice errors)
+                    # Use match if similarity is >= 0.4
                     if best_match and best_similarity >= 0.4:
                         old_company_name = best_match
                         # Only correct if the new value is actually different
@@ -3974,9 +3996,11 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             matched = True
                             changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
                             log_event("corrected_company", old=old_company_name, new=new_value)
+                        else:
+                            matched = True  # Mark as matched but don't add duplicate
                     
                     if not matched:
-                        # DON'T add as new company if it wasn't found - this is likely an error
+                        # DON'T add as new company if it wasn't found
                         log_event("correction_not_found", field=field, old=old_value, new=new_value)
                         changes.append(f"could not find '{old_value}' in companies to correct")
                     
