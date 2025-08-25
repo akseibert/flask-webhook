@@ -517,25 +517,25 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
     
     # Roles
     if "roles" in data:
-    if isinstance(data["roles"], list):
-        result["roles"] = []
-        for role in data["roles"]:
-            if isinstance(role, dict) and "name" in role and "role" in role:
-                # Capitalize the role title properly
-                role_title = role["role"]
-                # Handle hyphenated roles like "co-worker"
-                if '-' in role_title:
-                    role_title = '-'.join(word.capitalize() for word in role_title.split('-'))
-                else:
-                    # Capitalize first letter of each word in the role
-                    role_title = ' '.join(word.capitalize() for word in role_title.split())
-                result["roles"].append({"name": role["name"], "role": role_title})
-                
-                # ALSO make sure the person is in the people list
-                if "people" not in result:
-                    result["people"] = []
-                if role["name"] not in result["people"]:
-                    result["people"].append(role["name"])
+        if isinstance(data["roles"], list):
+            result["roles"] = []
+            for role in data["roles"]:
+                if isinstance(role, dict) and "name" in role and "role" in role:
+                    # Capitalize the role title properly
+                    role_title = role["role"]
+                    # Handle hyphenated roles like "co-worker"
+                    if '-' in role_title:
+                        role_title = '-'.join(word.capitalize() for word in role_title.split('-'))
+                    else:
+                        # Capitalize first letter of each word in the role
+                        role_title = ' '.join(word.capitalize() for word in role_title.split())
+                    result["roles"].append({"name": role["name"], "role": role_title})
+                    
+                    # ALSO make sure the person is in the people list
+                    if "people" not in result:
+                        result["people"] = []
+                    if role["name"] not in result["people"]:
+                        result["people"].append(role["name"])
     
 
     # Tools - deduplicate and filter out category keywords
