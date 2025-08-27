@@ -508,38 +508,38 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
     
     # People
     if "people" in data:
-    if isinstance(data["people"], list):
-        result["people"] = []
-        seen_people = set()
-        for person in data["people"]:
-            person_name = None
-            if isinstance(person, str):
-                # Handle common transcription errors for names
-                name_corrections = {
-                    "me": None,  # Skip "me" - should be resolved to actual user
-                    "mark us": "Marcus",
-                    "markus": "Marcus",
-                }
-                
-                if person.lower() in name_corrections:
-                    corrected = name_corrections[person.lower()]
-                    if corrected:  # If not None
-                        person_name = corrected
+        if isinstance(data["people"], list):
+            result["people"] = []
+            seen_people = set()
+            for person in data["people"]:
+                person_name = None
+                if isinstance(person, str):
+                    # Handle common transcription errors for names
+                    name_corrections = {
+                        "me": None,  # Skip "me" - should be resolved to actual user
+                        "mark us": "Marcus",
+                        "markus": "Marcus",
+                    }
+                    
+                    if person.lower() in name_corrections:
+                        corrected = name_corrections[person.lower()]
+                        if corrected:  # If not None
+                            person_name = corrected
+                        else:
+                            continue  # Skip this person
                     else:
-                        continue  # Skip this person
-                else:
-                    person_name = person
-            elif isinstance(person, dict) and "name" in person:
-                person_name = person["name"]
-            
-            if person_name and person_name.lower() not in seen_people:
-                # Clean up person names - remove "worked" and similar artifacts
-                if " worked" in person_name.lower():
-                    person_name = person_name.replace(" worked", "").replace(" Worked", "")
-                # Add all valid names
-                if person_name:
-                    result["people"].append(person_name.strip())
-                    seen_people.add(person_name.lower())
+                        person_name = person
+                elif isinstance(person, dict) and "name" in person:
+                    person_name = person["name"]
+                
+                if person_name and person_name.lower() not in seen_people:
+                    # Clean up person names - remove "worked" and similar artifacts
+                    if " worked" in person_name.lower():
+                        person_name = person_name.replace(" worked", "").replace(" Worked", "")
+                    # Add all valid names
+                    if person_name:
+                        result["people"].append(person_name.strip())
+                        seen_people.add(person_name.lower())
     
     # Roles
     if "roles" in data:
