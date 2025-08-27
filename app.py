@@ -295,7 +295,11 @@ CRITICAL: When you see "Correct X to Y as Z" patterns:
 
 Correction commands:
 - If input is "correct X in Y to Z" or similar: return {"correct": [{"field": "Y", "old": "X", "new": "Z"}]}
-- IMPORTANT: For "correct X to Y", first check if X exists in the current report data:
+- For "correct spelling X to Y" or "correct X to Y": return {"correct": [{"field": "companies", "old": "X", "new": "Y"}]} if X or Y contains AG/GmbH/Ltd suffixes
+- IMPORTANT: For voice-transcribed corrections like "correct spelling Makhti ageet to Marti AG":
+  - Recognize "ageet" as a misheard "AG"
+  - Return {"correct": [{"field": "companies", "old": "Makhti ageet", "new": "Marti AG"}]}
+- For "correct X to Y", first check if X exists in the current report data:
   - If X is part of site_name, return {"correct": [{"field": "site_name", "old": "<full_site_name>", "new": "<site_name_with_X_replaced_by_Y>"}]}
   - If X is a company name (has AG, GmbH, Ltd suffixes), return {"correct": [{"field": "companies", "old": "X", "new": "Y"}]}
   - If X is a person name (no company suffixes), return {"correct": [{"field": "people", "old": "X", "new": "Y"}]}
@@ -798,6 +802,18 @@ def process_multiple_corrections(text: str) -> Dict[str, Any]:
     
     corrections_text = match.group(1)
     corrections = []
+    
+    # First normalize voice errors before processing
+    voice_corrections = {
+        'makhti ageet': 'Marti AG',
+        'marty ageet': 'Marti AG',
+        'kieback ag': 'KIBAG AG',
+        'emplenier ag': 'Implenia AG',
+    }
+    
+    for wrong, right in voice_corrections.items():
+        if wrong in corrections_text.lower():
+            corrections_text = corrections_text.replace(wrong, right)
     
     # First, handle "and" as a separator between corrections
     # Replace "and from" with just a comma to normalize
@@ -1503,21 +1519,23 @@ def normalize_voice_companies(text: str) -> str:
         r"\bGame Bearer\b": "GmbH",
         r"\bGame Behave\b": "GmbH",
         r"\bare gay\b": "AG",
-        r"Company's\s+": "Companies ",  # Fix possessive to plural
-        r"\bElectro Maya Game Bearer\b": "Elektro-Meier GmbH",
-        r"\bElectro Maya Game Behave\b": "Elektro-Meier GmbH",
-        r"\bMaya\b": "Meier",  # Common misrecognition
-        r"\bGame Bearer\b": "GmbH",
-        r"\bGame Behave\b": "GmbH",
-        r"\bare gay\b": "AG",
-        # ADD THESE NEW PATTERNS:
         r"\bmakhti ageet\b": "Marti AG",
         r"\bKieback\b": "KIBAG",
         r"\bImplenier\b": "Implenia",
         r"\bElektromaya\b": "Elektro-Meier",
         r"\bageet\b": "AG",
         r"\bmakhti\b": "Marti",
-    }
+        r"\bMakhti\s+ageet\b": "Marti AG",
+        r"\bMakhti\s+AG\b": "Marti AG",
+        r"\bMarty\s+ageet\b": "Marti AG",
+        r"\bMarty\s+AG\b": "Marti AG",
+        r"\bMarty\b(?!\s+(AG|ageet))": "Marti",  # Marty without suffix
+        r"\bageet\b(?!\s)": " AG",  # ageet at end becomes AG
+        r"\bKieback\s+AG\b": "KIBAG AG",
+        r"\bKeyBag\s+AG\b": "KIBAG AG",
+        r"\bEmplenier\s+AG\b": "Implenia AG",
+}
+
     
     for pattern, replacement in voice_replacements.items():
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
@@ -2474,6 +2492,7 @@ def string_similarity(a: str, b: str) -> float:
         b_lower = b.lower()
         
         # Check for exact match first
+        # Check for exact match first
         if a_lower == b_lower:
             return 1.0
             
@@ -2481,6 +2500,24 @@ def string_similarity(a: str, b: str) -> float:
         # This helps with "Marty" matching "Marty again" or "Marty Agee"
         a_words = a_lower.split()
         b_words = b_lower.split()
+        
+        # Special boost for AG/ageet variations (common voice error)
+        if ('ag' in a_lower and 'ageet' in b_lower) or ('ageet' in a_lower and 'ag' in b_lower):
+            base_similarity = SequenceMatcher(None, a_lower, b_lower).ratio()
+            return min(1.0, base_similarity + 0.3)
+        
+        # Special handling for common voice errors
+        voice_error_pairs = [
+            ('marty', 'marti'),
+            ('makhti', 'marti'),
+            ('kieback', 'kibag'),
+            ('emplenier', 'implenia'),
+            ('maya', 'meier')
+        ]
+        
+        for error, correct in voice_error_pairs:
+            if (error in a_lower and correct in b_lower) or (correct in a_lower and error in b_lower):
+                return 0.8  # High similarity for known voice errors
         
         # If first word matches exactly, boost similarity
         if a_words and b_words and a_words[0] == b_words[0]:
@@ -3160,6 +3197,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 old_value = re.sub(r'^companies?\s+', '', old_value, flags=re.IGNORECASE)
                 
                 # Auto-detect field by searching through existing data with 60% similarity threshold
+                
                 field = None
                 if chat_id and chat_id in session_data:
                     existing_data = session_data[chat_id].get("structured_data", {})
@@ -3168,6 +3206,9 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     best_match = None
                     best_similarity = 0
                     best_field = None
+                    
+                    # Lower threshold for voice transcriptions that might have errors
+                    similarity_threshold = 0.4 if "ageet" in old_value.lower() or "maya" in old_value.lower() else 0.6
                     
                     # Check scalar fields (site_name, segment, category, time, weather, impression, comments)
                     for scalar_field in SCALAR_FIELDS:
@@ -4289,6 +4330,9 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         log_event("company_correction_attempt", 
                                  looking_for=old_name,
                                  in_companies=existing_companies)
+                        
+                        # Lower threshold for voice-transcribed company names
+                        similarity_threshold = 0.4 if any(marker in old_name.lower() for marker in ['maya', 'ageet', 'makhti']) else 0.6
                         
                         # Find the company that matches
                         best_match = None
