@@ -519,10 +519,12 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     # Clean up person names - remove "worked" and similar artifacts
                     if " worked" in person_name.lower():
                         person_name = person_name.replace(" worked", "").replace(" Worked", "")
-                    # Add all valid names (including "me" for now, user can specify later)
-                    if person_name:
-                        result["people"].append(person_name.strip())
-                        seen_people.add(person_name.lower())
+                    # Add valid names, but NEVER the literal 'me'
+                    cleaned = person_name.strip()
+                    if cleaned and cleaned.lower() != "me":
+                        result["people"].append(cleaned)
+                        seen_people.add(cleaned.lower())
+
     
     # Roles
     if "roles" in data:
@@ -538,7 +540,9 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     else:
                         # Capitalize first letter of each word in the role
                         role_title = ' '.join(word.capitalize() for word in role_title.split())
-                    result["roles"].append({"name": role["name"], "role": role_title})
+                    # Skip roles where the name is the literal 'me'
+                    if role.get("name", "").strip().lower() != "me":
+                        result["roles"].append({"name": role["name"], "role": role_title})
                     
                     # ALSO make sure the person is in the people list
                     if "people" not in result:
@@ -1280,10 +1284,21 @@ def send_message(chat_id: str, text: str) -> None:
             # Try with HTML mode first
             payload["parse_mode"] = "HTML"
             # Convert basic Markdown to HTML
-            html_text = text.replace("**", "<b>").replace("**", "</b>")
-            html_text = html_text.replace("*", "<i>").replace("*", "</i>")
-            html_text = html_text.replace("_", "<i>").replace("_", "</i>")
-            html_text = html_text.replace("`", "<code>").replace("`", "</code>")
+                        # Convert basic markdown to HTML safely for Telegram
+            import html as _html_mod, re as _re
+
+            def md_to_html(s: str) -> str:
+                # Escape HTML first, then apply minimal markdown patterns
+                s = _html_mod.escape(s)
+                s = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', s)
+                s = _re.sub(r'\*(.+?)\*', r'<i>\1</i>', s)
+                s = _re.sub(r'_(.+?)_', r'<i>\1</i>', s)
+                s = _re.sub(r'`(.+?)`', r'<code>\1</code>', s)
+                s = s.replace('\n', '<br>')
+                return s
+
+            html_text = md_to_html(text)
+
             payload["text"] = html_text
             
             response = requests.post(url, json=payload)
@@ -4268,25 +4283,62 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         session_data[chat_id]["last_change_history"].append((field, existing_data.get("people", []).copy()))
                         
                         matched = False
-                        # CRITICAL: NLP gives us the exact case, but we need case-insensitive match
+
+                        # --- Diacritic-insensitive name normalization + similarity fallback ---
+                        def _strip_accents(s: str) -> str:
+                            import unicodedata
+                            return "".join(ch for ch in unicodedata.normalize("NFKD", s or "") if not unicodedata.combining(ch))
+                        def strip_accents(text: str) -> str:
+                            """Remove diacritics (e.g., Müller → Muller)."""
+                            if not isinstance(text, str):
+                                return ""
+                            return "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
+
+                        def norm(text: str) -> str:
+                            """Accent-free, casefolded form for comparisons."""
+                            return strip_accents(text).casefold().strip()
+                            
+                        def _norm(s: str) -> str:
+                            return _strip_accents(s).lower().strip()
+
+                        norm_old = _norm(old_value)
+                        best_idx = None
+                        best_score = 0.0
+                        # allow a slightly lower cutoff to catch accent-only differences
+                        threshold = CONFIG.get("NAME_SIMILARITY_THRESHOLD", 0.7) - 0.1
+
                         for i, person in enumerate(result.get("people", [])):
-                            if person.lower() == old_value.lower():
-                                old_person_name = person
-                                result["people"][i] = new_value
-                                matched = True
-                                changes.append(f"corrected person '{old_person_name}' to '{new_value}'")
-                                
-                                # ALSO UPDATE ROLES
-                                if "roles" in result:
-                                    for role in result["roles"]:
-                                        if isinstance(role, dict) and role.get("name"):
-                                            if role["name"].lower() == old_person_name.lower():
-                                                role["name"] = new_value
-                                                log_event("updated_role_name", old=old_person_name, new=new_value)
+                            p = person or ""
+                            if p.lower() == old_value.lower():
+                                best_idx = i
+                                best_score = 1.0
                                 break
-                        
-                        if not matched:
+                            # diacritic-insensitive equality, then similarity
+                            norm_p = _norm(p)
+                            score = 1.0 if norm_p == norm_old else string_similarity(p, old_value)
+                            if score > best_score and score >= threshold:
+                                best_idx = i
+                                best_score = score
+
+                        if best_idx is not None:
+                            old_person_name = result["people"][best_idx]
+                            result["people"][best_idx] = new_value
+                            matched = True
+                            changes.append(f"corrected person '{old_person_name}' to '{new_value}'")
+
+                            # ALSO UPDATE ROLES using the same matching logic
+                            if "roles" in result:
+                                for role in result["roles"]:
+                                    if isinstance(role, dict) and role.get("name"):
+                                        rp = role["name"]
+                                        if (rp.lower() == old_person_name.lower()
+                                            or _norm(rp) == _norm(old_person_name)
+                                            or string_similarity(rp, old_person_name) >= threshold):
+                                            role["name"] = new_value
+                                            log_event("updated_role_name", old=old_person_name, new=new_value)
+                        else:
                             log_event("person_correction_not_found", old=old_value, new=new_value)
+
                     
                     elif field == "roles":
                         # Interpret as correcting a role for a person
