@@ -2481,15 +2481,27 @@ def string_similarity(a: str, b: str) -> float:
         if a_lower == b_lower:
             return 1.0
             
+        # Special handling for voice corrections - if one contains the other as main part
+        # This helps with "Marty" matching "Marty again" or "Marty Agee"
+        a_words = a_lower.split()
+        b_words = b_lower.split()
+        
+        # If first word matches exactly, boost similarity
+        if a_words and b_words and a_words[0] == b_words[0]:
+            base_similarity = SequenceMatcher(None, a_lower, b_lower).ratio()
+            # Boost by 20% if first word matches
+            return min(1.0, base_similarity + 0.2)
+            
         # Check for direct substring match
         if a_lower in b_lower or b_lower in a_lower:
             # Calculate the ratio of the shorter string to the longer one
             shorter = min(len(a_lower), len(b_lower))
             longer = max(len(a_lower), len(b_lower))
-            return min(0.95, shorter / longer + 0.3)  # Add 0.3 to favor substring matches
+            return min(0.95, shorter / longer + 0.3)
         
         # Otherwise use SequenceMatcher
         similarity = SequenceMatcher(None, a_lower, b_lower).ratio()
+    
         
         # Log for debugging
         log_event("string_similarity", a=a, b=b, similarity=similarity)
@@ -2874,19 +2886,28 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     # Supplement NLP with regex for fields it might have missed
                     supplemented_fields = []
 
+                    
                     # CRITICAL: Check if NLP missed extracting roles from "X as Y" pattern
-                    if nlp_data.get("people") and not nlp_data.get("roles"):
-                        # Check original text for "as" pattern
+                    # This handles cases like "People Lisa as project owner"
+                    if nlp_data.get("people"):
+                        # Check if we have fewer roles than people with "as" in the text
+                        existing_roles = {r["name"].lower() for r in nlp_data.get("roles", [])}
+                        
                         for person in nlp_data["people"]:
-                            pattern = re.escape(person) + r'\s+as\s+(\w+(?:\s+\w+)?)'
+                            # Skip if this person already has a role
+                            if person.lower() in existing_roles:
+                                continue
+                                
+                            # Look for "person as role" pattern
+                            pattern = re.escape(person) + r'\s+as\s+([^,]+?)(?:,|$|\s+and\s+|\s+[A-Z][a-z]+\s+as\s+)'
                             match = re.search(pattern, text, re.IGNORECASE)
                             if match:
-                                role = match.group(1).strip()
+                                role = match.group(1).strip().rstrip('.')
                                 if "roles" not in nlp_data:
                                     nlp_data["roles"] = []
                                 nlp_data["roles"].append({"name": person, "role": role.title()})
-                                supplemented_fields.append("roles")
-                                log_event("supplemented_roles_from_text", person=person, role=role)
+                                supplemented_fields.append(f"role for {person}")
+                                log_event("supplemented_role_from_text", person=person, role=role)
                     
                     # Check for site if missing
                     if not nlp_data.get("site_name") and re.search(r'\bsite\s+[A-Z]', text, re.IGNORECASE):
@@ -4167,39 +4188,31 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                              looking_for=old_name,
                              in_companies=existing_companies)
                     
-                    # Try exact match first (case insensitive)
+                    # Find the company that matches
+                    best_match = None
+                    best_similarity = 0
+                    best_index = -1
+                    
                     for i, company in enumerate(result.get(field, [])):
                         if isinstance(company, dict) and company.get("name"):
-                            if company["name"].lower() == old_name.lower():
-                                result[field][i]["name"] = new_value
-                                matched = True
-                                changes.append(f"corrected company '{company['name']}' to '{new_value}'")
-                                log_event("corrected_company_exact", old=company["name"], new=new_value)
+                            company_name = company["name"]
+                            
+                            # Check exact match first (case insensitive)
+                            if company_name.lower() == old_name.lower():
+                                best_match = company_name
+                                best_index = i
+                                best_similarity = 1.0
                                 break
+                            
+                            # Use 60% (0.6) similarity threshold as specified
+                            similarity = string_similarity(company_name.lower(), old_name.lower())
+                            if similarity >= 0.6 and similarity > best_similarity:
+                                best_similarity = similarity
+                                best_match = company_name
+                                best_index = i
                     
-                    # If no exact match, try fuzzy matching
-                    if not matched:
-                        best_match = None
-                        best_similarity = 0
-                        best_index = -1
-                        
-                        for i, company in enumerate(result.get(field, [])):
-                            if isinstance(company, dict) and company.get("name"):
-                                similarity = string_similarity(company["name"].lower(), old_name.lower())
-                                if similarity > best_similarity and similarity >= 0.4:
-                                    best_similarity = similarity
-                                    best_match = company["name"]
-                                    best_index = i
-                        
-                        if best_match and best_index >= 0:
-                            result[field][best_index]["name"] = new_value
-                            matched = True
-                            changes.append(f"corrected company '{best_match}' to '{new_value}'")
-                            log_event("corrected_company_fuzzy", old=best_match, new=new_value, similarity=best_similarity)
-                    
-                    if not matched:
-                        log_event("correction_not_found", field=field, old=old_value, new=new_value)
-                        # Don't add as new, just log the failure
+                    # Use match if similarity threshold met
+                    if best_match and best_index >= 0:
                     
                     
                 elif field == "tools":
