@@ -169,7 +169,11 @@ IMPORTANT: Voice transcription often incorrectly adds commas between words that 
 When you see company names with AG, GmbH, Ltd, Inc, LLC, Corp suffixes, treat the words before the suffix as part of the company name, even if separated by commas.
 
 CRITICAL FOR COMPANY EXTRACTION:
-- If you see "Companies" followed by unclear words, try to identify if it could be a company name
+- If you see "Companies" followed by words, extract ALL companies mentioned
+- Multiple companies are often connected with "and" or commas
+- Example: "Companies Kieback AG and Implenia AG" means TWO companies: Kieback AG and Implenia AG
+- Example: "Companies BuildCorp, TechSolutions GmbH, and Electric Ltd" means THREE companies
+- ALWAYS split on "and" or commas when multiple companies are listed
 - Common voice errors: "Maya" → "Meier", "Game Behave" → "GmbH", "are gay" → "AG"
 - If the text starts with "Companies" and has no clear suffix, still treat it as a company name
 - "Electric Maya Game Behave" should be extracted as company: "Electric Maya Game Behave" (let the user correct later)
@@ -923,6 +927,7 @@ FIELD_PATTERNS = {
     "role_parentheses": r'^roles?:\s*([A-Za-z\s]+)\s*\(([^)]+)\)$',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
     "company": r'^(?:(?:add|insert)\s+)?(?:compan(?:y|ies)|firms?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
+    "companies_and": r'^compan(?:y|ies)\s+([A-Z][^,]+?)\s+and\s+([A-Z].+?)(?:\.|$)',
     "service": r'^(?:(?:add|insert)\s+)?(?:services?)\s*[:,]?\s*(.+?)$',
     "tool": r'^(?:.*?)?(?:tools?|used?|using)\s*[:,]?\s*(.+?)$|^(?:we|I|they|he|she|[A-Za-z]+)\s+(?:used?|using)\s+(.+?)$',
     "activity": r'^(?:(?:add|insert)\s+)?(?:activit(?:y|ies))\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
@@ -2681,7 +2686,13 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     result["roles"] = [{"name": name, "role": role}]
                     return result
                 continue
+            if field == "companies_and":
+                company1 = match.group(1).strip()
+                company2 = match.group(2).strip()
+                result["companies"] = [{"name": company1}, {"name": company2}]
+                return result
             
+
             if field == "companies":
                 captured = clean_value(match.group(1) if match.group(1) else "", field)
                 if (not captured or captured.lower().startswith(('are', 'is', 'were'))) and len(match.groups()) >= 2:
@@ -2824,7 +2835,77 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 nlp_data, confidence = extract_with_nlp(text)
                 if confidence >= CONFIG.get("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", 0.7):
                     log_event("using_nlp_extraction", confidence=confidence, fields=list(nlp_data.keys()))
-                    # Return the NLP data directly if confidence is high
+                    
+                    # Supplement NLP with regex for fields it might have missed
+                    supplemented_fields = []
+                    
+                    # Check for site if missing
+                    if not nlp_data.get("site_name") and re.search(r'\bsite\s+[A-Z]', text, re.IGNORECASE):
+                        site_match = re.search(r'site\s+([^,]+?)(?:\s*,|\s*$)', text, re.IGNORECASE)
+                        if site_match:
+                            nlp_data["site_name"] = site_match.group(1).strip()
+                            supplemented_fields.append("site_name")
+                    
+                    # Check for companies if missing
+                    if not nlp_data.get("companies") and re.search(r'\bcompan(?:y|ies)\s+[A-Z]', text, re.IGNORECASE):
+                        company_match = re.search(r'compan(?:y|ies)\s+(.+?)(?:\.|,\s*[A-Z][a-z]+:|$)', text, re.IGNORECASE)
+                        if company_match:
+                            companies_text = company_match.group(1)
+                            companies = []
+                            for comp in re.split(r'\s+and\s+|,\s*', companies_text):
+                                comp = comp.strip().rstrip(',.')
+                                if comp and not comp.lower() in ['are', 'is', 'were']:
+                                    companies.append({"name": comp})
+                            if companies:
+                                nlp_data["companies"] = companies
+                                supplemented_fields.append("companies")
+                    
+                    # Check for people if missing
+                    if not nlp_data.get("people") and re.search(r'\bpeople\s+[A-Z]', text, re.IGNORECASE):
+                        people_match = re.search(r'people\s+(.+?)(?:\.|,\s*[A-Z][a-z]+:|$)', text, re.IGNORECASE)
+                        if people_match:
+                            people_text = people_match.group(1)
+                            people = []
+                            for person in re.split(r'\s+and\s+|,\s*', people_text):
+                                person = person.strip().rstrip(',.')
+                                if person and not person.lower() in ['are', 'is', 'were']:
+                                    people.append(person)
+                            if people:
+                                nlp_data["people"] = people
+                                supplemented_fields.append("people")
+                    
+                    # Check for segment if missing
+                    if not nlp_data.get("segment") and re.search(r'\bsegment\s+\S', text, re.IGNORECASE):
+                        segment_match = re.search(r'segment\s+([^,]+?)(?:\s*,|\s*$)', text, re.IGNORECASE)
+                        if segment_match:
+                            nlp_data["segment"] = segment_match.group(1).strip()
+                            supplemented_fields.append("segment")
+                    
+                    # Check for category if missing
+                    if not nlp_data.get("category") and re.search(r'\bcategory\s+\S', text, re.IGNORECASE):
+                        category_match = re.search(r'category\s+([^,]+?)(?:\s*,|\s*$)', text, re.IGNORECASE)
+                        if category_match:
+                            nlp_data["category"] = category_match.group(1).strip()
+                            supplemented_fields.append("category")
+                    
+                    # Check for tools if missing
+                    if not nlp_data.get("tools") and re.search(r'\btools?\s+[A-Z]', text, re.IGNORECASE):
+                        tools_match = re.search(r'tools?\s+(.+?)(?:\.|,\s*[A-Z][a-z]+:|$)', text, re.IGNORECASE)
+                        if tools_match:
+                            tools_text = tools_match.group(1)
+                            tools = []
+                            for tool in re.split(r'\s+and\s+|,\s*', tools_text):
+                                tool = tool.strip().rstrip(',.')
+                                if tool and not tool.lower() in ['are', 'is', 'were', 'used']:
+                                    tools.append({"item": tool})
+                            if tools:
+                                nlp_data["tools"] = tools
+                                supplemented_fields.append("tools")
+                    
+                    if supplemented_fields:
+                        log_event("supplemented_nlp_with_regex", fields=supplemented_fields)
+                    
+                    # Return the enhanced NLP data
                     return nlp_data
         
         # Handle simple delete commands FIRST - before any pattern matching
