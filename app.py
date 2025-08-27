@@ -499,6 +499,7 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                         result["companies"].append({"name": company_name})
     
     # People
+  
     if "people" in data:
         if isinstance(data["people"], list):
             result["people"] = []
@@ -514,12 +515,11 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     # Clean up person names - remove "worked" and similar artifacts
                     if " worked" in person_name.lower():
                         person_name = person_name.replace(" worked", "").replace(" Worked", "")
-                    # Only add if it's a valid name (not just "me" or single word artifacts)
-                    if person_name and person_name.lower() != "me":
+                    # Add all valid names (including "me" for now, user can specify later)
+                    if person_name:
                         result["people"].append(person_name.strip())
                         seen_people.add(person_name.lower())
     
-    # Roles
     # Roles
     if "roles" in data:
         if isinstance(data["roles"], list):
@@ -1491,6 +1491,21 @@ def normalize_transcription(text: str) -> str:
 
 def normalize_voice_companies(text: str) -> str:
     """Fix common voice transcription errors in company names"""
+    
+    # Common voice transcription errors for German company names
+    voice_replacements = {
+        r"Company's\s+": "Companies ",  # Fix possessive to plural
+        r"\bElectro Maya Game Bearer\b": "Elektro-Meier GmbH",
+        r"\bElectro Maya Game Behave\b": "Elektro-Meier GmbH",
+        r"\bMaya\b": "Meier",  # Common misrecognition
+        r"\bGame Bearer\b": "GmbH",
+        r"\bGame Behave\b": "GmbH",
+        r"\bare gay\b": "AG",
+    }
+    
+    for pattern, replacement in voice_replacements.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    
     # Pattern to fix company names split by commas before suffixes
     company_suffixes = ['AG', 'GmbH', 'Ltd', 'Limited', 'Inc', 'LLC', 'Corp', 'Corporation', 'S.A.', 'S.L.', 'B.V.', 'N.V.']
     
@@ -2975,9 +2990,11 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return multi_corrections
 
         # Handle spelling corrections - enhanced to detect field automatically
+        # Handle spelling corrections - enhanced to detect field automatically
         correct_patterns = [
-            r'^correct\s+spelling\s+of\s+(.+?)\s+to\s+(.+?)$',
-            r'^correct\s+(.+?)\s+to\s+(.+?)$',
+            r'^correct\s+spelling\s+(.+?)\s+to\s+(.+?)$',  # "correct spelling X to Y"
+            r'^correct\s+spelling\s+of\s+(.+?)\s+to\s+(.+?)$',  # "correct spelling of X to Y"
+            r'^correct\s+(.+?)\s+to\s+(.+?)$',  # "correct X to Y"
             r'^(?:companies?\s+)?correct\s+spelling\s+(.+?)\s+(?:to|with)\s+(.+?)$'
         ]
         
@@ -4072,7 +4089,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                              looking_for=old_name,
                              in_companies=existing_companies)
                     
-                    # Find the company that contains the old_name or is similar
+                    # Find the company that matches (case-insensitive exact match first)
                     best_match = None
                     best_similarity = 0
                     best_index = -1
@@ -4088,14 +4105,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                 best_similarity = 1.0
                                 break
                             
-                            # Check if old_name is a substring
-                            if old_name.lower() in company_name.lower():
-                                best_match = company_name
-                                best_index = i
-                                best_similarity = 0.9
-                                break
-                            
-                            # Check similarity
+                            # For partial matches, be more lenient
                             similarity = string_similarity(company_name.lower(), old_name.lower())
                             if similarity > best_similarity:
                                 best_similarity = similarity
