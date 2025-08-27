@@ -174,6 +174,9 @@ CRITICAL FOR COMPANY EXTRACTION:
 - Example: "Companies Kieback AG and Implenia AG" means TWO companies: Kieback AG and Implenia AG
 - Example: "Companies BuildCorp, TechSolutions GmbH, and Electric Ltd" means THREE companies
 - ALWAYS split on "and" or commas when multiple companies are listed
+- IMPORTANT: When you see "Companies X and Y", both X and Y are separate companies
+- "Companies Implenia AG and KIBAG AG" should return: [{"name": "Implenia AG"}, {"name": "KIBAG AG"}]
+- Never combine companies into a single entry
 - Common voice errors: "Maya" → "Meier", "Game Behave" → "GmbH", "are gay" → "AG"
 - If the text starts with "Companies" and has no clear suffix, still treat it as a company name
 - "Electric Maya Game Behave" should be extracted as company: "Electric Maya Game Behave" (let the user correct later)
@@ -382,10 +385,16 @@ def extract_with_nlp(text: str) -> Tuple[Dict[str, Any], float]:
         content = response.choices[0].message.content.strip()
         log_event("nlp_extraction_completed", response_length=len(content))
         
+        # Debug log the actual NLP response
+        print(f"DEBUG NLP Response: {content}")
+        
         # Extract JSON from the response
         try:
             # First check if the entire response is JSON
             data = json.loads(content)
+            
+            # Debug log the parsed data
+            print(f"DEBUG NLP Parsed Data: {data}")
             
             # Post-process the extracted data
             data = standardize_nlp_output(data)
@@ -1499,6 +1508,8 @@ def normalize_voice_companies(text: str) -> str:
     
     # Common voice transcription errors for German company names
     voice_replacements = {
+        r"\bKybak\b": "KIBAG",  # Common misrecognition of KIBAG
+        r"\bKieback\b": "KIBAG",  # Another variant
         r"Company's\s+": "Companies ",  # Fix possessive to plural
         r"\bElectro Maya Game Bearer\b": "Elektro-Meier GmbH",
         r"\bElectro Maya Game Behave\b": "Elektro-Meier GmbH",
@@ -2733,10 +2744,18 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                     captured = clean_value(match.group(2), field)
                 
                 captured = re.sub(r'^(?:are|is|were|include[ds]?)\s+', '', captured)
-                company_names = [name.strip() for name in re.split(r'\s+and\s+|,', captured) if name.strip()]
-                log_event("company_extraction", captured=captured, company_names=company_names)
-                result["companies"] = [{"name": name} for name in company_names]
-                return result
+                # Better splitting for "X AG and Y AG" patterns
+                company_names = []
+                # First check for "and" splits
+                if ' and ' in captured:
+                    parts = captured.split(' and ')
+                    for part in parts:
+                        part = part.strip()
+                        if part:
+                            company_names.append(part)
+                else:
+                    # Fall back to comma splitting
+                    company_names = [name.strip() for name in re.split(r',', captured) if name.strip()]
             
             if field in ["services", "service"]:
                 value = clean_value(match.group(1), field)
@@ -4968,6 +4987,32 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     
                     return "ok", 200
         
+                # Special handling for multiple company corrections
+            if "correct spelling" in text.lower() and text.count(" to ") == 2:
+                # Pattern: "correct spelling X to Y and A to B"
+                parts = text.split(" and ")
+                if len(parts) == 2:
+                    corrections = []
+                    for part in parts:
+                        if " to " in part:
+                            correction_match = re.search(r'(\w+(?:\s+\w+)*)\s+to\s+(\w+(?:\s+\w+)*)', part, re.IGNORECASE)
+                            if correction_match:
+                                old_val = correction_match.group(1).strip()
+                                new_val = correction_match.group(2).strip()
+                                # Detect field automatically
+                                field = "companies" if any(s in (old_val + new_val).upper() for s in ['AG', 'GMBH', 'LTD']) else "people"
+                                corrections.append({"field": field, "old": old_val, "new": new_val})
+                    
+                    if corrections:
+                        extracted = {"correct": corrections}
+                        session["command_history"].append(session["structured_data"].copy())
+                        session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
+                        session["structured_data"] = enrich_date(session["structured_data"])
+                        save_session(session_data)
+                        summary = summarize_report(session["structured_data"])
+                        send_message(chat_id, f"✅ Multiple corrections processed.\n\n{summary}")
+                        return "ok", 200
+
         # Special handling for "correct X to Y as Z" pattern
         correct_with_role_pattern = r'^correct\s+(.+?)\s+to\s+(.+?)\s+as\s+(.+?)$'
         correct_role_match = re.match(correct_with_role_pattern, text, re.IGNORECASE)
