@@ -4210,95 +4210,99 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         
                         if not matched:
                             log_event("person_correction_not_found", old=old_value, new=new_value)
-                
-                            
-                elif field == "roles":
-                    # Interpret as correcting a role for a person
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                     
-                    matched = False
-                    for role in result[field]:
-                        if (isinstance(role, dict) and role.get("name") and 
-                            string_similarity(role["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
-                            role["role"] = new_value.title()
-                            matched = True
-                            changes.append(f"corrected role for '{old_value}' to '{new_value}'")
-                            break
-                    
-                    if not matched:
-                        # If no exact match, try finding the person elsewhere
-                        person_name = None
-                        for person in result["people"]:
-                            if string_similarity(person.lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                                person_name = person
+                    elif field == "roles":
+                        # Interpret as correcting a role for a person
+                        session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
+                        
+                        matched = False
+                        for role in result[field]:
+                            if (isinstance(role, dict) and role.get("name") and 
+                                string_similarity(role["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
+                                role["role"] = new_value.title()
+                                matched = True
+                                changes.append(f"corrected role for '{old_value}' to '{new_value}'")
                                 break
                         
-                        if person_name:
-                            # Add this person with the new role
-                            result[field].append({"name": person_name, "role": new_value.title()})
-                            changes.append(f"added role '{new_value}' for '{person_name}'")
-                        else:
-                            # Add both the person and role
-                            result["people"].append(old_value)
-                            result[field].append({"name": old_value, "role": new_value.title()})
-                            changes.append(f"added person '{old_value}' with role '{new_value}'")
+                        if not matched:
+                            # If no exact match, try finding the person elsewhere
+                            person_name = None
+                            for person in result["people"]:
+                                if string_similarity(person.lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                                    person_name = person
+                                    break
                             
-          
-                elif field == "companies":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data.get(field, []).copy()))
+                            if person_name:
+                                # Add this person with the new role
+                                result[field].append({"name": person_name, "role": new_value.title()})
+                                changes.append(f"added role '{new_value}' for '{person_name}'")
+                            else:
+                                # Add both the person and role
+                                result["people"].append(old_value)
+                                result[field].append({"name": old_value, "role": new_value.title()})
+                                changes.append(f"added person '{old_value}' with role '{new_value}'")
                     
-                    matched = False
-                    old_name = old_value.strip()
+                    elif field == "companies":
+                        session_data[chat_id]["last_change_history"].append((field, existing_data.get(field, []).copy()))
+                        
+                        matched = False
+                        old_name = old_value.strip()
 
-                    # Debug log to see what we're trying to match
-                    existing_companies = [c.get("name") for c in result.get(field, []) if isinstance(c, dict)]
-                    log_event("company_correction_attempt", 
-                             looking_for=old_name,
-                             in_companies=existing_companies)
-                    
-                    # Find the company that matches
-                    best_match = None
-                    best_similarity = 0
-                    best_index = -1
-                    
-                    for i, company in enumerate(result.get(field, [])):
-                        if isinstance(company, dict) and company.get("name"):
-                            company_name = company["name"]
-                            
-                            # Check exact match first (case insensitive)
-                            if company_name.lower() == old_name.lower():
-                                best_match = company_name
-                                best_index = i
-                                best_similarity = 1.0
-                                break
-                            
-                            # Use 60% (0.6) similarity threshold as specified
-                            similarity = string_similarity(company_name.lower(), old_name.lower())
-                            if similarity >= 0.6 and similarity > best_similarity:
-                                best_similarity = similarity
-                                best_match = company_name
-                                best_index = i
-                    
-                    # Use match if similarity threshold met
-                    if best_match and best_index >= 0:
-                    
-                    
-                elif field == "tools":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
-                    matched = False
-                    for i, tool in enumerate(result[field]):
-                        if (isinstance(tool, dict) and tool.get("item") and 
-                            string_similarity(tool["item"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
-                            tool["item"] = new_value
+                        # Debug log to see what we're trying to match
+                        existing_companies = [c.get("name") for c in result.get(field, []) if isinstance(c, dict)]
+                        log_event("company_correction_attempt", 
+                                 looking_for=old_name,
+                                 in_companies=existing_companies)
+                        
+                        # Find the company that matches
+                        best_match = None
+                        best_similarity = 0
+                        best_index = -1
+                        
+                        for i, company in enumerate(result.get(field, [])):
+                            if isinstance(company, dict) and company.get("name"):
+                                company_name = company["name"]
+                                
+                                # Check exact match first (case insensitive)
+                                if company_name.lower() == old_name.lower():
+                                    best_match = company_name
+                                    best_index = i
+                                    best_similarity = 1.0
+                                    break
+                                
+                                # Use 60% (0.6) similarity threshold as specified
+                                similarity = string_similarity(company_name.lower(), old_name.lower())
+                                if similarity >= 0.6 and similarity > best_similarity:
+                                    best_similarity = similarity
+                                    best_match = company_name
+                                    best_index = i
+                        
+                        # Use match if similarity threshold met
+                        if best_match and best_index >= 0:
+                            result[field][best_index]["name"] = new_value
                             matched = True
-                            changes.append(f"corrected tool '{old_value}' to '{new_value}'")
-                            break
+                            changes.append(f"corrected company '{best_match}' to '{new_value}'")
+                            log_event("corrected_company", old=best_match, new=new_value)
+                        
+                        if not matched:
+                            log_event("company_correction_not_found", old=old_value, new=new_value)
                     
-                    if not matched:
-                        # If no match, add the new tool
-                        result[field].append({"item": new_value})
-                        changes.append(f"added corrected tool '{new_value}'")
+                    elif field == "tools":
+                        session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
+                        
+                        matched = False
+                        for i, tool in enumerate(result[field]):
+                            if (isinstance(tool, dict) and tool.get("item") and 
+                                string_similarity(tool["item"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
+                                tool["item"] = new_value
+                                matched = True
+                                changes.append(f"corrected tool '{old_value}' to '{new_value}'")
+                                break
+                        
+                        if not matched:
+                            # If no match, add the new tool
+                            result[field].append({"item": new_value})
+                            changes.append(f"added corrected tool '{new_value}'")
                         
                 elif field == "services":
                     session_data[chat_id]["last_change_history"].append((field, existing_data.get(field, []).copy()))
