@@ -4187,41 +4187,28 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             changes.append(f"added person '{old_value}' with role '{new_value}'")
                             
           
+             
                 elif field == "companies":
                     session_data[chat_id]["last_change_history"].append((field, existing_data.get("companies", []).copy()))
                     
                     matched = False
+                    old_name = old_value.strip()
                     
-                    # Handle special case for spelling corrections like "correct spelling of X to Y"  
-                    if "spelling of " in old_value.lower():
-                        # Extract the actual old name by removing "spelling of "
-                        old_name = re.sub(r'^(correct )?spelling of ', '', old_value, flags=re.IGNORECASE).strip()
-                    else:
-                        old_name = old_value.strip()
-                    
-                    # Try to find and correct the company
+                    # Try to find and correct the company - use case-insensitive partial matching
                     for i, company in enumerate(result.get(field, [])):
                         if isinstance(company, dict) and company.get("name"):
                             company_name = company["name"]
-                            # Check for similarity - but be more lenient for partial matches
-                            if string_similarity(company_name.lower(), old_name.lower()) >= 0.5:
-                                original_name = company["name"]
+                            # Case-insensitive partial match - "keybag" should match "KeyBag AG"
+                            if old_name.lower() in company_name.lower():
+                                original = company["name"]
                                 company["name"] = new_value
                                 matched = True
-                                changes.append(f"corrected company '{original_name}' to '{new_value}'")
-                                break
-                            # Also check if old_name is part of company name (for "Keebuck" matching "Keebuck AG")
-                            elif old_name.lower() in company_name.lower():
-                                original_name = company["name"]
-                                company["name"] = new_value
-                                matched = True
-                                changes.append(f"corrected company '{original_name}' to '{new_value}'")
+                                changes.append(f"corrected company '{original}' to '{new_value}'")
                                 break
                     
                     if not matched:
-                        # If still no match, add as new company
-                        result[field].append({"name": new_value})
-                        changes.append(f"added corrected company '{new_value}'")
+                        log_event("company_correction_failed", old=old_name, 
+                                companies=[c.get("name") for c in result.get(field, [])])
                     
                     
                 elif field == "tools":
@@ -4382,10 +4369,12 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 
                 # Handle roles specially to update people list too
                 existing_roles = [(r.get("name", "").lower(), r.get("role", "").lower()) 
-                                for r in result["roles"] if isinstance(r, dict)]
+                                for r in result.get("roles", []) if isinstance(r, dict)]
                 
                 for role in new_data[field]:
                     if isinstance(role, dict) and "name" in role and "role" in role:
+                        role_tuple = (role["name"].lower(), role["role"].lower())
+                        
                         # Check if this role already exists
                         already_exists = False
                         for existing_name, existing_role in existing_roles:
@@ -4393,9 +4382,8 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                 string_similarity(role["role"].lower(), existing_role) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
                                 already_exists = True
                                 break
-                        
+                                
                         if not already_exists:
-                            # Add the role
                             result["roles"].append(role)
                             changes.append(f"added role {role['role']} for {role['name']}")
                             
@@ -4403,12 +4391,13 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             if "people" not in result:
                                 result["people"] = []
                             
+                            # Don't add duplicate people
                             person_exists = False
                             for person in result["people"]:
                                 if string_similarity(role["name"].lower(), person.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
                                     person_exists = True
                                     break
-                            
+                                    
                             if not person_exists:
                                 result["people"].append(role["name"])
                                 changes.append(f"added person {role['name']}")
