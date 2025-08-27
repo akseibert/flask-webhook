@@ -130,6 +130,7 @@ CONFIG = {
     "OPENAI_MODEL": config("OPENAI_MODEL", default="gpt-3.5-turbo"),
     "OPENAI_TEMPERATURE": config("OPENAI_TEMPERATURE", default=0.2, cast=float),
     "NAME_SIMILARITY_THRESHOLD": config("NAME_SIMILARITY_THRESHOLD", default=0.7, cast=float),
+    "COMPANY_SIMILARITY_THRESHOLD": config("COMPANY_SIMILARITY_THRESHOLD", default=0.5, cast=float),
     "COMMAND_SIMILARITY_THRESHOLD": config("COMMAND_SIMILARITY_THRESHOLD", default=0.85, cast=float),
     "REPORT_FORMAT": config("REPORT_FORMAT", default="detailed"),
     "MAX_SUGGESTIONS": config("MAX_SUGGESTIONS", default=3, cast=int),
@@ -514,21 +515,33 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
             for person in data["people"]:
                 person_name = None
                 if isinstance(person, str):
+                    # First clean up voice transcription artifacts
+                    person_clean = person
+                    if person_clean.lower().startswith("we also had "):
+                        person_clean = person_clean[12:]  # Remove "we also had "
+                    elif person_clean.lower().startswith("people "):
+                        person_clean = person_clean[7:]  # Remove "people "
+                    
                     # Handle common transcription errors for names
                     name_corrections = {
                         "me": None,  # Skip "me" - should be resolved to actual user
+                        "i": None,   # Skip "I" as well
+                        "we": None,  # Skip "we"
+                        "us": None,  # Skip "us"
+                        "them": None,  # Skip "them"
+                        "they": None,  # Skip "they"
                         "mark us": "Marcus",
                         "markus": "Marcus",
                     }
                     
-                    if person.lower() in name_corrections:
-                        corrected = name_corrections[person.lower()]
+                    if person_clean.lower() in name_corrections:
+                        corrected = name_corrections[person_clean.lower()]
                         if corrected:  # If not None
                             person_name = corrected
                         else:
                             continue  # Skip this person
                     else:
-                        person_name = person
+                        person_name = person_clean
                 elif isinstance(person, dict) and "name" in person:
                     person_name = person["name"]
                 
@@ -4200,27 +4213,23 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             changes.append(f"added person '{old_value}' with role '{new_value}'")
                             
           
-                
                 elif field == "companies":
                     session_data[chat_id]["last_change_history"].append((field, existing_data.get("companies", []).copy()))
                     
                     matched = False
                     old_name_lower = old_value.strip().lower()
                     
-                    # Try to match companies
+                    # Try exact match first (case-insensitive)
                     for i, company in enumerate(result.get("companies", [])):
                         if isinstance(company, dict) and company.get("name"):
-                            company_name = company["name"]
-                            # Exact match (case-insensitive)
-                            if company_name.lower() == old_name_lower:
+                            if company["name"].lower() == old_name_lower:
                                 original = company["name"]
-                                company["name"] = new_value
+                                result["companies"][i] = {"name": new_value}
                                 matched = True
                                 changes.append(f"corrected company '{original}' to '{new_value}'")
                                 break
                     
                     if not matched:
-                        # Log for debugging
                         log_event("company_correction_failed", 
                                 looking_for=old_value,
                                 companies=[c.get("name") for c in result.get("companies", [])])
@@ -4377,36 +4386,39 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             log_event("skipped_duplicate", field=field, value=item[key])
             
          
-           
+          
             elif field == "roles":
                 # Initialize roles if not present
                 if "roles" not in result:
                     result["roles"] = []
                 
-                # Initialize people if not present
+                # Initialize people if not present  
                 if "people" not in result:
                     result["people"] = []
                 
-                # Process each role individually
-                for role in new_data[field]:
-                    if isinstance(role, dict) and "name" in role and "role" in role:
-                        person_name = role["name"]
-                        person_role = role["role"]
+                # Process EACH role from new_data individually
+                for role_data in new_data[field]:
+                    if isinstance(role_data, dict) and "name" in role_data and "role" in role_data:
+                        person_name = role_data["name"]
+                        person_role = role_data["role"]
                         
                         # Check if this exact role already exists
-                        role_exists = any(
-                            r.get("name", "").lower() == person_name.lower() and 
-                            r.get("role", "").lower() == person_role.lower()
-                            for r in result["roles"]
-                        )
+                        role_exists = False
+                        for existing_role in result["roles"]:
+                            if (isinstance(existing_role, dict) and 
+                                existing_role.get("name", "").lower() == person_name.lower() and
+                                existing_role.get("role", "").lower() == person_role.lower()):
+                                role_exists = True
+                                break
                         
                         if not role_exists:
-                            # Add the role
+                            # Add the role with ONLY this person's role, not concatenated
                             result["roles"].append({"name": person_name, "role": person_role})
                             changes.append(f"added role {person_role} for {person_name}")
                             
                             # Also ensure person is in people list
-                            if not any(p.lower() == person_name.lower() for p in result["people"]):
+                            person_in_list = any(p.lower() == person_name.lower() for p in result["people"])
+                            if not person_in_list:
                                 result["people"].append(person_name)
                                 changes.append(f"added person {person_name}")
                                 
