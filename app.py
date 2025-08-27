@@ -784,7 +784,7 @@ def calculate_extraction_confidence(data: Dict[str, Any], original_text: str) ->
 def process_multiple_corrections(text: str) -> Dict[str, Any]:
     """Process multiple spelling corrections in one command"""
     # Pattern for "correct spelling X to Y, A to B, C to D"
-    pattern = r'correct\s+spelling\s+(.+)'
+    pattern = r'correct\s+spelling\s+(?:of\s+)?(.+)'
     match = re.match(pattern, text, re.IGNORECASE)
     
     if not match:
@@ -793,13 +793,24 @@ def process_multiple_corrections(text: str) -> Dict[str, Any]:
     corrections_text = match.group(1)
     corrections = []
     
-    # Split by commas that are followed by a word and "to"
-    # This regex looks for ", Word" where Word is followed by " to "
-    parts = re.split(r',\s+(?=[A-Z][^,]+\s+to\s+)', corrections_text)
+    # First, handle "and" as a separator between corrections
+    # Replace "and from" with just a comma to normalize
+    corrections_text = re.sub(r'\s+and\s+from\s+', ', ', corrections_text, flags=re.IGNORECASE)
+    corrections_text = re.sub(r'\s+and\s+', ', ', corrections_text, flags=re.IGNORECASE)
+    
+    # Split by commas to get individual corrections
+    parts = re.split(r',\s*', corrections_text)
     
     for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+            
+        # Remove "from" prefix if present
+        part = re.sub(r'^from\s+', '', part, flags=re.IGNORECASE)
+        
         # Extract "old to new" pattern
-        correction_match = re.match(r'(.+?)\s+to\s+(.+)', part.strip())
+        correction_match = re.match(r'(.+?)\s+to\s+(.+)', part, re.IGNORECASE)
         if correction_match:
             old_value = correction_match.group(1).strip()
             new_value = correction_match.group(2).strip()
@@ -906,7 +917,8 @@ FIELD_PATTERNS = {
     "category": r'^(?:(?:add|insert)\s+)?(?:categories?|kategorie|category)\s*[:,]?\s*(.+?)(?:\s*(?:companies|people|tools|services|activities|$))',
     "impression": r'^(?:(?:add|insert)\s+)?(?:impressions?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "people": r'^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+)(?:\s*(?:,|\.|$))|^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
-    "person_as_role": r'^(\w+(?:\s+\w+)?)\s+as\s+(\w+(?:\s+\w+)?)(?:\s*(?:,|\.|$))',
+    "person_as_role": r'^(?:add\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+(?:\s+[A-Za-z\s\-]+)?)(?:\s*(?:,|\.|$))',
+    "add_person_role": r'^add\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+)$',
     "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(\w+\s+\w+|\w+)\s+(?:as|is)\s+(.+?)(?:\s*(?:,|\.|$))',
     "role_parentheses": r'^roles?:\s*([A-Za-z\s]+)\s*\(([^)]+)\)$',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
@@ -2568,6 +2580,18 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
         reset_match = re.match(FIELD_PATTERNS["reset"], cmd, re.IGNORECASE)
         if reset_match:
             return {"reset": True}
+        
+        # Check add_person_role pattern early (before generic patterns)
+        if "add_person_role" in FIELD_PATTERNS:
+            match = re.match(FIELD_PATTERNS["add_person_role"], cmd, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                role = match.group(2).strip()
+                if name and role:
+                    role_title = ' '.join(word.capitalize() for word in role.split())
+                    result["people"] = [name]
+                    result["roles"] = [{"name": name, "role": role_title}]
+                    return result
             
         # Check for yes/no confirmations
         yes_match = re.match(FIELD_PATTERNS["yes_confirm"], cmd, re.IGNORECASE)
@@ -2581,7 +2605,7 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
         # Check for field-specific patterns
         for raw_field, pattern in FIELD_PATTERNS.items():
             # Skip non-field patterns
-            if raw_field in ["reset", "delete", "correct", "clear", "help", 
+            if raw_field in ["reset", "delete", "correct", "clear", "help", "add_person_role",
                         "undo_last", "context_add", "summary", "detailed", 
                         "delete_entire", "export_pdf", "yes_confirm", "no_confirm",
                         "delete_category", "delete_field", "delete_item", "delete_specific",
@@ -3297,6 +3321,16 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     if name and role:
                         result["people"] = [name]
                         result["roles"] = [{"name": name, "role": role}]
+                    return result
+
+                elif field == "add_person_role":
+                    name = match.group(1).strip()
+                    role = match.group(2).strip()
+                    if name and role:
+                        # Capitalize role properly
+                        role_title = ' '.join(word.capitalize() for word in role.split())
+                        result["people"] = [name]
+                        result["roles"] = [{"name": name, "role": role_title}]
                     return result
                     
                 elif field == "role":
@@ -4155,6 +4189,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         else:
                             log_event("skipped_duplicate", field=field, value=item[key])
             
+         
             elif field == "roles":
                 # Handle roles specially to update people list too
                 existing_roles = [(r.get("name", "").lower(), r.get("role", "").lower()) 
@@ -4162,6 +4197,11 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 
                 for role in new_data[field]:
                     if isinstance(role, dict) and "name" in role and "role" in role:
+                        # First ensure the person exists in the people list
+                        person_name = role["name"]
+                        if person_name not in result.get("people", []):
+                            result["people"].append(person_name)
+                            changes.append(f"added person '{person_name}'")
                         # Clean up role name - handle co-worker, Co-Worker, etc.
                         role_name = role["role"]
                         if '-' in role_name:
