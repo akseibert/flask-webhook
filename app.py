@@ -130,6 +130,7 @@ CONFIG = {
     "OPENAI_MODEL": config("OPENAI_MODEL", default="gpt-3.5-turbo"),
     "OPENAI_TEMPERATURE": config("OPENAI_TEMPERATURE", default=0.2, cast=float),
     "NAME_SIMILARITY_THRESHOLD": config("NAME_SIMILARITY_THRESHOLD", default=0.7, cast=float),
+    "COMPANY_SIMILARITY_THRESHOLD": config("COMPANY_SIMILARITY_THRESHOLD", default=0.5, cast=float),
     "COMMAND_SIMILARITY_THRESHOLD": config("COMMAND_SIMILARITY_THRESHOLD", default=0.85, cast=float),
     "REPORT_FORMAT": config("REPORT_FORMAT", default="detailed"),
     "MAX_SUGGESTIONS": config("MAX_SUGGESTIONS", default=3, cast=int),
@@ -159,20 +160,114 @@ You understand specific construction terminology, abbreviations, and common miss
 CRITICAL: You're processing input from a construction site worker who might be using voice recognition in a noisy environment, 
 so account for audio transcription errors and construction-specific terminology.
 
-Extract information into these fields (only include fields that are explicitly mentioned):
+IMPORTANT: Voice transcription often incorrectly adds commas between words that belong together. For example:
+- "Build, Tech AG" should be understood as "BuildTech AG"
+- "Construction, Bro, GmbH" should be understood as "ConstructionBro GmbH" or "Construction Bro GmbH"
+- "Electric Solutions, Ltd" should be understood as "Electric Solutions Ltd"
+- "Electric Maya Game Behave" might be "Electric-Meier GmbH" (voice errors)
+- "Companies Electric Maya Game Behave" means add company "Electric-Meier GmbH"
 
+When you see company names with AG, GmbH, Ltd, Inc, LLC, Corp suffixes, treat the words before the suffix as part of the company name, even if separated by commas.
+
+CRITICAL FOR COMPANY EXTRACTION:
+- If you see "Companies" followed by words, extract ALL companies mentioned
+- Multiple companies are often connected with "and" or commas
+- Example: "Companies Kieback AG and Implenia AG" means TWO companies: Kieback AG and Implenia AG
+- Example: "Companies BuildCorp, TechSolutions GmbH, and Electric Ltd" means THREE companies
+- ALWAYS split on "and" or commas when multiple companies are listed
+- IMPORTANT: When you see "Companies X and Y", both X and Y are separate companies
+- "Companies Implenia AG and KIBAG AG" should return: [{"name": "Implenia AG"}, {"name": "KIBAG AG"}]
+- Never combine companies into a single entry
+- Common voice errors: "Maya" → "Meier", "Game Behave" → "GmbH", "are gay" → "AG"
+- If the text starts with "Companies" and has no clear suffix, still treat it as a company name
+- "Electric Maya Game Behave" should be extracted as company: "Electric Maya Game Behave" (let the user correct later)
+
+
+Extract information into these fields (only include fields that are explicitly mentioned):
+CRITICAL CATEGORY SEPARATION RULES:
+- When you see a category keyword (tools, services, activities, issues, people, companies, time, weather), it marks the START of that category
+- NEVER include the category name itself as a value
+- Example: "tools hammer saw activities installing" means:
+  - tools: ["hammer", "saw"] 
+  - activities: ["installing"]
+  - NOT tools: ["hammer", "saw", "activities", "installing"]
+- The word after a category keyword belongs to THAT category, not the previous one
+- Common patterns:
+  - "services plumbing activities installing" → services: ["plumbing"], activities: ["installing"]
+  - "tools hammer activities drilling issues cracks" → tools: ["hammer"], activities: ["drilling"], issues: ["cracks"]
+  - "issues water leak time 8am" → issues: ["water leak"], time: "8am"
+- Category keywords: tools, services, activities, issues, people, companies, time, weather, segment, category, site, impression, comments
+IMPORTANT: If you see text like "Tools, hammer, saw, electric wiring, activities, installing loose cables":
+- Split at the word "activities" because it's a category keyword
+- Result should be:
+  - tools: [{"item": "hammer"}, {"item": "saw"}, {"item": "electric wiring"}]
+  - activities: ["installing loose cables"]
+- NOT tools including "activities" or "installing loose cables"
+When parsing comma-separated lists, watch for category transitions:
+- "services inspection, tools hammer" → services: ["inspection"], tools: ["hammer"]
+- "issues cracks, time 8am" → issues: ["cracks"], time: "8am"
+CRITICAL RULES FOR PEOPLE EXTRACTION:
+- When you see "People, [Name1] as [Role1], [Name2] as [Role2]", extract ALL people mentioned
+- "John Smith as site manager, Anna Weber as safety officer" means:
+  - people: ["John Smith", "Anna Weber"]  
+  - roles: [{"name": "John Smith", "role": "Site Manager"}, {"name": "Anna Weber", "role": "Safety Officer"}]
+- "People Lisa as project manager" means:
+  - people: ["Lisa"]
+  - roles: [{"name": "Lisa", "role": "Project Manager"}]
+- "People Lisa as co-worker" means:
+  - people: ["Lisa"]
+  - roles: [{"name": "Lisa", "role": "Co-Worker"}]
+- ALWAYS extract BOTH the person AND their role when "as" or "works as" or "is" appears after a name
+- NEVER stop after the first person - continue parsing the entire sentence for all people
+- Common voice errors: "honor" might be "Anna", "are gay" might be "AG", "Maya" might be "Meier"
+The word "worked" or "as" is just grammar, not part of the name!
+
+CRITICAL RULES FOR ISSUES/ACTIVITIES:
+- When you see "Issues, [issue1] and [issue2]", treat as SEPARATE issues
+- "water leak in basement and delayed material delivery" = TWO issues, not one
+- When you see "Activities [activity1], [activity2]", extract ALL activities
+- "Pouring Concrete, Installing Windows" = TWO activities
+
+CRITICAL RULES FOR COMBINED FIELDS:
+- If you see "weather [condition] time [duration]" in one input, SPLIT them:
+  - weather: only the weather condition
+  - time: only the time duration
+- Example: "weather sunny with occasional clouds time full day eight hours"
+  - weather: "sunny with occasional clouds"
+  - time: "full day eight hours"
+
+Extract information into these fields (only include fields that are explicitly mentioned):
 - site_name: string - physical location or project name (e.g., "Downtown Project", "Building 7")
 - segment: string - specific section or area within the site (e.g., "5", "North Wing", "Foundation")
 - category: string - classification of work or report (e.g., "Bestand", "Safety", "Progress", "Mängelerfassung")
 - companies: list of objects with company names [{"name": "BuildRight AG"}, {"name": "ElectricFlow GmbH"}]
-- people: list of strings with ALL names of individuals mentioned (extract every person) ["Anna Keller", "John Smith", "Maxwell", "Stefan", "me"]
-- roles: list of objects associating ALL people with their roles - extract every person-role pair mentioned [{"name": "Anna Keller", "role": "Supervisor"}, {"name": "Maxwell", "role": "Technical Engineer"}, {"name": "Stefan", "role": "Worker"}]
+- people: list of strings with ALL names of individuals mentioned (extract every person, but NEVER include "me" as a person name) ["Anna Keller", "John Smith", "Maxwell", "Stefan"]
+- roles: list of {"name": "person", "role": "their role"} for ALL people with specific roles mentioned
+  CRITICAL: When you see "John Smith as site manager, Anna Weber as safety officer", extract BOTH:
+  [{"name": "John Smith", "role": "Site Manager"}, {"name": "Anna Weber", "role": "Safety Officer"}]
+  When you see "Lisa Maya as co-worker", extract: [{"name": "Lisa Maya", "role": "Co-Worker"}]
+  Handle hyphenated roles like "co-worker" as "Co-Worker"
+  NEVER stop after the first person - extract ALL people and their roles
+  CRITICAL: When you see "people [Name] as [Role]" or "person [Name] as [Role]", you MUST extract BOTH:
+- Add the name to the "people" list
+- Add the name-role pair to the "roles" list
+Example: "people Lisa Miller as co-worker" should return:
+{
+  "people": ["Lisa Miller"],
+  "roles": [{"name": "Lisa Miller", "role": "Co-Worker"}]
+}
+NEVER extract just the person without their role when "as" is present in the text.
 - tools: list of objects with equipment/tools [{"item": "mobile crane"}, {"item": "welding equipment"}]
 - services: list of objects with services provided [{"task": "electrical wiring"}, {"task": "HVAC installation"}]
 - activities: list of strings describing work performed ["laying foundations", "setting up scaffolding"]
-- issues: list of objects with problems and their attributes [{"description": "power outage at 10 AM", "has_photo": false}]
-- time: string - duration or time period (e.g., "morning", "full day", "8 hours")
-- weather: string - weather conditions (e.g., "cloudy with intermittent rain")
+- issues: list of {"description": "issue description", "has_photo": boolean} for problems encountered
+  CRITICAL: "water leak in basement and delayed material delivery" = TWO separate issues:
+  [{"description": "water leak in basement", "has_photo": false}, {"description": "delayed material delivery", "has_photo": false}]
+  Always split issues connected by "and" into separate items
+- time: string - duration or time period (e.g., "7am to 4pm", "7 a.m. to 4 p.m.", "all day from 8 to 5", "full day", "8 hours")
+  IMPORTANT: Extract the COMPLETE time phrase including "a.m."/"p.m." - "7 a.m. to 4 p.m." NOT just "7 a"
+- weather: string - weather conditions (e.g., "cloudy with intermittent rain", "sunny with occasional clouds")
+IMPORTANT: If you see "weather [condition] time [duration]" in one sentence, split them into separate fields
 - impression: string - overall assessment (e.g., "productive despite setbacks")
 - comments: string - additional notes or observations
 - date: string - in dd-mm-yyyy format
@@ -190,11 +285,42 @@ Special commands to detect (return these as single-field objects, do not combine
 Deletion commands (parse these accurately):
 - If input is "delete X from Y" or "remove X from Y": return {"delete": {"target": "X", "field": "Y"}}
 - If input is "delete all X" or "clear X": return {"X": {"delete": true}} where X is the field name
+CRITICAL: When you see "Correct X to Y as Z" patterns:
+- This means: correct person name X to Y, and their role is Z
+- DO NOT add Z as a separate person
+- Example: "Correct Sandra Maia to Sandra Meier as mural artist" means:
+  - correct: [{"field": "people", "old": "Sandra Maia", "new": "Sandra Meier"}]
+  - roles: [{"name": "Sandra Meier", "role": "Mural Artist"}]
+  - NOT adding "mural artist" as a person!
+- If X doesn't exist in people list, just add Y with role Z:
+  - people: ["Sandra Meier"]
+  - roles: [{"name": "Sandra Meier", "role": "Mural Artist"}]
 
 Correction commands:
 - If input is "correct X in Y to Z" or similar: return {"correct": [{"field": "Y", "old": "X", "new": "Z"}]}
-- If input is "correct spelling of X to Y": detect the field containing X and return {"correct": [{"field": "detected_field", "old": "X", "new": "Y"}]}
-- If input is "correct X to Y": detect the field containing X and return {"correct": [{"field": "detected_field", "old": "X", "new": "Y"}]}
+- IMPORTANT: For "correct X to Y", first check if X exists in the current report data:
+  - If X is part of site_name, return {"correct": [{"field": "site_name", "old": "<full_site_name>", "new": "<site_name_with_X_replaced_by_Y>"}]}
+  - If X is a company name (has AG, GmbH, Ltd suffixes), return {"correct": [{"field": "companies", "old": "X", "new": "Y"}]}
+  - If X is a person name (no company suffixes), return {"correct": [{"field": "people", "old": "X", "new": "Y"}]}
+  - Otherwise, detect based on context or default to most likely field
+- For partial word corrections like "correct Hartbrücke to Hardbrücke", check if the word appears in site_name and correct the entire site_name
+- Examples:
+  - "correct spelling KeyBag AG to KIBAG AG": {"correct": [{"field": "companies", "old": "KeyBag AG", "new": "KIBAG AG"}]}
+  - "correct Lisa Maya to Lisa Meier": {"correct": [{"field": "people", "old": "Lisa Maya", "new": "Lisa Meier"}]}
+  - "correct Hartbrücke to Hardbrücke" when site is "Zurich Bike Tunnel Hartbrücke": {"correct": [{"field": "site_name", "old": "Zurich Bike Tunnel Hartbrücke", "new": "Zurich Bike Tunnel Hardbrücke"}]}
+- For "correct spelling Electric Maya, GMBH to Electric-Meier GmbH": return {"correct": [{"field": "companies", "old": "Electric Maya", "new": "Electric-Meier GmbH"}]} (handle comma-separated company names properly)
+- CRITICAL for multiple corrections in one command:
+  When you see "correct spelling X to Y, A to B, C to D", you must parse EACH correction pair separately.
+  For example: "correct spelling Emplenier AG to Implenia AG, Kieberg AG to KIBAG AG, Malti AG to Marti AG"
+  Must return:
+  {"correct": [
+    {"field": "companies", "old": "Emplenier AG", "new": "Implenia AG"},
+    {"field": "companies", "old": "Kieberg AG", "new": "KIBAG AG"},
+    {"field": "companies", "old": "Malti AG", "new": "Marti AG"}
+  ]}
+  - Each comma-separated "old to new" pair becomes a separate object in the correct array
+  - Preserve company suffixes (AG, GmbH, Ltd, etc.) in both old and new values
+  - The field should be "companies" when the values contain company suffixes
 CRITICAL for people and roles extraction:
 - When you see patterns like "X as Y, A as B, C was doing D, and me as E", extract ALL people mentioned
 - When you see "X was a Y" or "X was working as Y", extract X as a person and Y as their role
@@ -260,10 +386,16 @@ def extract_with_nlp(text: str) -> Tuple[Dict[str, Any], float]:
         content = response.choices[0].message.content.strip()
         log_event("nlp_extraction_completed", response_length=len(content))
         
+        # Debug log the actual NLP response
+        print(f"DEBUG NLP Response: {content}")
+        
         # Extract JSON from the response
         try:
             # First check if the entire response is JSON
             data = json.loads(content)
+            
+            # Debug log the parsed data
+            print(f"DEBUG NLP Parsed Data: {data}")
             
             # Post-process the extracted data
             data = standardize_nlp_output(data)
@@ -332,30 +464,95 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
     
     # Handle structured list fields
     # Companies
+    # Companies
     if "companies" in data:
         if isinstance(data["companies"], list):
             result["companies"] = []
             for company in data["companies"]:
                 if isinstance(company, dict) and "name" in company:
-                    result["companies"].append({"name": company["name"]})
+                    company_name = company["name"].strip()
+                    
+                    # Skip empty names but DON'T skip voice-garbled names
+                    if not company_name:
+                        continue
+                    
+                    # Check if this looks like a complete company name
+                    has_suffix = any(suffix in company_name.upper() for suffix in ['GMBH', 'AG', 'LTD', 'INC', 'LLC', 'CORP'])
+                    
+                    if has_suffix:
+                        # It's a complete company name, add as-is
+                        result["companies"].append({"name": company_name})
+                    else:
+                        # Might be multiple companies or needs cleaning
+                        # But don't split single words
+                        if ',' in company_name and ' ' in company_name:
+                            # Could be multiple companies
+                            for comp in re.split(r',\s*(?=\w+\s+\w+)', company_name):
+                                if comp.strip() and len(comp.strip()) > 3:
+                                    result["companies"].append({"name": comp.strip()})
+                        else:
+                            # Single company without suffix
+                            if len(company_name) > 3:  # Skip very short names
+                                result["companies"].append({"name": company_name})
                 elif isinstance(company, str):
-                    result["companies"].append({"name": company})
+                    company_name = company.strip()
+                    
+                    # Skip empty or invalid company names
+                    if not company_name or company_name.lower() in ['build', 'tech', 'electric', 'construction']:
+                        continue
+                        
+                    # Same logic for string companies
+                    has_suffix = any(suffix in company_name.upper() for suffix in ['GMBH', 'AG', 'LTD', 'INC', 'LLC', 'CORP'])
+                    
+                    if has_suffix or len(company_name) > 3:
+                        result["companies"].append({"name": company_name})
     
     # People
     if "people" in data:
         if isinstance(data["people"], list):
             result["people"] = []
+            seen_people = set()
             for person in data["people"]:
                 person_name = None
                 if isinstance(person, str):
-                    person_name = person
+                    # First clean up voice transcription artifacts
+                    person_clean = person
+                    if person_clean.lower().startswith("we also had "):
+                        person_clean = person_clean[12:]  # Remove "we also had "
+                    elif person_clean.lower().startswith("people "):
+                        person_clean = person_clean[7:]  # Remove "people "
+                    
+                    # Handle common transcription errors for names
+                    name_corrections = {
+                        "me": None,  # Skip "me" - should be resolved to actual user
+                        "i": None,   # Skip "I" as well
+                        "we": None,  # Skip "we"
+                        "us": None,  # Skip "us"
+                        "them": None,  # Skip "them"
+                        "they": None,  # Skip "they"
+                        "mark us": "Marcus",
+                        "markus": "Marcus",
+                    }
+                    
+                    if person_clean.lower() in name_corrections:
+                        corrected = name_corrections[person_clean.lower()]
+                        if corrected:  # If not None
+                            person_name = corrected
+                        else:
+                            continue  # Skip this person
+                    else:
+                        person_name = person_clean
                 elif isinstance(person, dict) and "name" in person:
                     person_name = person["name"]
                 
-                # Clean up "myself" references - this would need chat context to work properly
-                # For now, just add the name as-is
-                if person_name:
-                    result["people"].append(person_name)
+                if person_name and person_name.lower() not in seen_people:
+                    # Clean up person names - remove "worked" and similar artifacts
+                    if " worked" in person_name.lower():
+                        person_name = person_name.replace(" worked", "").replace(" Worked", "")
+                    # Add all valid names
+                    if person_name:
+                        result["people"].append(person_name.strip())
+                        seen_people.add(person_name.lower())
     
     # Roles
     if "roles" in data:
@@ -363,21 +560,50 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
             result["roles"] = []
             for role in data["roles"]:
                 if isinstance(role, dict) and "name" in role and "role" in role:
-                    result["roles"].append({"name": role["name"], "role": role["role"]})
+                    # Capitalize the role title properly
+                    role_title = role["role"]
+                    # Handle hyphenated roles like "co-worker"
+                    if '-' in role_title:
+                        role_title = '-'.join(word.capitalize() for word in role_title.split('-'))
+                    else:
+                        # Capitalize first letter of each word in the role
+                        role_title = ' '.join(word.capitalize() for word in role_title.split())
+                    result["roles"].append({"name": role["name"], "role": role_title})
+                    
+                    # ALSO make sure the person is in the people list
+                    if "people" not in result:
+                        result["people"] = []
+                    if role["name"] not in result["people"]:
+                        result["people"].append(role["name"])
     
-    # Tools - deduplicate
+    # Special case: If we have people but no roles, check if the original text had "as" pattern
+    # This ensures roles are extracted even if NLP missed them
+    if "people" in result and result["people"] and "roles" not in result:
+        # This will be handled by the calling function if needed
+        pass
+
+    # Tools - deduplicate and filter out category keywords
     if "tools" in data:
         if isinstance(data["tools"], list):
             result["tools"] = []
             seen_tools = set()
+            category_keywords = ['activities', 'services', 'issues', 'people', 'companies', 
+                               'time', 'weather', 'segment', 'category', 'impression', 'comments']
+            
             for tool in data["tools"]:
                 if isinstance(tool, dict) and "item" in tool:
                     item = tool["item"].lower().strip()
+                    # Skip if it's a category keyword
+                    if item in category_keywords:
+                        continue
                     if item not in seen_tools:
                         seen_tools.add(item)
                         result["tools"].append({"item": tool["item"]})
                 elif isinstance(tool, str):
                     item = tool.lower().strip()
+                    # Skip if it's a category keyword
+                    if item in category_keywords:
+                        continue
                     if item not in seen_tools:
                         seen_tools.add(item)
                         result["tools"].append({"item": tool})
@@ -410,7 +636,6 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
     
 
     # Services - deduplicate
-    
     if "services" in data:
         if isinstance(data["services"], list):
             result["services"] = []
@@ -423,36 +648,74 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     task_text = service
                 
                 if task_text:
+                    # Clean up service text - remove ALL leading/trailing punctuation and spaces
+                    task_text = task_text.strip()
+                    # Remove any leading periods, commas, colons, semicolons, spaces
+                    task_text = re.sub(r'^[.,;:\s!?]+', '', task_text)  # Remove leading punctuation
+                    task_text = re.sub(r'[.,;:\s!?]+$', '', task_text)  # Remove trailing punctuation
+                    # Also clean up any double spaces
+                    task_text = re.sub(r'\s+', ' ', task_text)
+                
+                if task_text:
                     task_lower = task_text.lower().strip()
                     if task_lower and task_lower not in seen_services:
                         seen_services.add(task_lower)
                         result["services"].append({"task": task_text})
     
     # Activities
+    # Activities
     if "activities" in data:
         if isinstance(data["activities"], list):
             result["activities"] = []
             for activity in data["activities"]:
                 if isinstance(activity, str):
-                    result["activities"].append(activity)
-    
+                    # Check if multiple activities are combined with commas
+                    if ", " in activity:
+                        parts = activity.split(", ")
+                        for part in parts:
+                            part = part.strip()
+                            if part and part not in result["activities"]:
+                                result["activities"].append(part)
+                    else:
+                        if activity not in result["activities"]:
+                            result["activities"].append(activity)
+
     # Issues
     if "issues" in data:
         if isinstance(data["issues"], list):
             result["issues"] = []
             for issue in data["issues"]:
                 if isinstance(issue, dict) and "description" in issue:
-                    issue_obj = {"description": issue["description"]}
-                    if "has_photo" in issue:
-                        issue_obj["has_photo"] = bool(issue["has_photo"])
+                    desc = issue["description"]
+                    # Check if this is actually multiple issues combined with "and"
+                    if " and " in desc and "delayed" in desc.lower():
+                        # Split on "and" for common pattern like "water leak and delayed delivery"
+                        parts = desc.split(" and ")
+                        for part in parts:
+                            part = part.strip()
+                            if part:
+                                has_photo = "photo" in part.lower() or "picture" in part.lower()
+                                result["issues"].append({"description": part, "has_photo": has_photo})
                     else:
-                        # Check for photo reference in description
-                        has_photo = "photo" in issue["description"].lower() or "picture" in issue["description"].lower()
-                        issue_obj["has_photo"] = has_photo
-                    result["issues"].append(issue_obj)
+                        issue_obj = {"description": desc}
+                        if "has_photo" in issue:
+                            issue_obj["has_photo"] = bool(issue["has_photo"])
+                        else:
+                            has_photo = "photo" in desc.lower() or "picture" in desc.lower()
+                            issue_obj["has_photo"] = has_photo
+                        result["issues"].append(issue_obj)
                 elif isinstance(issue, str):
-                    has_photo = "photo" in issue.lower() or "picture" in issue.lower()
-                    result["issues"].append({"description": issue, "has_photo": has_photo})
+                    # Same logic for string issues
+                    if " and " in issue and "delayed" in issue.lower():
+                        parts = issue.split(" and ")
+                        for part in parts:
+                            part = part.strip()
+                            if part:
+                                has_photo = "photo" in part.lower() or "picture" in part.lower()
+                                result["issues"].append({"description": part, "has_photo": has_photo})
+                    else:
+                        has_photo = "photo" in issue.lower() or "picture" in issue.lower()
+                        result["issues"].append({"description": issue, "has_photo": has_photo})
     
     # Handle date field
     if "date" in data:
@@ -562,6 +825,57 @@ def calculate_extraction_confidence(data: Dict[str, Any], original_text: str) ->
     # Final confidence score bounded between 0 and 1
     return max(0.0, min(1.0, confidence))
 
+def process_multiple_corrections(text: str) -> Dict[str, Any]:
+    """Process multiple spelling corrections in one command"""
+    # Pattern for "correct spelling X to Y, A to B, C to D"
+    pattern = r'correct\s+spelling\s+(?:of\s+)?(.+)'
+    match = re.match(pattern, text, re.IGNORECASE)
+    
+    if not match:
+        return {}
+    
+    corrections_text = match.group(1)
+    corrections = []
+    
+    # First, handle "and" as a separator between corrections
+    # Replace "and from" with just a comma to normalize
+    corrections_text = re.sub(r'\s+and\s+from\s+', ', ', corrections_text, flags=re.IGNORECASE)
+    corrections_text = re.sub(r'\s+and\s+', ', ', corrections_text, flags=re.IGNORECASE)
+    
+    # Split by commas to get individual corrections
+    parts = re.split(r',\s*', corrections_text)
+    
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+            
+        # Remove "from" prefix if present
+        part = re.sub(r'^from\s+', '', part, flags=re.IGNORECASE)
+        
+        # Extract "old to new" pattern
+        correction_match = re.match(r'(.+?)\s+to\s+(.+)', part, re.IGNORECASE)
+        if correction_match:
+            old_value = correction_match.group(1).strip()
+            new_value = correction_match.group(2).strip()
+            
+            # Determine field based on suffixes
+            field = "companies"  # Default to companies for AG, GmbH, etc.
+            if any(suffix in old_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
+                field = "companies"
+            elif not any(suffix in old_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
+                # Check if it's a person name (no company suffix)
+                field = "people"
+            
+            corrections.append({
+                "field": field,
+                "old": old_value,
+                "new": new_value
+            })
+    
+    if corrections:
+        return {"correct": corrections}
+    return {}
 
 REQUIRED_ENV_VARS = ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"]
 
@@ -647,11 +961,13 @@ FIELD_PATTERNS = {
     "category": r'^(?:(?:add|insert)\s+)?(?:categories?|kategorie|category)\s*[:,]?\s*(.+?)(?:\s*(?:companies|people|tools|services|activities|$))',
     "impression": r'^(?:(?:add|insert)\s+)?(?:impressions?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "people": r'^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+)(?:\s*(?:,|\.|$))|^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
-    "person_as_role": r'^(\w+(?:\s+\w+)?)\s+as\s+(\w+(?:\s+\w+)?)(?:\s*(?:,|\.|$))',
+    "person_as_role": r'^(?:add\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+(?:\s+[A-Za-z\s\-]+)?)(?:\s*(?:,|\.|$))',
+    "add_person_role": r'^add\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+)$',
     "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(\w+\s+\w+|\w+)\s+(?:as|is)\s+(.+?)(?:\s*(?:,|\.|$))',
     "role_parentheses": r'^roles?:\s*([A-Za-z\s]+)\s*\(([^)]+)\)$',
     "supervisor": r'^(?:supervisors?\s+were\s+|(?:add|insert)\s+roles?\s*[:,]?\s*supervisor\s*|roles?\s*[:,]?\s*supervisor\s*)(.+?)(?:\s*(?:,|\.|$))',
     "company": r'^(?:(?:add|insert)\s+)?(?:compan(?:y|ies)|firms?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
+    "companies_and": r'^compan(?:y|ies)\s+([A-Z][^,]+?)\s+and\s+([A-Z].+?)(?:\.|$)',
     "service": r'^(?:(?:add|insert)\s+)?(?:services?)\s*[:,]?\s*(.+?)$',
     "tool": r'^(?:.*?)?(?:tools?|used?|using)\s*[:,]?\s*(.+?)$|^(?:we|I|they|he|she|[A-Za-z]+)\s+(?:used?|using)\s+(.+?)$',
     "activity": r'^(?:(?:add|insert)\s+)?(?:activit(?:y|ies))\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
@@ -919,8 +1235,14 @@ Fields to extract (omit if not present):
 - people: list of strings (e.g., ["Anna", "Tobias"])
 - roles: list of objects with "name" and "role" (e.g., [{"name": "Anna", "role": "Supervisor"}])
 - tools: list of objects with "item" (e.g., [{"item": "Crane"}])
-- services: list of objects with "task" (e.g., [{"task": "Excavation"}])
-- activities: list of strings (e.g., ["Concrete pouring"])
+- services: list of strings for services provided ["plumbing", "electrical work", "foundation laying"]
+  NEVER put activities like "pouring concrete" or "installing windows" in services
+- activities: list of strings for activities performed ["pouring concrete", "installing windows", "painting walls"]
+  NEVER put services like "plumbing" or "electrical wiring" in activities
+  
+  CRITICAL: When you see "services, foundation laying, electrical wiring, and activities pouring concrete, installing windows":
+  - services: ["foundation laying", "electrical wiring"]
+  - activities: ["pouring concrete", "installing windows"]
 - issues: list of objects with "description" (required), "caused_by" (optional), "has_photo" (optional, default false)
 - time: string (e.g., "morning", "full day")
 - weather: string (e.g., "cloudy")
@@ -1206,6 +1528,57 @@ def normalize_transcription(text: str) -> str:
         text = "new report"
     
     return text.strip()
+
+def normalize_voice_companies(text: str) -> str:
+    """Fix common voice transcription errors in company names"""
+    
+    # Common voice transcription errors for German company names
+    voice_replacements = {
+        r"\bKybak\b": "KIBAG",  # Common misrecognition of KIBAG
+        r"\bKieback\b": "KIBAG",  # Another variant
+        r"Company's\s+": "Companies ",  # Fix possessive to plural
+        r"\bElectro Maya Game Bearer\b": "Elektro-Meier GmbH",
+        r"\bElectro Maya Game Behave\b": "Elektro-Meier GmbH",
+        r"\bMaya\b": "Meier",  # Common misrecognition
+        r"\bGame Bearer\b": "GmbH",
+        r"\bGame Behave\b": "GmbH",
+        r"\bare gay\b": "AG",
+        r"Company's\s+": "Companies ",  # Fix possessive to plural
+        r"\bElectro Maya Game Bearer\b": "Elektro-Meier GmbH",
+        r"\bElectro Maya Game Behave\b": "Elektro-Meier GmbH",
+        r"\bMaya\b": "Meier",  # Common misrecognition
+        r"\bGame Bearer\b": "GmbH",
+        r"\bGame Behave\b": "GmbH",
+        r"\bare gay\b": "AG",
+        # ADD THESE NEW PATTERNS:
+        r"\bmakhti ageet\b": "Marti AG",
+        r"\bKieback\b": "KIBAG",
+        r"\bImplenier\b": "Implenia",
+        r"\bElektromaya\b": "Elektro-Meier",
+        r"\bageet\b": "AG",
+        r"\bmakhti\b": "Marti",
+    }
+    
+    for pattern, replacement in voice_replacements.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    
+    # Pattern to fix company names split by commas before suffixes
+    company_suffixes = ['AG', 'GmbH', 'Ltd', 'Limited', 'Inc', 'LLC', 'Corp', 'Corporation', 'S.A.', 'S.L.', 'B.V.', 'N.V.']
+    
+    for suffix in company_suffixes:
+        # Fix patterns like "Build, Tech AG" -> "BuildTech AG"
+        pattern = r'(\w+),\s*(\w+),?\s*(' + re.escape(suffix) + r')\b'
+        text = re.sub(pattern, r'\1\2 \3', text, flags=re.IGNORECASE)
+        
+        # Fix patterns like "Electric Solutions, Ltd" -> "Electric Solutions Ltd"
+        pattern = r'(\w+\s+\w+),\s*(' + re.escape(suffix) + r')\b'
+        text = re.sub(pattern, r'\1 \2', text, flags=re.IGNORECASE)
+        
+        # Fix patterns like "Construction, Bro, GmbH" -> "Construction Bro GmbH"
+        pattern = r'(\w+),\s*(\w+),\s*(' + re.escape(suffix) + r')\b'
+        text = re.sub(pattern, r'\1 \2 \3', text, flags=re.IGNORECASE)
+    
+    return text
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def send_pdf(chat_id: str, pdf_buffer: io.BytesIO, report_type: str = "standard") -> bool:
@@ -1934,36 +2307,58 @@ def suggest_missing_fields(data: Dict[str, Any]) -> List[str]:
     """Intelligently suggest missing fields based on report context"""
     suggestions = []
     
-    # Basic required fields
+    # Check if this is basically an empty report (only has date and maybe one field)
+    non_empty_fields = sum(1 for field, value in data.items() 
+                          if field != "date" and value and 
+                          (value != [] if isinstance(value, list) else value != ""))
+    
+    # If report is mostly empty, suggest the most important fields first
+    if non_empty_fields <= 2:
+        if not data.get("site_name"):
+            suggestions.append("site name")
+        if not data.get("segment"):
+            suggestions.append("segment")
+        if not data.get("category"):
+            suggestions.append("category")
+        return suggestions[:3]  # Only suggest top 3 for empty reports
+    
+    # Otherwise, use context-based suggestions for reports with more content
+    # Basic required field (only if not already added above)
     if not data.get("site_name"):
         suggestions.append("site name")
-        
+    
     # Context-based suggestions
     if data.get("activities") and not data.get("time"):
         suggestions.append("time spent")
-        
+    
     if data.get("activities") and not data.get("companies") and not data.get("people"):
         suggestions.append("people or companies involved")
-        
+    
     if data.get("issues") and not data.get("impression"):
         suggestions.append("overall impression")
-        
-    if data.get("site_name") and not data.get("weather") and not data.get("activities"):
-        suggestions.append("activities performed")
-        
+    
+    # Only suggest activities if we have a site but no activities yet
+    if data.get("site_name") and not data.get("activities"):
+        if not data.get("weather"):
+            suggestions.append("weather conditions")
+        else:
+            suggestions.append("activities performed")
+    
     if len(data.get("activities", [])) > 2 and not data.get("tools"):
         suggestions.append("tools used")
-        
+    
     # Site context suggestions
-    if data.get("site_name") and "install" in " ".join(data.get("activities", [])).lower():
-        if not data.get("services"):
+    if data.get("site_name") and data.get("activities"):
+        activities_text = " ".join(data.get("activities", [])).lower()
+        if "install" in activities_text and not data.get("services"):
             suggestions.append("services provided")
-            
-    if data.get("site_name") and any(issue.get("description", "").lower().find("delay") >= 0 
-                                     for issue in data.get("issues", [])):
-        if not data.get("comments"):
+    
+    if data.get("issues"):
+        has_delay = any(issue.get("description", "").lower().find("delay") >= 0 
+                       for issue in data.get("issues", []))
+        if has_delay and not data.get("comments"):
             suggestions.append("comments on how to address delays")
-            
+    
     return suggestions[:3]  # Limit to 3 suggestions
 
 # --- Data Processing ---
@@ -2261,6 +2656,18 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
         reset_match = re.match(FIELD_PATTERNS["reset"], cmd, re.IGNORECASE)
         if reset_match:
             return {"reset": True}
+        
+        # Check add_person_role pattern early (before generic patterns)
+        if "add_person_role" in FIELD_PATTERNS:
+            match = re.match(FIELD_PATTERNS["add_person_role"], cmd, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                role = match.group(2).strip()
+                if name and role:
+                    role_title = ' '.join(word.capitalize() for word in role.split())
+                    result["people"] = [name]
+                    result["roles"] = [{"name": name, "role": role_title}]
+                    return result
             
         # Check for yes/no confirmations
         yes_match = re.match(FIELD_PATTERNS["yes_confirm"], cmd, re.IGNORECASE)
@@ -2274,134 +2681,171 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
         # Check for field-specific patterns
         for raw_field, pattern in FIELD_PATTERNS.items():
             # Skip non-field patterns
-            if raw_field in ["reset", "delete", "correct", "clear", "help", 
+            if raw_field in ["reset", "delete", "correct", "clear", "help", "add_person_role",
                         "undo_last", "context_add", "summary", "detailed", 
-                        "delete_entire", "export_pdf",  "yes_confirm", "no_confirm"]:
+                        "delete_entire", "export_pdf", "yes_confirm", "no_confirm",
+                        "delete_category", "delete_field", "delete_item", "delete_specific",
+                        "update_field", "greeting", "conversation", "export",
+                        "voice_add_site", "voice_companies", "voice_people_roles",
+                        "segment_category", "person_as_role", "role_parentheses",
+                        "correct_simple"]:
                 continue
                 
             match = re.match(pattern, cmd, re.IGNORECASE)
-            if match:
-                field = FIELD_MAPPING.get(raw_field, raw_field)
-                log_event("field_matched", raw_field=raw_field, mapped_field=field)
+            if not match:
+                continue
                 
-                # Skip site_name matches that look like commands
-                if field == "site_name" and re.search(r'\b(add|insert|delete|remove|correct|adjust|update|spell|none|as|role|new|reset)\b', cmd.lower()):
+            field = FIELD_MAPPING.get(raw_field, raw_field)
+            log_event("field_matched", raw_field=raw_field, mapped_field=field)
+            
+            # Handle each field type with independent if statements
+            if field == "site_name":
+                if re.search(r'\b(add|insert|delete|remove|correct|adjust|update|spell|none|as|role|new|reset)\b', cmd.lower()):
                     log_event("skipped_site_name", reason="command-like input")
                     continue
+                value = clean_value(match.group(1), field)
+                result[field] = value
+                return result
+            
+            if field == "segment":
+                value = clean_value(match.group(1), field)
+                result[field] = value
+                return result
+            
+            if field == "category":
+                value = clean_value(match.group(1), field)
+                result[field] = value
+                return result
+            
+            if field == "people":
+                name = clean_value(match.group(1), field) if match.group(1) else None
+                role = clean_value(match.group(2), field) if len(match.groups()) > 1 and match.group(2) else None
                 
-                # Handle people field
-                if field == "people":
-                    name = clean_value(match.group(1), field)
-                    role = clean_value(match.group(2), field) if len(match.groups()) > 1 and match.group(2) else None
-                    
-                    # Skip if it's just "supervisor"
-                    if name.lower() == "supervisor":
-                        continue
-                    
+                if name and name.lower() == "supervisor":
+                    continue
+                
+                if name:
                     result["people"] = [name]
-                    
-                    # If a role is specified, add it to roles as well
                     if role:
                         result["roles"] = [{"name": name, "role": role.title()}]
-                        
-                # Handle role field
-                elif field == "roles":
-                    # Groups vary depending on which pattern matched
-                    name = None
-                    role = None
-                    
-                    # Process through all groups to find name and role
-                    for i in range(1, len(match.groups()) + 1):
-                        if match.group(i):
-                            group_text = match.group(i)
-                            # If this looks like a name and we don't have one yet
-                            if not name and re.match(r'^[A-Za-z]+(\s+[A-Za-z]+)?$', group_text):
-                                name = clean_value(group_text, field)
-                            # If we have a name but no role yet, this must be the role
-                            elif name and not role:
-                                # Clean up role text by removing "the", "a", "an"
-                                role_text = re.sub(r'^(?:the|a|an)\s+', '', group_text)
-                                role = clean_value(role_text, field).title()
-                    
-                    if not name or not role or name.lower() == "supervisor":
-                        continue
-                        
-                    log_event("role_extraction", name=name, role=role)
-                    result["people"] = [name]
-                    result["roles"] = [{"name": name, "role": role}]
-
-                # Handle supervisor field
-                elif field == "roles" and raw_field == "supervisor":
+                    return result
+                continue
+            
+            if field == "roles":
+                if raw_field == "supervisor":
                     value = clean_value(match.group(1), "roles")
                     supervisor_names = [name.strip() for name in re.split(r'\s+and\s+|,', value) if name.strip()]
                     result["roles"] = [{"name": name, "role": "Supervisor"} for name in supervisor_names]
                     result["people"] = supervisor_names
+                    return result
                 
-                # Handle company field
-                elif field == "companies":
-                    captured = clean_value(match.group(1) if len(match.groups()) >= 1 and match.group(1) else "", field)
-                    # If the first group is empty or starts with 'are/is', try the second group
-                    if (not captured or captured.lower().startswith(('are', 'is', 'were'))) and len(match.groups()) >= 2:
-                        captured = clean_value(match.group(2), field)
-                    
-                    # Remove leading "are", "is", etc.
-                    captured = re.sub(r'^(?:are|is|were|include[ds]?)\s+', '', captured)
-                    
-                    company_names = [name.strip() for name in re.split(r'\s+and\s+|,', captured) if name.strip()]
-                    log_event("company_extraction", captured=captured, company_names=company_names)
-                    result["companies"] = [{"name": name} for name in company_names]
+                name = None
+                role = None
                 
-                # Handle service/services field
-                elif field in ["services", "service"]:
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result["services"] = []
-                    else:
-                        services = [service.strip() for service in re.split(r',|\band\b', value) if service.strip()]
-                        result["services"] = [{"task": service} for service in services]
+                for i in range(1, len(match.groups()) + 1):
+                    if match.group(i):
+                        group_text = match.group(i)
+                        if not name and re.match(r'^[A-Za-z]+(\s+[A-Za-z]+)?$', group_text):
+                            name = clean_value(group_text, field)
+                        if name and not role:
+                            role_text = re.sub(r'^(?:the|a|an)\s+', '', group_text)
+                            role = clean_value(role_text, field).title()
                 
-                # Handle tool/tools field
-                elif field in ["tools", "tool"]:
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result["tools"] = []
-                    else:
-                        tools = [tool.strip() for tool in re.split(r',|\band\b', value) if tool.strip()]
-                        result["tools"] = [{"item": tool} for tool in tools]
-                
-                # Handle issue field
-                elif field == "issues":
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result["issues"] = []
-                    else:
-                        issues = [issue.strip() for issue in re.split(r';', value) if issue.strip()]
-                        result["issues"] = [{"description": issue} for issue in issues]
-                
-                # Handle activity field
-                elif field == "activities":
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result["activities"] = []
-                    else:
-                        activities = [activity.strip() for activity in re.split(r',|\band\b', value) if activity.strip()]
-                        result["activities"] = activities
-                
-                # Handle clear command
-                elif raw_field == "clear":
-                    field_name = match.group(1).lower() 
-                    field_name = FIELD_MAPPING.get(field_name, field_name)
-                    result[field_name] = [] if field_name in LIST_FIELDS else ""
-                
-                # Handle other fields (scalar fields)
-                else:
-                    value = clean_value(match.group(1), field)
-                    if value.lower() == "none":
-                        result[field] = "" if field in SCALAR_FIELDS else []
-                    else:
-                        result[field] = value
-                
+                if name and role and name.lower() != "supervisor":
+                    log_event("role_extraction", name=name, role=role)
+                    result["people"] = [name]
+                    result["roles"] = [{"name": name, "role": role}]
+                    return result
+                continue
+            if field == "companies_and":
+                company1 = match.group(1).strip()
+                company2 = match.group(2).strip()
+                result["companies"] = [{"name": company1}, {"name": company2}]
                 return result
+            
+
+            if field == "companies":
+                captured = clean_value(match.group(1) if match.group(1) else "", field)
+                if (not captured or captured.lower().startswith(('are', 'is', 'were'))) and len(match.groups()) >= 2:
+                    captured = clean_value(match.group(2), field)
+                
+                captured = re.sub(r'^(?:are|is|were|include[ds]?)\s+', '', captured)
+                # Better splitting for "X AG and Y AG" patterns
+                company_names = []
+                # First check for "and" splits
+                if ' and ' in captured:
+                    parts = captured.split(' and ')
+                    for part in parts:
+                        part = part.strip()
+                        if part:
+                            company_names.append(part)
+                else:
+                    # Fall back to comma splitting
+                    company_names = [name.strip() for name in re.split(r',', captured) if name.strip()]
+                log_event("company_extraction", captured=captured, company_names=company_names)
+                result["companies"] = [{"name": name} for name in company_names]
+                return result
+            
+            if field in ["tools", "tool"]:
+                value = clean_value(match.group(1), field)
+                if value.lower() == "none":
+                    result["tools"] = []
+                else:
+                    tools = [tool.strip() for tool in re.split(r',|\band\b', value) if tool.strip()]
+                    result["tools"] = [{"item": tool} for tool in tools]
+                return result
+            
+            if field == "issues":
+                value = clean_value(match.group(1), field)
+                if value.lower() == "none":
+                    result["issues"] = []
+                else:
+                    issues = [issue.strip() for issue in re.split(r';', value) if issue.strip()]
+                    result["issues"] = [{"description": issue} for issue in issues]
+                return result
+            
+            if field == "activities":
+                value = clean_value(match.group(1), field)
+                if value.lower() == "none":
+                    result["activities"] = []
+                else:
+                    activities = [activity.strip() for activity in re.split(r',|\band\b', value) if activity.strip()]
+                    result["activities"] = activities
+                return result
+            
+            if field == "time":
+                value = clean_value(match.group(1), field)
+                result[field] = value
+                return result
+            
+            if field == "weather":
+                value = clean_value(match.group(1), field)
+                result[field] = value
+                return result
+            
+            if field == "impression":
+                value = clean_value(match.group(1), field)
+                result[field] = value
+                return result
+            
+            if field == "comments":
+                value = clean_value(match.group(1), field)
+                result[field] = value
+                return result
+            
+            if raw_field == "clear":
+                field_name = match.group(1).lower() 
+                field_name = FIELD_MAPPING.get(field_name, field_name)
+                result[field_name] = [] if field_name in LIST_FIELDS else ""
+                return result
+            
+            # Default handler
+            value = clean_value(match.group(1), field) if match.group(1) else ""
+            if value.lower() == "none":
+                result[field] = "" if field in SCALAR_FIELDS else []
+            else:
+                result[field] = value
+            return result
         
         # Check for deletion commands
         delete_match = re.match(FIELD_PATTERNS["delete"], cmd, re.IGNORECASE)
@@ -2410,29 +2854,20 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
             category = None
             value = None
             
-            # Parse different delete syntax patterns
-            if groups[0]:  # "delete category value"
-                category = FIELD_MAPPING.get(groups[0].lower(), groups[0])
-                value = groups[1].strip() if groups[1] else None
-            elif groups[2] and groups[3]:  # "delete value from category"
-                category = FIELD_MAPPING.get(groups[3].lower(), groups[3])
-                value = groups[2].strip()
-            elif groups[4] and groups[5]:  # "category delete value"
-                category = FIELD_MAPPING.get(groups[4].lower(), groups[4])
-                value = groups[5].strip() if groups[5] else None
-            elif groups[6]:  # "delete value" (no category)
-                value = groups[6].strip()
+            if groups[0]:
+                value = groups[0].strip()
+            if len(groups) > 1 and groups[1]:
+                category = groups[1].strip()
             
             return {"delete": {"category": category, "value": value}}
-
-            
+        
         # Check for delete entire category
         delete_entire_match = re.match(FIELD_PATTERNS["delete_entire"], cmd, re.IGNORECASE)
         if delete_entire_match:
             field = delete_entire_match.group(1).lower()
             mapped_field = FIELD_MAPPING.get(field, field)
             return {mapped_field: {"delete": True}}
-            
+        
         # Check for correction commands
         correct_match = re.match(FIELD_PATTERNS["correct"], cmd, re.IGNORECASE)
         if correct_match:
@@ -2447,10 +2882,9 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                 if new_value:
                     return {"correct": [{"field": field, "old": clean_value(old_value, field), "new": clean_value(new_value, field)}]}
                 else:
-                    # If no new value provided, we'll enter the correction mode
                     return {"spelling_correction": {"field": field, "old_value": clean_value(old_value, field)}}
         
-        # If we get here, no pattern matched for this command
+        # If we get here, no pattern matched
         return {}
     except Exception as e:
         log_event("extract_single_command_error", input=cmd, error=str(e))
@@ -2474,15 +2908,91 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 nlp_data, confidence = extract_with_nlp(text)
                 if confidence >= CONFIG.get("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", 0.7):
                     log_event("using_nlp_extraction", confidence=confidence, fields=list(nlp_data.keys()))
-                    # Return the NLP data directly if confidence is high
+                    
+                    # Supplement NLP with regex for fields it might have missed
+                    supplemented_fields = []
+                    
+                    # Check for site if missing
+                    if not nlp_data.get("site_name") and re.search(r'\bsite\s+[A-Z]', text, re.IGNORECASE):
+                        site_match = re.search(r'site\s+([^,]+?)(?:\s*,|\s*$)', text, re.IGNORECASE)
+                        if site_match:
+                            nlp_data["site_name"] = site_match.group(1).strip()
+                            supplemented_fields.append("site_name")
+                    
+                    # Check for companies if missing
+                    if not nlp_data.get("companies") and re.search(r'\bcompan(?:y|ies)\s+[A-Z]', text, re.IGNORECASE):
+                        company_match = re.search(r'compan(?:y|ies)\s+(.+?)(?:\.|,\s*[A-Z][a-z]+:|$)', text, re.IGNORECASE)
+                        if company_match:
+                            companies_text = company_match.group(1)
+                            companies = []
+                            for comp in re.split(r'\s+and\s+|,\s*', companies_text):
+                                comp = comp.strip().rstrip(',.')
+                                if comp and not comp.lower() in ['are', 'is', 'were']:
+                                    companies.append({"name": comp})
+                            if companies:
+                                nlp_data["companies"] = companies
+                                supplemented_fields.append("companies")
+                    
+                    # Check for people if missing
+                    if not nlp_data.get("people") and re.search(r'\bpeople\s+[A-Z]', text, re.IGNORECASE):
+                        people_match = re.search(r'people\s+(.+?)(?:\.|,\s*[A-Z][a-z]+:|$)', text, re.IGNORECASE)
+                        if people_match:
+                            people_text = people_match.group(1)
+                            people = []
+                            for person in re.split(r'\s+and\s+|,\s*', people_text):
+                                person = person.strip().rstrip(',.')
+                                if person and not person.lower() in ['are', 'is', 'were']:
+                                    people.append(person)
+                            if people:
+                                nlp_data["people"] = people
+                                supplemented_fields.append("people")
+                    
+                    # Check for segment if missing
+                    if not nlp_data.get("segment") and re.search(r'\bsegment\s+\S', text, re.IGNORECASE):
+                        segment_match = re.search(r'segment\s+([^,]+?)(?:\s*,|\s*$)', text, re.IGNORECASE)
+                        if segment_match:
+                            nlp_data["segment"] = segment_match.group(1).strip()
+                            supplemented_fields.append("segment")
+                    
+                    # Check for category if missing
+                    if not nlp_data.get("category") and re.search(r'\bcategory\s+\S', text, re.IGNORECASE):
+                        category_match = re.search(r'category\s+([^,]+?)(?:\s*,|\s*$)', text, re.IGNORECASE)
+                        if category_match:
+                            nlp_data["category"] = category_match.group(1).strip()
+                            supplemented_fields.append("category")
+                    
+                    # Check for tools if missing
+                    if not nlp_data.get("tools") and re.search(r'\btools?\s+[A-Z]', text, re.IGNORECASE):
+                        tools_match = re.search(r'tools?\s+(.+?)(?:\.|,\s*[A-Z][a-z]+:|$)', text, re.IGNORECASE)
+                        if tools_match:
+                            tools_text = tools_match.group(1)
+                            tools = []
+                            for tool in re.split(r'\s+and\s+|,\s*', tools_text):
+                                tool = tool.strip().rstrip(',.')
+                                if tool and not tool.lower() in ['are', 'is', 'were', 'used']:
+                                    tools.append({"item": tool})
+                            if tools:
+                                nlp_data["tools"] = tools
+                                supplemented_fields.append("tools")
+                    
+                    if supplemented_fields:
+                        log_event("supplemented_nlp_with_regex", fields=supplemented_fields)
+                    
+                    # Return the enhanced NLP data
                     return nlp_data
         
         # Handle simple delete commands FIRST - before any pattern matching
-        delete_category_pattern = r'^delete\s+(services|tools|companies|people|activities|issues|roles|segment|category|weather|time|impression|comments)$'
-        delete_match = re.match(delete_category_pattern, normalized_text.lower())
+        delete_value_pattern = r'^delete\s+(.+?)$'
+        delete_match = re.match(delete_value_pattern, normalized_text.lower())
         if delete_match:
-            category = delete_match.group(1)
-            return {"delete": {"value": None, "category": category}}
+            value = delete_match.group(1).strip()
+            
+            # Check if value is a category name
+            if value in ['services', 'tools', 'companies', 'people', 'activities', 'issues', 'roles', 'segment', 'category', 'weather', 'time', 'impression', 'comments']:
+                return {"delete": {"value": None, "category": value}}
+            else:
+                # It's a value to delete (like "delete meier")
+                return {"delete": {"value": value, "category": None}}
         
         # Also handle "clear" as delete
         clear_category_pattern = r'^clear\s+(services|tools|companies|people|activities|issues|roles|segment|category|weather|time|impression|comments)$'
@@ -2490,7 +3000,6 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         if clear_match:
             category = clear_match.group(1)
             return {"delete": {"value": None, "category": category}}
-        
         # GET CONTEXT if chat_id is provided
         context = None
         if chat_id and chat_id in session_data:
@@ -2524,15 +3033,158 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                              original=text, 
                              resolved=normalized_text,
                              item=last_item)
-        
-        
+
+
+            # Check for multiple corrections first
+            if "correct spelling" in normalized_text.lower() and normalized_text.count(" to ") > 1:
+                multi_corrections = process_multiple_corrections(normalized_text)
+                if multi_corrections:
+                    session["command_history"].append(session["structured_data"].copy())
+                    session["structured_data"] = merge_data(session["structured_data"], multi_corrections, chat_id)
+                    session["structured_data"] = enrich_date(session["structured_data"])
+                    save_session(session_data)
+                    summary = summarize_report(session["structured_data"])
+                    send_message(chat_id, f"✅ Processed multiple corrections.\n\n{summary}")
+                    return multi_corrections
+
+        # Handle spelling corrections - enhanced to detect field automatically
         # Handle spelling corrections - enhanced to detect field automatically
         correct_patterns = [
-            r'^correct\s+spelling\s+of\s+(.+?)\s+to\s+(.+?)$',
-            r'^correct\s+(.+?)\s+to\s+(.+?)$',
+            r'^correct\s+spelling\s+(.+?)\s+to\s+(.+?)$',  # "correct spelling X to Y"
+            r'^correct\s+spelling\s+of\s+(.+?)\s+to\s+(.+?)$',  # "correct spelling of X to Y"
+            r'^correct\s+(.+?)\s+to\s+(.+?)$',  # "correct X to Y"
             r'^(?:companies?\s+)?correct\s+spelling\s+(.+?)\s+(?:to|with)\s+(.+?)$'
         ]
         
+        # Special handling for simple corrections like "Correct spelling Makhti ageet to Marti AG"
+        # Universal spelling correction handler
+        simple_correct = re.match(r'^correct\s+spelling\s+(?:of\s+)?(.+?)\s+to\s+(.+?)$', normalized_text, re.IGNORECASE)
+        if simple_correct:
+            old_value = simple_correct.group(1).strip()
+            new_value = simple_correct.group(2).strip()
+            
+            log_event("spelling_correction_attempt", old=old_value, new=new_value)
+            
+            # Auto-detect the field by searching in existing data
+            if chat_id and chat_id in session_data:
+                existing_data = session_data[chat_id].get("structured_data", {})
+                
+                # Check all scalar fields first (exact or partial match)
+                for field in SCALAR_FIELDS:
+                    if field in existing_data and existing_data[field]:
+                        if old_value.lower() in existing_data[field].lower():
+                            return {"correct": [{"field": field, "old": existing_data[field], "new": existing_data[field].replace(old_value, new_value)}]}
+                
+             
+                # Check companies (with or without suffix)
+                for company in existing_data.get("companies", []):
+                    if isinstance(company, dict) and company.get("name"):
+                        company_name = company["name"]
+                        
+                        # Log what we're comparing
+                        log_event("company_comparison", comparing=old_value, with_company=company_name)
+                        
+                        # Check exact match (case-insensitive)
+                        if company_name.lower() == old_value.lower():
+                            log_event("exact_match_found", company=company_name)
+                            return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
+                        
+                        # Check if old_value matches the base name (without suffix)
+                        company_parts = company_name.split()
+                        if company_parts:
+                            # Check first word match
+                            if company_parts[0].lower() == old_value.lower():
+                                log_event("base_name_match_found", company=company_name)
+                                return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
+                            
+                            # Check if old_value matches company without suffix
+                            company_without_suffix = ' '.join(company_parts[:-1]) if len(company_parts) > 1 else company_parts[0]
+                            if company_without_suffix.lower() == old_value.lower():
+                                log_event("name_without_suffix_match", company=company_name)
+                                return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
+                        
+                        # Check substring match
+                        if old_value.lower() in company_name.lower():
+                            log_event("substring_match_found", company=company_name)
+                            return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
+                        
+                        # Check similarity match with lower threshold for companies
+                        similarity = string_similarity(company_name.lower(), old_value.lower())
+                        if similarity >= CONFIG.get("COMPANY_SIMILARITY_THRESHOLD", 0.5):
+                            log_event("similarity_match_found", company=company_name, score=similarity)
+                            return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
+                
+                # Check people
+                for person in existing_data.get("people", []):
+                    if string_similarity(person.lower(), old_value.lower()) >= 0.7:
+                        return {"correct": [{"field": "people", "old": person, "new": new_value}]}
+                
+                # Check other list fields
+                for field in ["tools", "services", "activities", "issues"]:
+                    items = existing_data.get(field, [])
+                    for item in items:
+                        item_text = ""
+                        if isinstance(item, dict):
+                            if field == "tools":
+                                item_text = item.get("item", "")
+                            elif field == "services":
+                                item_text = item.get("task", "")
+                            elif field == "issues":
+                                item_text = item.get("description", "")
+                        else:
+                            item_text = item
+                        
+                        if item_text and string_similarity(item_text.lower(), old_value.lower()) >= 0.7:
+                            return {"correct": [{"field": field, "old": item_text, "new": new_value}]}
+            
+            # If we can't auto-detect, try to guess by the content
+            if any(suffix in new_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
+                return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
+            else:
+                # Default to people if it looks like a name
+                return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
+        
+        # Special pattern for correcting words within fields
+        word_correct_pattern = r'^correct\s+(.+?)\s+to\s+(.+?)$'
+        word_correct_match = re.match(word_correct_pattern, normalized_text, re.IGNORECASE)
+        
+        if word_correct_match:
+            old_word = word_correct_match.group(1).strip()
+            new_word = word_correct_match.group(2).strip()
+            
+            # Check if old_word appears in any field
+            if chat_id and chat_id in session_data:
+                existing_data = session_data[chat_id].get("structured_data", {})
+                
+                # Check site_name for partial match
+                if "site_name" in existing_data and existing_data["site_name"]:
+                    if old_word.lower() in existing_data["site_name"].lower():
+                        # Replace the word in site_name
+                        new_site_name = existing_data["site_name"].replace(old_word, new_word)
+                        # Also try case-insensitive replacement
+                        import re as regex
+                        new_site_name = regex.sub(re.escape(old_word), new_word, existing_data["site_name"], flags=re.IGNORECASE)
+                        return {"correct": [{"field": "site_name", "old": existing_data["site_name"], "new": new_site_name}]}
+        
+        # Special handling for name corrections without field specification
+        name_correct_pattern = r'^correct\s+spelling\s+([A-Z][a-z]+)\s+to\s+([A-Z][a-z]+)$'
+        name_correct = re.match(name_correct_pattern, normalized_text, re.IGNORECASE)
+        if name_correct and chat_id and chat_id in session_data:
+            old_name = name_correct.group(1).strip()
+            new_name = name_correct.group(2).strip()
+            existing_data = session_data[chat_id].get("structured_data", {})
+            
+            # Check if old_name is in people list
+            for person in existing_data.get("people", []):
+                if person.lower() == old_name.lower():
+                    return {"correct": [{"field": "people", "old": old_name, "new": new_name}]}
+            
+            # If not found in people, maybe it's part of a company name
+            for company in existing_data.get("companies", []):
+                if isinstance(company, dict) and old_name.lower() in company.get("name", "").lower():
+                    return {"correct": [{"field": "companies", "old": company["name"], "new": company["name"].replace(old_name, new_name)}]}
+        
+        # Now process general correction patterns
         for pattern in correct_patterns:
             correct_match = re.match(pattern, normalized_text, re.IGNORECASE)
             if correct_match:
@@ -2556,11 +3208,22 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                                 field = scalar_field
                                 break
                     
-                    # Check companies
+                    
+                    # Check companies (use lower threshold for company matching)
                     if not field:
                         for company in existing_data.get("companies", []):
                             if isinstance(company, dict) and company.get("name"):
-                                if string_similarity(company["name"].lower(), old_value.lower()) >= 0.5:
+                                company_name = company["name"]
+                                # Check for exact match or high similarity
+                                if company_name.lower() == old_value.lower():
+                                    field = "companies"
+                                    break
+                                # Check if old_value is part of company name or vice versa
+                                elif old_value.lower() in company_name.lower() or company_name.lower() in old_value.lower():
+                                    field = "companies"
+                                    break
+                                # Check similarity with company-specific threshold
+                                elif string_similarity(company_name.lower(), old_value.lower()) >= CONFIG.get("COMPANY_SIMILARITY_THRESHOLD", 0.5):
                                     field = "companies"
                                     break
                     
@@ -2933,6 +3596,16 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         result["people"] = [name]
                         result["roles"] = [{"name": name, "role": role}]
                     return result
+
+                elif field == "add_person_role":
+                    name = match.group(1).strip()
+                    role = match.group(2).strip()
+                    if name and role:
+                        # Capitalize role properly
+                        role_title = ' '.join(word.capitalize() for word in role.split())
+                        result["people"] = [name]
+                        result["roles"] = [{"name": name, "role": role_title}]
+                    return result
                     
                 elif field == "role":
                     # Handle role field properly
@@ -3100,14 +3773,15 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         
         
         # If we reach here with no results but NLP is enabled, try NLP as last resort
-        if not result and CONFIG.get("ENABLE_NLP_EXTRACTION", False):
-            nlp_data, confidence = extract_with_nlp(text)
-            if confidence >= 0.5:  # Lower threshold for fallback
+            if confidence >= 0.6:
+                # Remove "me" from people if it got added
+                if "people" in nlp_data and "me" in nlp_data["people"]:
+                    nlp_data["people"] = [p for p in nlp_data["people"] if p.lower() != "me"]
+                if "roles" in nlp_data:
+                    nlp_data["roles"] = [r for r in nlp_data["roles"] if r.get("name", "").lower() != "me"]
+                
                 log_event("nlp_fallback_extraction", confidence=confidence, fields=list(nlp_data.keys()))
                 return nlp_data
-        
-        log_event("fields_extracted", result_fields=len(result))
-        return result
         
     except Exception as e:
         log_event("extract_fields_error", input=text[:100], error=str(e), traceback=traceback.format_exc())
@@ -3190,6 +3864,39 @@ def preserve_existing_data(chat_id, new_data):
                 new_data[field] = existing_data[field]
     return new_data
 
+def find_item_in_report(value: str, report_data: Dict[str, Any]) -> Tuple[Optional[str], Optional[Any]]:
+    """Find an item in the report data and return its category and full value"""
+    value_lower = value.lower().strip()
+    
+    # Check companies
+    for company in report_data.get("companies", []):
+        if isinstance(company, dict) and company.get("name"):
+            if value_lower in company["name"].lower() or string_similarity(company["name"].lower(), value_lower) >= 0.5:
+                return "companies", company["name"]
+    
+    # Check people
+    for person in report_data.get("people", []):
+        if value_lower in person.lower() or string_similarity(person.lower(), value_lower) >= 0.6:
+            return "people", person
+    
+    # Check tools
+    for tool in report_data.get("tools", []):
+        if isinstance(tool, dict) and tool.get("item"):
+            if value_lower in tool["item"].lower() or string_similarity(tool["item"].lower(), value_lower) >= 0.6:
+                return "tools", tool["item"]
+    
+    # Check services
+    for service in report_data.get("services", []):
+        if isinstance(service, dict) and service.get("task"):
+            if value_lower in service["task"].lower() or string_similarity(service["task"].lower(), value_lower) >= 0.6:
+                return "services", service["task"]
+    
+    # Check activities
+    for activity in report_data.get("activities", []):
+        if value_lower in activity.lower() or string_similarity(activity.lower(), value_lower) >= 0.6:
+            return "activities", activity
+    
+    return None, None
 # Part 10 - b Merge Data Function
 
 def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id: str) -> Dict[str, Any]:
@@ -3239,6 +3946,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
         
         
         # Clean up values safely
+        # Clean up values safely
         if value:
             value = value.strip()
         if category:
@@ -3248,7 +3956,25 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
         if value and not category:
             if value.lower() in ['services', 'tools', 'companies', 'people', 'activities', 'issues', 'roles', 'segment', 'category']:
                 category = value.lower()
-                value = ""
+                value = None
+            else:
+                # Try to find what category this value belongs to by searching all fields
+                # This handles "delete meier" without specifying it's a company
+                value_lower = value.lower()
+                
+                # Check companies first (most common)
+                for company in result.get("companies", []):
+                    if isinstance(company, dict) and company.get("name"):
+                        if value_lower in company["name"].lower() or string_similarity(company["name"].lower(), value_lower) >= 0.5:
+                            category = "companies"
+                            break
+                
+                # Check people if not found in companies
+                if not category:
+                    for person in result.get("people", []):
+                        if value_lower in person.lower() or string_similarity(person.lower(), value_lower) >= 0.6:
+                            category = "people"
+                            break
         
         # Map the category
         if category:
@@ -3372,6 +4098,11 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
         
         else:
             # No category specified - search all fields for a match
+            found_category, found_value = find_item_in_report(value, result)
+            if found_category:
+                category = found_category
+                value = found_value  # Use the full value for deletion
+                
             # Try companies first (most likely target for names with AG, GmbH, etc.)
             if any(suffix in value_lower for suffix in ['ag', 'gmbh', 'ltd', 'inc', 'corp']):
                 for company in list(result.get("companies", [])):
@@ -3444,37 +4175,52 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 # Save last state for undo
                 session_data[chat_id]["last_change_history"].append((field, existing_data[field]))
                 
-                # Simple replace for scalar fields
-                if string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                    result[field] = new_value
-                    changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
-            elif field in LIST_FIELDS:
-                # More complex handling for list fields
-                if field == "people":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
-                    # Split people text properly
-                    people_parts = re.split(r',|\s+and\s+', new_value.strip())
-                    added_people = []
-                    for part in people_parts:
-                        person = part.strip()
-                        if person and person.lower() not in [p.lower() for p in result["people"]]:
-                            result["people"].append(person)
-                            added_people.append(person)
-                    
-                    if added_people:
-                        changes.append(f"added person: {', '.join(added_people)}")
-                    else:
-                        changes.append("no new people added (duplicates skipped)")
+                # For site_name, handle partial word replacements
+                if field == "site_name" and result[field]:
+                        # Check if old_value is a word within the site_name
+                        if old_value.lower() in result[field].lower():
+                            # Replace the word in the site name
+                            import re as regex
+                            new_site_name = regex.sub(re.escape(old_value), new_value, result[field], flags=re.IGNORECASE)
+                            result[field] = new_site_name
+                            changes.append(f"corrected {field} from '{existing_data[field]}' to '{new_site_name}'")
+                        elif string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                            # Full replacement if similarity is high
+                            result[field] = new_value
+                            changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
+                else:
+                    # Simple replace for other scalar fields
+                    if string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                        result[field] = new_value
+                        changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
+                
+                if field in LIST_FIELDS:
+                    # More complex handling for list fields
+                    if field == "people":
+                        session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                         
-                    # Also update roles that refer to this person
-                    for role in result["roles"]:
-                        if (isinstance(role, dict) and role.get("name") and 
-                            string_similarity(role["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
-                            role["name"] = new_value
-                    
-                    changes.append(f"corrected person '{old_value}' to '{new_value}'")
-                    
+                        # Find and replace the old person name
+                        matched = False
+                        for i, person in enumerate(result["people"]):
+                            if string_similarity(person.lower(), old_value.lower()) >= 0.6:
+                                result["people"][i] = new_value
+                                matched = True
+                                changes.append(f"corrected person '{person}' to '{new_value}'")
+
+                            # Also update roles that refer to this person
+                            if "roles" in result:
+                                for role in result["roles"]:
+                                    if (isinstance(role, dict) and role.get("name") and 
+                                        string_similarity(role["name"].lower(), person.lower()) >= 0.6):
+                                        role["name"] = new_value
+                            break
+                            
+                            if not matched:
+                                # Don't add as new person if not found - log as error
+                                log_event("person_not_found_for_correction", old=old_value, new=new_value)
+                                # Don't add the person, just skip
+                                continue
+                            
                 elif field == "roles":
                     # Interpret as correcting a role for a person
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
@@ -3506,59 +4252,57 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             result[field].append({"name": old_value, "role": new_value.title()})
                             changes.append(f"added person '{old_value}' with role '{new_value}'")
                             
+          
                 elif field == "companies":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
+                    session_data[chat_id]["last_change_history"].append((field, existing_data.get("companies", []).copy()))
                     
                     matched = False
+                    old_name_lower = old_value.strip().lower()
                     
-                    # Handle special case for spelling corrections like "correct spelling of X to Y"
-                    if "spelling of " in old_value.lower():
-                        # Extract the actual old name by removing "spelling of "
-                        old_name = re.sub(r'^(correct )?spelling of ', '', old_value, flags=re.IGNORECASE).strip()
-                    else:
-                        old_name = old_value.strip()
+                    # Find the best matching company
+                    best_match_index = -1
+                    best_match_score = 0
+                    best_match_name = None
                     
-                    # Try to find and correct the company
-                    for i, company in enumerate(result[field]):
+                    for i, company in enumerate(result.get("companies", [])):
                         if isinstance(company, dict) and company.get("name"):
-                            # Check for similarity
-                            if string_similarity(company["name"].lower(), old_name.lower()) >= 0.5:
-                                company["name"] = new_value
-                                matched = True
-                                changes.append(f"corrected company '{company['name']}' to '{new_value}'")
+                            company_name = company["name"]
+                            
+                            # Exact match
+                            if company_name.lower() == old_name_lower:
+                                best_match_index = i
+                                best_match_score = 1.0
+                                best_match_name = company_name
                                 break
+                            
+                            # Substring match
+                            if old_name_lower in company_name.lower() or company_name.lower() in old_name_lower:
+                                score = 0.9
+                                if score > best_match_score:
+                                    best_match_index = i
+                                    best_match_score = score
+                                    best_match_name = company_name
+                            
+                            # Similarity match
+                            similarity = string_similarity(company_name.lower(), old_name_lower)
+                            if similarity > best_match_score and similarity >= CONFIG.get("COMPANY_SIMILARITY_THRESHOLD", 0.5):
+                                best_match_index = i
+                                best_match_score = similarity
+                                best_match_name = company_name
+                    
+                    # Apply the correction if we found a match
+                    if best_match_index >= 0 and best_match_score >= CONFIG.get("COMPANY_SIMILARITY_THRESHOLD", 0.5):
+                        result["companies"][best_match_index] = {"name": new_value}
+                        matched = True
+                        changes.append(f"corrected company '{best_match_name}' to '{new_value}'")
+                        log_event("corrected_company", old=best_match_name, new=new_value, score=best_match_score)
                     
                     if not matched:
-                        # If no match found, try partial matching
-                        for i, company in enumerate(result[field]):
-                            if isinstance(company, dict) and company.get("name"):
-                                # Check if the old value is part of the company name
-                                if old_name.lower() in company["name"].lower():
-                                    company["name"] = new_value
-                                    matched = True
-                                    changes.append(f"corrected company '{company['name']}' to '{new_value}'")
-                                    break
+                        log_event("company_correction_failed", 
+                                looking_for=old_value,
+                                companies=[c.get("name") for c in result.get("companies", [])])
                     
-                    if not matched:
-                        # If still no match, add as new company
-                        result[field].append({"name": new_value})
-                        changes.append(f"added corrected company '{new_value}'")
-                    else:
-                        # Normal matching logic
-                        for i, company in enumerate(result[field]):
-                            if (isinstance(company, dict) and company.get("name") and 
-                                string_similarity(company["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
-                                company["name"] = new_value
-                                matched = True
-                                changes.append(f"corrected company '{old_value}' to '{new_value}'")
-                                break
                     
-                    if not matched:
-                        # If no match, add the new company
-                        result[field].append({"name": new_value})
-                
-                        changes.append(f"added corrected company '{new_value}'")
-                        
                 elif field == "tools":
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                     
@@ -3709,39 +4453,44 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         else:
                             log_event("skipped_duplicate", field=field, value=item[key])
             
+         
+          
             elif field == "roles":
-                # Handle roles specially to update people list too
-                existing_roles = [(r.get("name", "").lower(), r.get("role", "").lower()) 
-                                for r in result[field] if isinstance(r, dict)]
+                # Initialize roles if not present
+                if "roles" not in result:
+                    result["roles"] = []
                 
-                for role in new_data[field]:
-                    if isinstance(role, dict) and "name" in role and "role" in role:
-                        role_tuple = (role["name"].lower(), role["role"].lower())
+                # Initialize people if not present  
+                if "people" not in result:
+                    result["people"] = []
+                
+                # Process EACH role from new_data individually
+                for role_data in new_data[field]:
+                    if isinstance(role_data, dict) and "name" in role_data and "role" in role_data:
+                        person_name = role_data["name"]
+                        person_role = role_data["role"]
                         
-                        # Check if this role already exists
-                        already_exists = False
-                        for existing_name, existing_role in existing_roles:
-                            if (string_similarity(role["name"].lower(), existing_name) >= CONFIG["NAME_SIMILARITY_THRESHOLD"] and
-                                string_similarity(role["role"].lower(), existing_role) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
-                                already_exists = True
+                        # Check if this exact role already exists
+                        role_exists = False
+                        for existing_role in result["roles"]:
+                            if (isinstance(existing_role, dict) and 
+                                existing_role.get("name", "").lower() == person_name.lower() and
+                                existing_role.get("role", "").lower() == person_role.lower()):
+                                role_exists = True
                                 break
-                                
-                        if not already_exists:
-                            result[field].append(role)
-                            changes.append(f"added role {role['role']} for {role['name']}")
+                        
+                        if not role_exists:
+                            # Add the role with ONLY this person's role, not concatenated
+                            result["roles"].append({"name": person_name, "role": person_role})
+                            changes.append(f"added role {person_role} for {person_name}")
                             
-                            # Also make sure the person is in the people list
-                            person_exists = False
-                            for person in result["people"]:
-                                if string_similarity(role["name"].lower(), person.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                                    person_exists = True
-                                    break
-                                    
-                            if not person_exists:
-                                result["people"].append(role["name"])
-                                changes.append(f"added person {role['name']}")
-                        else:
-                            log_event("skipped_duplicate_role", name=role["name"], role=role["role"])
+                            # Also ensure person is in people list
+                            person_in_list = any(p.lower() == person_name.lower() for p in result["people"])
+                            if not person_in_list:
+                                result["people"].append(person_name)
+                                changes.append(f"added person {person_name}")
+                                
+                       
             
             elif field in ["people", "activities"]:
                 # Simple string lists
@@ -4265,7 +5014,7 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     )
                     save_session(session_data)
                     summary = summarize_report(session_data[chat_id]["structured_data"])
-                    send_message(chat_id, f"✅ I've extracted the following information from your report:\n\n{summary}")
+                    send_message(chat_id, f"📋 Report:\n{summary}")
                     return "ok", 200
 
         # For complex commands with multiple fields (especially from voice)
@@ -4286,16 +5035,68 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     summary = summarize_report(session["structured_data"])
                     send_message(chat_id, f"✅ Processed multiple commands.\n\n{summary}")
                     
-                    # Suggest missing fields if applicable
-                    missing_suggestions = suggest_missing_fields(session["structured_data"])
-                    if missing_suggestions:
-                        suggestion_text = "You might also want to add: " + ", ".join(missing_suggestions)
-                        send_message(chat_id, suggestion_text)
-                    
                     return "ok", 200
+        
+        # Special handling for multiple company corrections
+        if "correct spelling" in text.lower() and text.count(" to ") == 2:
+            # Pattern: "correct spelling X to Y and A to B"
+            parts = text.split(" and ")
+            if len(parts) == 2:
+                corrections = []
+                for part in parts:
+                    if " to " in part:
+                        correction_match = re.search(r'(\w+(?:\s+\w+)*)\s+to\s+(\w+(?:\s+\w+)*)', part, re.IGNORECASE)
+                        if correction_match:
+                            old_val = correction_match.group(1).strip()
+                            new_val = correction_match.group(2).strip()
+                            # Detect field automatically
+                            field = "companies" if any(s in (old_val + new_val).upper() for s in ['AG', 'GMBH', 'LTD']) else "people"
+                            corrections.append({"field": field, "old": old_val, "new": new_val})
+                
+                if corrections:
+                    extracted = {"correct": corrections}
+                    session["command_history"].append(session["structured_data"].copy())
+                    session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
+                    session["structured_data"] = enrich_date(session["structured_data"])
+                    save_session(session_data)
+                    summary = summarize_report(session["structured_data"])
+                    send_message(chat_id, f"✅ Multiple corrections processed.\n\n{summary}")
+                    return "ok", 200
+
+        # Special handling for "correct X to Y as Z" pattern
+        correct_with_role_pattern = r'^correct\s+(.+?)\s+to\s+(.+?)\s+as\s+(.+?)$'
+        correct_role_match = re.match(correct_with_role_pattern, text, re.IGNORECASE)
+        if correct_role_match:
+            old_name = correct_role_match.group(1).strip()
+            new_name = correct_role_match.group(2).strip()
+            role_name = correct_role_match.group(3).strip()
+            
+            # Build the correction data
+            extracted = {
+                "correct": [{"field": "people", "old": old_name, "new": new_name}],
+                "roles": [{"name": new_name, "role": role_name.title()}]
+            }
+            
+            # Process this special case
+            session["command_history"].append(session["structured_data"].copy())
+            
+            # First do the correction
+            session["structured_data"] = merge_data(session["structured_data"], 
+                                                   {"correct": extracted["correct"]}, chat_id)
+            
+            # Then add the role
+            session["structured_data"] = merge_data(session["structured_data"], 
+                                                   {"roles": extracted["roles"]}, chat_id)
+            
+            session["structured_data"] = enrich_date(session["structured_data"])
+            save_session(session_data)
+            summary = summarize_report(session["structured_data"])
+            send_message(chat_id, f"📋 Report:\n{summary}")
+            return "ok", 200
         
         # Extract fields from input (single command processing)
         extracted = extract_fields(text, chat_id)
+
         
         # Handle empty or invalid extractions
         if not extracted:
@@ -4425,67 +5226,16 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                                         "delete", "correct"]]
         
         # Check if we did a delete or correct operation
-        # Check if we did a delete or correct operation
-        if "delete" in extracted:
-            summary = summarize_report(session["structured_data"])
-            # Always show success for delete operations
-            delete_info = extracted.get("delete", {})
-            if delete_info.get("value"):
-                message = f"✅ Deleted '{delete_info['value']}' from your report."
-            elif delete_info.get("category"):
-                message = f"✅ Cleared all {delete_info['category']}."
-            else:
-                message = "✅ Deleted information from your report."
-            
-            # Always show the full updated report
-            send_message(chat_id, f"{message}\n\n**Updated Report:**\n{summary}")
-            return "ok", 200
-            
-        if "correct" in extracted:
-            summary = summarize_report(session["structured_data"])
-            # Get correction details
-            corrections = extracted.get("correct", [])
-            if corrections and len(corrections) > 0:
-                corr = corrections[0]
-                message = f"✅ Corrected {corr.get('field', 'field')}: '{corr.get('old', '')}' → '{corr.get('new', '')}'."
-            else:
-                message = "✅ Corrected information in your report."
-            
-            # Always show the full updated report
-            send_message(chat_id, f"{message}\n\n**Updated Report:**\n{summary}")
-            return "ok", 200
+        # Prepare feedback - check what was actually changed
+        changed_fields = [field for field in extracted.keys() 
+                        if field not in ["help", "reset", "undo", "status", "export_pdf", 
+                                        "summary", "detailed", "undo_last", "error",
+                                        "yes_confirm", "no_confirm", "spelling_correction",
+                                        "delete", "correct"]]
         
-        if changed_fields:
-            message = "✅ Updated report."
-            summary = summarize_report(session["structured_data"])
-            send_message(chat_id, f"{message}\n\n{summary}")
-            
-            # Add intelligent suggestions only if changes were actually made
-            missing_suggestions = suggest_missing_fields(session["structured_data"])
-            if missing_suggestions:
-                suggestion_text = "You might also want to add: " + ", ".join(missing_suggestions)
-                send_message(chat_id, suggestion_text)
-        else:
-            # Only say "no changes" if we didn't already handle delete/correct above
-            if "delete" not in extracted and "correct" not in extracted:
-                send_message(chat_id, "⚠️ No changes were made to your report.")
-
-        return "ok", 200
-        
-        if changed_fields:
-            message = "✅ Updated report."
-            summary = summarize_report(session["structured_data"])
-            send_message(chat_id, f"{message}\n\n{summary}")
-            
-            # Add intelligent suggestions only if changes were actually made
-            if changed_fields:
-                missing_suggestions = suggest_missing_fields(session["structured_data"])
-                if missing_suggestions:
-                    suggestion_text = "You might also want to add: " + ", ".join(missing_suggestions)
-                    send_message(chat_id, suggestion_text)
-            else:
-                send_message(chat_id, "⚠️ No changes were made to your report.")
-
+        # ALWAYS show the report after any command, regardless of what happened
+        summary = summarize_report(session["structured_data"])
+        send_message(chat_id, f"📋 Report:\n{summary}")
         return "ok", 200
         
     except Exception as e:
@@ -4541,6 +5291,7 @@ def webhook() -> tuple[str, int]:
         chat_id = str(message["chat"]["id"])
         
         # Initialize session if not exists
+        # Initialize session if not exists
         if chat_id not in session_data:
             session_data[chat_id] = {
                 "structured_data": blank_report(),
@@ -4562,8 +5313,9 @@ def webhook() -> tuple[str, int]:
                 "photos": [],
             }
             save_session(session_data)
+            
         
-        # Handle voice messages
+    
         # Handle voice messages
         if "voice" in message:
             try:
@@ -4571,6 +5323,10 @@ def webhook() -> tuple[str, int]:
                 if message["voice"].get("duration", 0) > 20:  # If longer than 20 seconds
                     send_message(chat_id, "I'm processing your detailed report. This may take a moment...")
                 text, confidence = transcribe_voice(file_id)
+                
+                # Normalize company names that were incorrectly split by voice transcription
+                text = normalize_voice_companies(text)
+                log_event("voice_normalized", original=text, normalized=text)
 
                 # Special handling for number responses (for photo assignment)
                 # Handle both with and without period
