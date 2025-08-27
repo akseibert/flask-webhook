@@ -2879,6 +2879,13 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 if confidence >= CONFIG.get("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", 0.7):
                     log_event("using_nlp_extraction", confidence=confidence, fields=list(nlp_data.keys()))
                     
+                    # If NLP found corrections, return immediately without modification
+                    if "correct" in nlp_data:
+                        log_event("nlp_found_correction", correction=nlp_data["correct"])
+                        return nlp_data
+                    
+                    
+                    
                     # FORCE ROLE EXTRACTION when "as" is in text
                     if " as " in text.lower() and nlp_data.get("people"):
                         if "roles" not in nlp_data:
@@ -4178,12 +4185,17 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
     # Handle correcting values
     if "correct" in new_data:
         corrections = new_data.pop("correct")
+        log_event("processing_corrections", corrections=corrections)
+        
         for correction in corrections:
             field = correction.get("field")
             old_value = correction.get("old")
             new_value = correction.get("new")
             
+            log_event("processing_correction", field=field, old=old_value, new=new_value)
+            
             if not field or not old_value or not new_value:
+                log_event("correction_missing_data", field=field, old=old_value, new=new_value)
                 continue
                 
             if field in SCALAR_FIELDS:
