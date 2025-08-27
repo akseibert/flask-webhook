@@ -4188,55 +4188,40 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             
           
                 elif field == "companies":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data.get(field, []).copy()))
+                    session_data[chat_id]["last_change_history"].append((field, existing_data.get("companies", []).copy()))
                     
                     matched = False
-                    old_name = old_value.strip()
-
-                    # Debug log to see what we're trying to match
-                    existing_companies = [c.get("name") for c in result.get(field, []) if isinstance(c, dict)]
-                    log_event("company_correction_attempt", 
-                             looking_for=old_name,
-                             in_companies=existing_companies)
                     
-                    # Special handling for partial matches in company names
-                    # If old_name doesn't have a suffix but exists as part of a company name
-                    if not any(suffix in old_name.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
-                        for i, company in enumerate(result.get(field, [])):
-                            if isinstance(company, dict) and company.get("name"):
-                                # Check if old_name is the base name of the company (without suffix)
-                                company_base = company["name"].split()[0] if company["name"].split() else ""
-                                if company_base.lower() == old_name.lower():
-                                    # Replace the entire company name
-                                    result[field][i]["name"] = new_value
-                                    matched = True
-                                    changes.append(f"corrected company '{company['name']}' to '{new_value}'")
-                                    log_event("corrected_company_partial", old=company["name"], new=new_value)
-                                    break
+                    # Handle special case for spelling corrections like "correct spelling of X to Y"  
+                    if "spelling of " in old_value.lower():
+                        # Extract the actual old name by removing "spelling of "
+                        old_name = re.sub(r'^(correct )?spelling of ', '', old_value, flags=re.IGNORECASE).strip()
+                    else:
+                        old_name = old_value.strip()
                     
-                    # If no exact match, try fuzzy matching
-                    if not matched:
-                        best_match = None
-                        best_similarity = 0
-                        best_index = -1
-                        
-                        for i, company in enumerate(result.get(field, [])):
-                            if isinstance(company, dict) and company.get("name"):
-                                similarity = string_similarity(company["name"].lower(), old_name.lower())
-                                if similarity > best_similarity and similarity >= 0.4:
-                                    best_similarity = similarity
-                                    best_match = company["name"]
-                                    best_index = i
-                        
-                        if best_match and best_index >= 0:
-                            result[field][best_index]["name"] = new_value
-                            matched = True
-                            changes.append(f"corrected company '{best_match}' to '{new_value}'")
-                            log_event("corrected_company_fuzzy", old=best_match, new=new_value, similarity=best_similarity)
+                    # Try to find and correct the company
+                    for i, company in enumerate(result.get(field, [])):
+                        if isinstance(company, dict) and company.get("name"):
+                            company_name = company["name"]
+                            # Check for similarity - but be more lenient for partial matches
+                            if string_similarity(company_name.lower(), old_name.lower()) >= 0.5:
+                                original_name = company["name"]
+                                company["name"] = new_value
+                                matched = True
+                                changes.append(f"corrected company '{original_name}' to '{new_value}'")
+                                break
+                            # Also check if old_name is part of company name (for "Keebuck" matching "Keebuck AG")
+                            elif old_name.lower() in company_name.lower():
+                                original_name = company["name"]
+                                company["name"] = new_value
+                                matched = True
+                                changes.append(f"corrected company '{original_name}' to '{new_value}'")
+                                break
                     
                     if not matched:
-                        log_event("correction_not_found", field=field, old=old_value, new=new_value)
-                        # Don't add as new, just log the failure
+                        # If still no match, add as new company
+                        result[field].append({"name": new_value})
+                        changes.append(f"added corrected company '{new_value}'")
                     
                     
                 elif field == "tools":
@@ -4391,26 +4376,16 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
             
          
             elif field == "roles":
+                # Initialize roles if not present
+                if "roles" not in result:
+                    result["roles"] = []
+                
                 # Handle roles specially to update people list too
                 existing_roles = [(r.get("name", "").lower(), r.get("role", "").lower()) 
-                                for r in result[field] if isinstance(r, dict)]
+                                for r in result["roles"] if isinstance(r, dict)]
                 
                 for role in new_data[field]:
                     if isinstance(role, dict) and "name" in role and "role" in role:
-                        # First ensure the person exists in the people list
-                        person_name = role["name"]
-                        if person_name not in result.get("people", []):
-                            result["people"].append(person_name)
-                            changes.append(f"added person '{person_name}'")
-                        # Clean up role name - handle co-worker, Co-Worker, etc.
-                        role_name = role["role"]
-                        if '-' in role_name:
-                            role_name = '-'.join(word.capitalize() for word in role_name.split('-'))
-                        else:
-                            role_name = ' '.join(word.capitalize() for word in role_name.split())
-                        
-                        role_tuple = (role["name"].lower(), role_name.lower())
-                        
                         # Check if this role already exists
                         already_exists = False
                         for existing_name, existing_role in existing_roles:
@@ -4418,23 +4393,29 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                 string_similarity(role["role"].lower(), existing_role) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
                                 already_exists = True
                                 break
-                                
+                        
                         if not already_exists:
-                            result[field].append(role)
+                            # Add the role
+                            result["roles"].append(role)
                             changes.append(f"added role {role['role']} for {role['name']}")
                             
                             # Also make sure the person is in the people list
+                            if "people" not in result:
+                                result["people"] = []
+                            
                             person_exists = False
                             for person in result["people"]:
                                 if string_similarity(role["name"].lower(), person.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
                                     person_exists = True
                                     break
-                                    
+                            
                             if not person_exists:
                                 result["people"].append(role["name"])
                                 changes.append(f"added person {role['name']}")
                         else:
                             log_event("skipped_duplicate_role", name=role["name"], role=role["role"])
+                                
+                       
             
             elif field in ["people", "activities"]:
                 # Simple string lists
