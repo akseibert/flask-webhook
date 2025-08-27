@@ -296,7 +296,10 @@ CRITICAL: When you see "Correct X to Y as Z" patterns:
   - people: ["Sandra Meier"]
   - roles: [{"name": "Sandra Meier", "role": "Mural Artist"}]
 
-Correction commands:
+Correction commands (CRITICAL - DO NOT ADD AS COMPANIES):
+- If input starts with "correct spelling", it's ONLY a correction - return ONLY {"correct": [...]}
+- NEVER add "correct spelling X to Y" as a company entry
+- If input is "correct spelling X to Y": return {"correct": [{"field": "companies", "old": "X", "new": "Y"}]} if X/Y have company suffixes
 - If input is "correct X in Y to Z" or similar: return {"correct": [{"field": "Y", "old": "X", "new": "Z"}]}
 - IMPORTANT: For "correct X to Y", first check if X exists in the current report data:
   - If X is part of site_name, return {"correct": [{"field": "site_name", "old": "<full_site_name>", "new": "<site_name_with_X_replaced_by_Y>"}]}
@@ -459,13 +462,16 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
             result[field] = {"delete": True}
     
     # Handle correction commands
+    # Handle correction commands
     if "correct" in data:
         result["correct"] = data["correct"]
+        # CRITICAL: If this is ONLY a correction command, don't process other fields
+        # This prevents "correct spelling X to Y" from being misinterpreted as adding a company
+        if all(k in ["correct", "date"] for k in data.keys()):
+            return result
     
     # Handle structured list fields
-    # Companies
-    # Companies
-    if "companies" in data:
+    if "companies" in data and "correct" not in data:  # Don't add companies if this is a correction
         if isinstance(data["companies"], list):
             result["companies"] = []
             for company in data["companies"]:
@@ -2657,6 +2663,17 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
         if reset_match:
             return {"reset": True}
         
+        # Check for correction commands EARLY
+        if re.match(r'^correct\s+spelling', cmd, re.IGNORECASE):
+            correct_match = re.match(r'^correct\s+spelling\s+(?:of\s+)?(.+?)\s+to\s+(.+?)$', cmd, re.IGNORECASE)
+            if correct_match:
+                old_value = correct_match.group(1).strip()
+                new_value = correct_match.group(2).strip()
+                # Determine field based on suffixes
+                if any(suffix in old_value.upper() or suffix in new_value.upper() 
+                       for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
+                    return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
+                return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
         # Check add_person_role pattern early (before generic patterns)
         if "add_person_role" in FIELD_PATTERNS:
             match = re.match(FIELD_PATTERNS["add_person_role"], cmd, re.IGNORECASE)
@@ -2901,10 +2918,14 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         result: Dict[str, Any] = {}
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
         
-        # Try NLP extraction first if enabled and text doesn't look like a command
-        if CONFIG.get("ENABLE_NLP_EXTRACTION", False):
-            # Skip NLP for obvious commands
-            if not re.match(r'^(?:yes|no|help|new|reset|undo|export|summarize|detailed|delete|clear)\b', normalized_text.lower()):
+        # CHECK FOR CORRECTIONS FIRST - BEFORE NLP!
+        if re.match(r'^correct\s+spelling', normalized_text, re.IGNORECASE):
+            print(f"DEBUG: Correction command detected, skipping NLP")
+            # Skip NLP entirely for correction commands
+        # Try NLP extraction if enabled and text doesn't look like a command
+        elif CONFIG.get("ENABLE_NLP_EXTRACTION", False):
+            # Skip NLP for obvious commands (now including "correct")
+            if not re.match(r'^(?:yes|no|help|new|reset|undo|export|summarize|detailed|delete|clear|correct)\b', normalized_text.lower()):
                 nlp_data, confidence = extract_with_nlp(text)
                 if confidence >= CONFIG.get("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", 0.7):
                     log_event("using_nlp_extraction", confidence=confidence, fields=list(nlp_data.keys()))
@@ -3056,12 +3077,15 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
             r'^(?:companies?\s+)?correct\s+spelling\s+(.+?)\s+(?:to|with)\s+(.+?)$'
         ]
         
+       
         # Special handling for simple corrections like "Correct spelling Makhti ageet to Marti AG"
-        # Universal spelling correction handler
+        # Universal spelling correction handler - MUST BE CHECKED EARLY
         simple_correct = re.match(r'^correct\s+spelling\s+(?:of\s+)?(.+?)\s+to\s+(.+?)$', normalized_text, re.IGNORECASE)
         if simple_correct:
             old_value = simple_correct.group(1).strip()
             new_value = simple_correct.group(2).strip()
+            
+            print(f"DEBUG: Simple correction detected - old: '{old_value}', new: '{new_value}'")
             
             log_event("spelling_correction_attempt", old=old_value, new=new_value)
             
@@ -3137,11 +3161,15 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         if item_text and string_similarity(item_text.lower(), old_value.lower()) >= 0.7:
                             return {"correct": [{"field": field, "old": item_text, "new": new_value}]}
             
+        
             # If we can't auto-detect, try to guess by the content
-            if any(suffix in new_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
+            if any(suffix in new_value.upper() or suffix in old_value.upper() 
+                   for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
+                print(f"DEBUG: Detected company suffix, using companies field")
                 return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
             else:
                 # Default to people if it looks like a name
+                print(f"DEBUG: No company suffix, defaulting to people field")
                 return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
         
         # Special pattern for correcting words within fields
