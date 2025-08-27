@@ -2925,7 +2925,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         # Try NLP extraction if enabled and text doesn't look like a command
         elif CONFIG.get("ENABLE_NLP_EXTRACTION", False):
             # Skip NLP for obvious commands (now including "correct")
-            if not re.match(r'^(?:yes|no|help|new|reset|undo|export|summarize|detailed|delete|clear|correct)\b', normalized_text.lower()):
+            if not re.match(r'^(?:yes|no|help|new|reset|undo|export|summarize|detailed|delete|clear)\b', normalized_text.lower()):
                 nlp_data, confidence = extract_with_nlp(text)
                 if confidence >= CONFIG.get("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", 0.7):
                     log_event("using_nlp_extraction", confidence=confidence, fields=list(nlp_data.keys()))
