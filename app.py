@@ -526,7 +526,7 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
             result["roles"] = []
             for role in data["roles"]:
                 if isinstance(role, dict) and "name" in role and "role" in role:
-                    # Capitalize the role title properly
+                    # Capitalize role properly
                     role_title = role["role"]
                     # Handle hyphenated roles like "co-worker"
                     if '-' in role_title:
@@ -541,6 +541,12 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                         result["people"] = []
                     if role["name"] not in result["people"]:
                         result["people"].append(role["name"])
+    
+    # CRITICAL: If we have people but no roles extracted, check if the original text has "as" pattern
+    # This catches cases where NLP missed the role extraction
+    if "people" in result and result["people"] and "roles" not in result:
+        # We'll need to handle this in extract_fields instead since we don't have the original text here
+        pass
 
     # Tools - deduplicate and filter out category keywords
     if "tools" in data:
@@ -2867,6 +2873,20 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     
                     # Supplement NLP with regex for fields it might have missed
                     supplemented_fields = []
+
+                    # CRITICAL: Check if NLP missed extracting roles from "X as Y" pattern
+                    if nlp_data.get("people") and not nlp_data.get("roles"):
+                        # Check original text for "as" pattern
+                        for person in nlp_data["people"]:
+                            pattern = re.escape(person) + r'\s+as\s+(\w+(?:\s+\w+)?)'
+                            match = re.search(pattern, text, re.IGNORECASE)
+                            if match:
+                                role = match.group(1).strip()
+                                if "roles" not in nlp_data:
+                                    nlp_data["roles"] = []
+                                nlp_data["roles"].append({"name": person, "role": role.title()})
+                                supplemented_fields.append("roles")
+                                log_event("supplemented_roles_from_text", person=person, role=role)
                     
                     # Check for site if missing
                     if not nlp_data.get("site_name") and re.search(r'\bsite\s+[A-Z]', text, re.IGNORECASE):
@@ -4059,17 +4079,17 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 
                 # For site_name, handle partial word replacements
                 if field == "site_name" and result[field]:
-                        # Check if old_value is a word within the site_name
-                        if old_value.lower() in result[field].lower():
-                            # Replace the word in the site name
-                            import re as regex
-                            new_site_name = regex.sub(re.escape(old_value), new_value, result[field], flags=re.IGNORECASE)
-                            result[field] = new_site_name
-                            changes.append(f"corrected {field} from '{existing_data[field]}' to '{new_site_name}'")
-                        elif string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                            # Full replacement if similarity is high
-                            result[field] = new_value
-                            changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
+                    # Check if old_value is a word within the site_name
+                    if old_value.lower() in result[field].lower():
+                        # Replace the word in the site name
+                        import re as regex
+                        new_site_name = regex.sub(re.escape(old_value), new_value, result[field], flags=re.IGNORECASE)
+                        result[field] = new_site_name
+                        changes.append(f"corrected {field} from '{existing_data[field]}' to '{new_site_name}'")
+                    elif string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                        # Full replacement if similarity is high
+                        result[field] = new_value
+                        changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
                 else:
                     # Simple replace for other scalar fields
                     if string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
@@ -4200,16 +4220,23 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         changes.append(f"added corrected tool '{new_value}'")
                         
                 elif field == "services":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
+                    session_data[chat_id]["last_change_history"].append((field, existing_data.get(field, []).copy()))
                     
                     matched = False
-                    for i, service in enumerate(result[field]):
-                        if (isinstance(service, dict) and service.get("task") and 
-                            string_similarity(service["task"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
-                            service["task"] = new_value
-                            matched = True
-                            changes.append(f"corrected service '{old_value}' to '{new_value}'")
-                            break
+                    for i, service in enumerate(result.get(field, [])):
+                        if isinstance(service, dict) and service.get("task"):
+                            # Use lower threshold for services (0.5 instead of 0.7)
+                            if string_similarity(service["task"].lower(), old_value.lower()) >= 0.5:
+                                old_service_name = service["task"]
+                                service["task"] = new_value
+                                matched = True
+                                changes.append(f"corrected service '{old_service_name}' to '{new_value}'")
+                                log_event("corrected_service", old=old_service_name, new=new_value)
+                                break
+                    
+                    if not matched:
+                        # If no match found, log but don't add as new
+                        log_event("service_correction_not_found", old=old_value, new=new_value)
                     
                     if not matched:
                         # If no match, add the new service
