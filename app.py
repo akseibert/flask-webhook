@@ -2907,7 +2907,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                             
                             # Check if this name is in people list (even partial match)
                             for person in nlp_data["people"]:
-                                if name.lower() in person.lower() or person.lower() in name.lower():
+                                if name.lower() == person.lower():
                                     nlp_data["roles"].append({"name": person, "role": role.title()})
                                     existing_roles.add(person.lower())
                                     log_event("forced_role_extraction", person=person, role=role)
@@ -4227,7 +4227,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         session_data[chat_id]["last_change_history"].append((field, existing_data.get("people", []).copy()))
                         
                         matched = False
-                        # The old_value should be the exact match found
+                        # CRITICAL: NLP gives us the exact case, but we need case-insensitive match
                         for i, person in enumerate(result.get("people", [])):
                             if person.lower() == old_value.lower():
                                 old_person_name = person
@@ -4235,13 +4235,13 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                 matched = True
                                 changes.append(f"corrected person '{old_person_name}' to '{new_value}'")
                                 
-                                # Also update roles that refer to this person
+                                # ALSO UPDATE ROLES
                                 if "roles" in result:
-                                    session_data[chat_id]["last_change_history"].append(("roles", existing_data.get("roles", []).copy()))
                                     for role in result["roles"]:
                                         if isinstance(role, dict) and role.get("name"):
                                             if role["name"].lower() == old_person_name.lower():
                                                 role["name"] = new_value
+                                                log_event("updated_role_name", old=old_person_name, new=new_value)
                                 break
                         
                         if not matched:
@@ -4314,15 +4314,11 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                     best_index = i
                         
                         # Use match if similarity threshold met
-                        
                         if best_match and best_index >= 0:
                             result[field][best_index]["name"] = new_value
                             matched = True
                             changes.append(f"corrected company '{best_match}' to '{new_value}'")
                             log_event("corrected_company", old=best_match, new=new_value, similarity=best_similarity)
-                        
-                        if not matched:
-                            log_event("company_correction_not_found", old=old_value, new=new_value)
                         
                         if not matched:
                             log_event("company_correction_not_found", old=old_value, new=new_value)
