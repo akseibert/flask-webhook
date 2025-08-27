@@ -542,11 +542,7 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                     if role["name"] not in result["people"]:
                         result["people"].append(role["name"])
     
-    # CRITICAL: If we have people but no roles extracted, check if the original text has "as" pattern
-    # This catches cases where NLP missed the role extraction
-    if "people" in result and result["people"] and "roles" not in result:
-        # We'll need to handle this in extract_fields instead since we don't have the original text here
-        pass
+   
 
     # Tools - deduplicate and filter out category keywords
     if "tools" in data:
@@ -2883,6 +2879,33 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 if confidence >= CONFIG.get("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", 0.7):
                     log_event("using_nlp_extraction", confidence=confidence, fields=list(nlp_data.keys()))
                     
+                    # FORCE ROLE EXTRACTION when "as" is in text
+                    if " as " in text.lower() and nlp_data.get("people"):
+                        if "roles" not in nlp_data:
+                            nlp_data["roles"] = []
+                        
+                        # Extract ALL "person as role" patterns
+                        pattern = r'([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([^,\.]+)'
+                        matches = re.findall(pattern, text, re.IGNORECASE)
+                        
+                        existing_roles = {r["name"].lower() for r in nlp_data.get("roles", [])}
+                        
+                        for name, role in matches:
+                            name = name.strip()
+                            role = role.strip().rstrip('.')
+                            
+                            # Skip if already have this person's role
+                            if name.lower() in existing_roles:
+                                continue
+                            
+                            # Check if this name is in people list (even partial match)
+                            for person in nlp_data["people"]:
+                                if name.lower() in person.lower() or person.lower() in name.lower():
+                                    nlp_data["roles"].append({"name": person, "role": role.title()})
+                                    existing_roles.add(person.lower())
+                                    log_event("forced_role_extraction", person=person, role=role)
+                                    break
+                    
                     # Supplement NLP with regex for fields it might have missed
                     supplemented_fields = []
 
@@ -3200,11 +3223,12 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                                 best_field = "issues"
                                 best_match = issue["description"]
                     
+                    
                     # Use the best match found
                     if best_field and best_match:
-                        field = best_field
-                        # For better matching, use the actual value found
-                        return {"correct": [{"field": field, "old": best_match, "new": new_value}]}
+                        log_event("correction_match_found", field=best_field, old=old_value, matched=best_match, similarity=best_similarity)
+                        # CRITICAL: Return the ACTUAL matched value, not the user's misspelling
+                        return {"correct": [{"field": best_field, "old": best_match, "new": new_value}]}
                 
                 # If no field found with 60% similarity, return error
                 if not field:
@@ -4278,11 +4302,15 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                     best_index = i
                         
                         # Use match if similarity threshold met
+                        
                         if best_match and best_index >= 0:
                             result[field][best_index]["name"] = new_value
                             matched = True
                             changes.append(f"corrected company '{best_match}' to '{new_value}'")
-                            log_event("corrected_company", old=best_match, new=new_value)
+                            log_event("corrected_company", old=best_match, new=new_value, similarity=best_similarity)
+                        
+                        if not matched:
+                            log_event("company_correction_not_found", old=old_value, new=new_value)
                         
                         if not matched:
                             log_event("company_correction_not_found", old=old_value, new=new_value)
