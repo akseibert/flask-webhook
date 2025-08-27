@@ -1501,6 +1501,20 @@ def normalize_voice_companies(text: str) -> str:
         r"\bGame Bearer\b": "GmbH",
         r"\bGame Behave\b": "GmbH",
         r"\bare gay\b": "AG",
+        r"Company's\s+": "Companies ",  # Fix possessive to plural
+        r"\bElectro Maya Game Bearer\b": "Elektro-Meier GmbH",
+        r"\bElectro Maya Game Behave\b": "Elektro-Meier GmbH",
+        r"\bMaya\b": "Meier",  # Common misrecognition
+        r"\bGame Bearer\b": "GmbH",
+        r"\bGame Behave\b": "GmbH",
+        r"\bare gay\b": "AG",
+        # ADD THESE NEW PATTERNS:
+        r"\bmakhti ageet\b": "Marti AG",
+        r"\bKieback\b": "KIBAG",
+        r"\bImplenier\b": "Implenia",
+        r"\bElektromaya\b": "Elektro-Meier",
+        r"\bageet\b": "AG",
+        r"\bmakhti\b": "Marti",
     }
     
     for pattern, replacement in voice_replacements.items():
@@ -2998,6 +3012,31 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
             r'^(?:companies?\s+)?correct\s+spelling\s+(.+?)\s+(?:to|with)\s+(.+?)$'
         ]
         
+        # Special handling for simple corrections like "Correct spelling Makhti ageet to Marti AG"
+        simple_correct = re.match(r'^correct\s+spelling\s+(.+?)\s+to\s+(.+?)$', normalized_text, re.IGNORECASE)
+        if simple_correct:
+            old_value = simple_correct.group(1).strip()
+            new_value = simple_correct.group(2).strip()
+            
+            # Detect if it's a company by checking for suffixes
+            if any(suffix in new_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
+                return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
+            elif any(suffix in old_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
+                return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
+            else:
+                # Try to auto-detect the field from existing data
+                if chat_id and chat_id in session_data:
+                    existing_data = session_data[chat_id].get("structured_data", {})
+                    # Check companies first
+                    for company in existing_data.get("companies", []):
+                        if isinstance(company, dict) and company.get("name"):
+                            if string_similarity(company["name"].lower(), old_value.lower()) >= 0.4:
+                                return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
+                    # Check people
+                    for person in existing_data.get("people", []):
+                        if string_similarity(person.lower(), old_value.lower()) >= 0.6:
+                            return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
+        
         # Special pattern for correcting words within fields
         word_correct_pattern = r'^correct\s+(.+?)\s+to\s+(.+?)$'
         word_correct_match = re.match(word_correct_pattern, normalized_text, re.IGNORECASE)
@@ -3020,6 +3059,25 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         new_site_name = regex.sub(re.escape(old_word), new_word, existing_data["site_name"], flags=re.IGNORECASE)
                         return {"correct": [{"field": "site_name", "old": existing_data["site_name"], "new": new_site_name}]}
         
+        # Special handling for name corrections without field specification
+        name_correct_pattern = r'^correct\s+spelling\s+([A-Z][a-z]+)\s+to\s+([A-Z][a-z]+)$'
+        name_correct = re.match(name_correct_pattern, normalized_text, re.IGNORECASE)
+        if name_correct and chat_id and chat_id in session_data:
+            old_name = name_correct.group(1).strip()
+            new_name = name_correct.group(2).strip()
+            existing_data = session_data[chat_id].get("structured_data", {})
+            
+            # Check if old_name is in people list
+            for person in existing_data.get("people", []):
+                if person.lower() == old_name.lower():
+                    return {"correct": [{"field": "people", "old": old_name, "new": new_name}]}
+            
+            # If not found in people, maybe it's part of a company name
+            for company in existing_data.get("companies", []):
+                if isinstance(company, dict) and old_name.lower() in company.get("name", "").lower():
+                    return {"correct": [{"field": "companies", "old": company["name"], "new": company["name"].replace(old_name, new_name)}]}
+        
+        # Now process general correction patterns
         for pattern in correct_patterns:
             correct_match = re.match(pattern, normalized_text, re.IGNORECASE)
             if correct_match:
@@ -4089,45 +4147,39 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                              looking_for=old_name,
                              in_companies=existing_companies)
                     
-                    # Find the company that matches (case-insensitive exact match first)
-                    best_match = None
-                    best_similarity = 0
-                    best_index = -1
-                    
+                    # Try exact match first (case insensitive)
                     for i, company in enumerate(result.get(field, [])):
                         if isinstance(company, dict) and company.get("name"):
-                            company_name = company["name"]
-                            
-                            # Check exact match first (case insensitive)
-                            if company_name.lower() == old_name.lower():
-                                best_match = company_name
-                                best_index = i
-                                best_similarity = 1.0
+                            if company["name"].lower() == old_name.lower():
+                                result[field][i]["name"] = new_value
+                                matched = True
+                                changes.append(f"corrected company '{company['name']}' to '{new_value}'")
+                                log_event("corrected_company_exact", old=company["name"], new=new_value)
                                 break
-                            
-                            # For partial matches, be more lenient
-                            similarity = string_similarity(company_name.lower(), old_name.lower())
-                            if similarity > best_similarity:
-                                best_similarity = similarity
-                                best_match = company_name
-                                best_index = i
                     
-                    # Use match if similarity is >= 0.4
-                    if best_match and best_similarity >= 0.4:
-                        old_company_name = best_match
-                        # Only correct if the new value is actually different
-                        if old_company_name.lower() != new_value.lower():
+                    # If no exact match, try fuzzy matching
+                    if not matched:
+                        best_match = None
+                        best_similarity = 0
+                        best_index = -1
+                        
+                        for i, company in enumerate(result.get(field, [])):
+                            if isinstance(company, dict) and company.get("name"):
+                                similarity = string_similarity(company["name"].lower(), old_name.lower())
+                                if similarity > best_similarity and similarity >= 0.4:
+                                    best_similarity = similarity
+                                    best_match = company["name"]
+                                    best_index = i
+                        
+                        if best_match and best_index >= 0:
                             result[field][best_index]["name"] = new_value
                             matched = True
-                            changes.append(f"corrected company '{old_company_name}' to '{new_value}'")
-                            log_event("corrected_company", old=old_company_name, new=new_value)
-                        else:
-                            matched = True  # Mark as matched but don't add duplicate
+                            changes.append(f"corrected company '{best_match}' to '{new_value}'")
+                            log_event("corrected_company_fuzzy", old=best_match, new=new_value, similarity=best_similarity)
                     
                     if not matched:
-                        # DON'T add as new company if it wasn't found
                         log_event("correction_not_found", field=field, old=old_value, new=new_value)
-                        changes.append(f"could not find '{old_value}' in companies to correct")
+                        # Don't add as new, just log the failure
                     
                     
                 elif field == "tools":
