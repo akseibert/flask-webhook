@@ -207,16 +207,15 @@ CRITICAL RULES FOR PEOPLE EXTRACTION:
 - "John Smith as site manager, Anna Weber as safety officer" means:
   - people: ["John Smith", "Anna Weber"]  
   - roles: [{"name": "John Smith", "role": "Site Manager"}, {"name": "Anna Weber", "role": "Safety Officer"}]
+- "People Lisa as project manager" means:
+  - people: ["Lisa"]
+  - roles: [{"name": "Lisa", "role": "Project Manager"}]
+- "People Lisa as co-worker" means:
+  - people: ["Lisa"]
+  - roles: [{"name": "Lisa", "role": "Co-Worker"}]
+- ALWAYS extract BOTH the person AND their role when "as" or "works as" or "is" appears after a name
 - NEVER stop after the first person - continue parsing the entire sentence for all people
 - Common voice errors: "honor" might be "Anna", "are gay" might be "AG", "Maya" might be "Meier"
-CRITICAL: When you see patterns like:
-- "People Lisa Maya as co-worker" means:
-  - people: ["Lisa Maya"]
-  - roles: [{"name": "Lisa Maya", "role": "Co-Worker"}]
-- "Lisa worked as co-worker" or "Lisa as co-worker":
-  - people: ["Lisa"] (NOT "Lisa worked")  
-  - roles: [{"name": "Lisa", "role": "Co-Worker"}]
-- ALWAYS extract BOTH the person AND their role when "as" is present
 The word "worked" or "as" is just grammar, not part of the name!
 
 CRITICAL RULES FOR ISSUES/ACTIVITIES:
@@ -541,6 +540,12 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                         result["people"] = []
                     if role["name"] not in result["people"]:
                         result["people"].append(role["name"])
+    
+    # Special case: If we have people but no roles, check if the original text had "as" pattern
+    # This ensures roles are extracted even if NLP missed them
+    if "people" in result and result["people"] and "roles" not in result:
+        # This will be handled by the calling function if needed
+        pass
 
     # Tools - deduplicate and filter out category keywords
     if "tools" in data:
@@ -3013,29 +3018,63 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         ]
         
         # Special handling for simple corrections like "Correct spelling Makhti ageet to Marti AG"
-        simple_correct = re.match(r'^correct\s+spelling\s+(.+?)\s+to\s+(.+?)$', normalized_text, re.IGNORECASE)
+        # Universal spelling correction handler
+        simple_correct = re.match(r'^correct\s+spelling\s+(?:of\s+)?(.+?)\s+to\s+(.+?)$', normalized_text, re.IGNORECASE)
         if simple_correct:
             old_value = simple_correct.group(1).strip()
             new_value = simple_correct.group(2).strip()
             
-            # Detect if it's a company by checking for suffixes
+            # Auto-detect the field by searching in existing data
+            if chat_id and chat_id in session_data:
+                existing_data = session_data[chat_id].get("structured_data", {})
+                
+                # Check all scalar fields first (exact or partial match)
+                for field in SCALAR_FIELDS:
+                    if field in existing_data and existing_data[field]:
+                        if old_value.lower() in existing_data[field].lower():
+                            return {"correct": [{"field": field, "old": existing_data[field], "new": existing_data[field].replace(old_value, new_value)}]}
+                
+                # Check companies (with or without suffix)
+                for company in existing_data.get("companies", []):
+                    if isinstance(company, dict) and company.get("name"):
+                        company_name = company["name"]
+                        # Check if old_value matches the base name (without suffix)
+                        company_parts = company_name.split()
+                        if company_parts and company_parts[0].lower() == old_value.lower():
+                            return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
+                        # Or if it's a full match
+                        if string_similarity(company_name.lower(), old_value.lower()) >= 0.7:
+                            return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
+                
+                # Check people
+                for person in existing_data.get("people", []):
+                    if string_similarity(person.lower(), old_value.lower()) >= 0.7:
+                        return {"correct": [{"field": "people", "old": person, "new": new_value}]}
+                
+                # Check other list fields
+                for field in ["tools", "services", "activities", "issues"]:
+                    items = existing_data.get(field, [])
+                    for item in items:
+                        item_text = ""
+                        if isinstance(item, dict):
+                            if field == "tools":
+                                item_text = item.get("item", "")
+                            elif field == "services":
+                                item_text = item.get("task", "")
+                            elif field == "issues":
+                                item_text = item.get("description", "")
+                        else:
+                            item_text = item
+                        
+                        if item_text and string_similarity(item_text.lower(), old_value.lower()) >= 0.7:
+                            return {"correct": [{"field": field, "old": item_text, "new": new_value}]}
+            
+            # If we can't auto-detect, try to guess by the content
             if any(suffix in new_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
                 return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
-            elif any(suffix in old_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
-                return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
             else:
-                # Try to auto-detect the field from existing data
-                if chat_id and chat_id in session_data:
-                    existing_data = session_data[chat_id].get("structured_data", {})
-                    # Check companies first
-                    for company in existing_data.get("companies", []):
-                        if isinstance(company, dict) and company.get("name"):
-                            if string_similarity(company["name"].lower(), old_value.lower()) >= 0.4:
-                                return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
-                    # Check people
-                    for person in existing_data.get("people", []):
-                        if string_similarity(person.lower(), old_value.lower()) >= 0.6:
-                            return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
+                # Default to people if it looks like a name
+                return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
         
         # Special pattern for correcting words within fields
         word_correct_pattern = r'^correct\s+(.+?)\s+to\s+(.+?)$'
@@ -4147,15 +4186,20 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                              looking_for=old_name,
                              in_companies=existing_companies)
                     
-                    # Try exact match first (case insensitive)
-                    for i, company in enumerate(result.get(field, [])):
-                        if isinstance(company, dict) and company.get("name"):
-                            if company["name"].lower() == old_name.lower():
-                                result[field][i]["name"] = new_value
-                                matched = True
-                                changes.append(f"corrected company '{company['name']}' to '{new_value}'")
-                                log_event("corrected_company_exact", old=company["name"], new=new_value)
-                                break
+                    # Special handling for partial matches in company names
+                    # If old_name doesn't have a suffix but exists as part of a company name
+                    if not any(suffix in old_name.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
+                        for i, company in enumerate(result.get(field, [])):
+                            if isinstance(company, dict) and company.get("name"):
+                                # Check if old_name is the base name of the company (without suffix)
+                                company_base = company["name"].split()[0] if company["name"].split() else ""
+                                if company_base.lower() == old_name.lower():
+                                    # Replace the entire company name
+                                    result[field][i]["name"] = new_value
+                                    matched = True
+                                    changes.append(f"corrected company '{company['name']}' to '{new_value}'")
+                                    log_event("corrected_company_partial", old=company["name"], new=new_value)
+                                    break
                     
                     # If no exact match, try fuzzy matching
                     if not matched:
