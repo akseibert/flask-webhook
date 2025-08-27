@@ -507,26 +507,39 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
                         result["companies"].append({"name": company_name})
     
     # People
-  
     if "people" in data:
-        if isinstance(data["people"], list):
-            result["people"] = []
-            seen_people = set()
-            for person in data["people"]:
-                person_name = None
-                if isinstance(person, str):
-                    person_name = person
-                elif isinstance(person, dict) and "name" in person:
-                    person_name = person["name"]
+    if isinstance(data["people"], list):
+        result["people"] = []
+        seen_people = set()
+        for person in data["people"]:
+            person_name = None
+            if isinstance(person, str):
+                # Handle common transcription errors for names
+                name_corrections = {
+                    "me": None,  # Skip "me" - should be resolved to actual user
+                    "mark us": "Marcus",
+                    "markus": "Marcus",
+                }
                 
-                if person_name and person_name.lower() not in seen_people:
-                    # Clean up person names - remove "worked" and similar artifacts
-                    if " worked" in person_name.lower():
-                        person_name = person_name.replace(" worked", "").replace(" Worked", "")
-                    # Add all valid names (including "me" for now, user can specify later)
-                    if person_name:
-                        result["people"].append(person_name.strip())
-                        seen_people.add(person_name.lower())
+                if person.lower() in name_corrections:
+                    corrected = name_corrections[person.lower()]
+                    if corrected:  # If not None
+                        person_name = corrected
+                    else:
+                        continue  # Skip this person
+                else:
+                    person_name = person
+            elif isinstance(person, dict) and "name" in person:
+                person_name = person["name"]
+            
+            if person_name and person_name.lower() not in seen_people:
+                # Clean up person names - remove "worked" and similar artifacts
+                if " worked" in person_name.lower():
+                    person_name = person_name.replace(" worked", "").replace(" Worked", "")
+                # Add all valid names
+                if person_name:
+                    result["people"].append(person_name.strip())
+                    seen_people.add(person_name.lower())
     
     # Roles
     if "roles" in data:
@@ -4187,19 +4200,23 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             changes.append(f"added person '{old_value}' with role '{new_value}'")
                             
           
-             
                 elif field == "companies":
                     session_data[chat_id]["last_change_history"].append((field, existing_data.get("companies", []).copy()))
                     
                     matched = False
-                    old_name = old_value.strip()
+                    old_name = old_value.strip().lower()
                     
-                    # Try to find and correct the company - use case-insensitive partial matching
-                    for i, company in enumerate(result.get(field, [])):
+                    # Try exact match first, then partial match
+                    for i, company in enumerate(result.get("companies", [])):
                         if isinstance(company, dict) and company.get("name"):
-                            company_name = company["name"]
-                            # Case-insensitive partial match - "keybag" should match "KeyBag AG"
-                            if old_name.lower() in company_name.lower():
+                            company_name_lower = company["name"].lower()
+                            
+                            # Check if old_name is contained in company name
+                            # This handles "keyback" matching "keyback ag"
+                            if (old_name in company_name_lower or 
+                                company_name_lower in old_name or
+                                string_similarity(company_name_lower, old_name) >= 0.7):
+                                
                                 original = company["name"]
                                 company["name"] = new_value
                                 matched = True
@@ -4207,8 +4224,10 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                 break
                     
                     if not matched:
-                        log_event("company_correction_failed", old=old_name, 
-                                companies=[c.get("name") for c in result.get(field, [])])
+                        # Log what we couldn't match
+                        log_event("company_correction_failed", 
+                                looking_for=old_name,
+                                in_companies=[c.get("name") for c in result.get("companies", [])])
                     
                     
                 elif field == "tools":
@@ -4367,42 +4386,33 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 if "roles" not in result:
                     result["roles"] = []
                 
-                # Handle roles specially to update people list too
+                # Get existing roles for duplicate checking
                 existing_roles = [(r.get("name", "").lower(), r.get("role", "").lower()) 
                                 for r in result.get("roles", []) if isinstance(r, dict)]
                 
                 for role in new_data[field]:
                     if isinstance(role, dict) and "name" in role and "role" in role:
-                        role_tuple = (role["name"].lower(), role["role"].lower())
+                        # Check if this EXACT role already exists
+                        role_key = (role["name"].lower(), role["role"].lower())
                         
-                        # Check if this role already exists
-                        already_exists = False
-                        for existing_name, existing_role in existing_roles:
-                            if (string_similarity(role["name"].lower(), existing_name) >= CONFIG["NAME_SIMILARITY_THRESHOLD"] and
-                                string_similarity(role["role"].lower(), existing_role) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
-                                already_exists = True
-                                break
-                                
-                        if not already_exists:
+                        if role_key not in existing_roles:
+                            # Add the new role
                             result["roles"].append(role)
                             changes.append(f"added role {role['role']} for {role['name']}")
                             
-                            # Also make sure the person is in the people list
+                            # Also ensure person is in people list
                             if "people" not in result:
                                 result["people"] = []
                             
-                            # Don't add duplicate people
-                            person_exists = False
-                            for person in result["people"]:
-                                if string_similarity(role["name"].lower(), person.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                                    person_exists = True
-                                    break
-                                    
+                            # Check if person already exists
+                            person_exists = any(
+                                p.lower() == role["name"].lower() 
+                                for p in result.get("people", [])
+                            )
+                            
                             if not person_exists:
                                 result["people"].append(role["name"])
                                 changes.append(f"added person {role['name']}")
-                        else:
-                            log_event("skipped_duplicate_role", name=role["name"], role=role["role"])
                                 
                        
             
