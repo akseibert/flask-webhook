@@ -4200,23 +4200,19 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             changes.append(f"added person '{old_value}' with role '{new_value}'")
                             
           
+                
                 elif field == "companies":
                     session_data[chat_id]["last_change_history"].append((field, existing_data.get("companies", []).copy()))
                     
                     matched = False
-                    old_name = old_value.strip().lower()
+                    old_name_lower = old_value.strip().lower()
                     
-                    # Try exact match first, then partial match
+                    # Try to match companies
                     for i, company in enumerate(result.get("companies", [])):
                         if isinstance(company, dict) and company.get("name"):
-                            company_name_lower = company["name"].lower()
-                            
-                            # Check if old_name is contained in company name
-                            # This handles "keyback" matching "keyback ag"
-                            if (old_name in company_name_lower or 
-                                company_name_lower in old_name or
-                                string_similarity(company_name_lower, old_name) >= 0.7):
-                                
+                            company_name = company["name"]
+                            # Exact match (case-insensitive)
+                            if company_name.lower() == old_name_lower:
                                 original = company["name"]
                                 company["name"] = new_value
                                 matched = True
@@ -4224,10 +4220,10 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                 break
                     
                     if not matched:
-                        # Log what we couldn't match
+                        # Log for debugging
                         log_event("company_correction_failed", 
-                                looking_for=old_name,
-                                in_companies=[c.get("name") for c in result.get("companies", [])])
+                                looking_for=old_value,
+                                companies=[c.get("name") for c in result.get("companies", [])])
                     
                     
                 elif field == "tools":
@@ -4381,38 +4377,38 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             log_event("skipped_duplicate", field=field, value=item[key])
             
          
+           
             elif field == "roles":
                 # Initialize roles if not present
                 if "roles" not in result:
                     result["roles"] = []
                 
-                # Get existing roles for duplicate checking
-                existing_roles = [(r.get("name", "").lower(), r.get("role", "").lower()) 
-                                for r in result.get("roles", []) if isinstance(r, dict)]
+                # Initialize people if not present
+                if "people" not in result:
+                    result["people"] = []
                 
+                # Process each role individually
                 for role in new_data[field]:
                     if isinstance(role, dict) and "name" in role and "role" in role:
-                        # Check if this EXACT role already exists
-                        role_key = (role["name"].lower(), role["role"].lower())
+                        person_name = role["name"]
+                        person_role = role["role"]
                         
-                        if role_key not in existing_roles:
-                            # Add the new role
-                            result["roles"].append(role)
-                            changes.append(f"added role {role['role']} for {role['name']}")
+                        # Check if this exact role already exists
+                        role_exists = any(
+                            r.get("name", "").lower() == person_name.lower() and 
+                            r.get("role", "").lower() == person_role.lower()
+                            for r in result["roles"]
+                        )
+                        
+                        if not role_exists:
+                            # Add the role
+                            result["roles"].append({"name": person_name, "role": person_role})
+                            changes.append(f"added role {person_role} for {person_name}")
                             
                             # Also ensure person is in people list
-                            if "people" not in result:
-                                result["people"] = []
-                            
-                            # Check if person already exists
-                            person_exists = any(
-                                p.lower() == role["name"].lower() 
-                                for p in result.get("people", [])
-                            )
-                            
-                            if not person_exists:
-                                result["people"].append(role["name"])
-                                changes.append(f"added person {role['name']}")
+                            if not any(p.lower() == person_name.lower() for p in result["people"]):
+                                result["people"].append(person_name)
+                                changes.append(f"added person {person_name}")
                                 
                        
             
