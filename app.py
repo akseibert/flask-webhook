@@ -2756,14 +2756,8 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
                 else:
                     # Fall back to comma splitting
                     company_names = [name.strip() for name in re.split(r',', captured) if name.strip()]
-            
-            if field in ["services", "service"]:
-                value = clean_value(match.group(1), field)
-                if value.lower() == "none":
-                    result["services"] = []
-                else:
-                    services = [service.strip() for service in re.split(r',|\band\b', value) if service.strip()]
-                    result["services"] = [{"task": service} for service in services]
+                log_event("company_extraction", captured=captured, company_names=company_names)
+                result["companies"] = [{"name": name} for name in company_names]
                 return result
             
             if field in ["tools", "tool"]:
@@ -4987,31 +4981,31 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     
                     return "ok", 200
         
-                # Special handling for multiple company corrections
-            if "correct spelling" in text.lower() and text.count(" to ") == 2:
-                # Pattern: "correct spelling X to Y and A to B"
-                parts = text.split(" and ")
-                if len(parts) == 2:
-                    corrections = []
-                    for part in parts:
-                        if " to " in part:
-                            correction_match = re.search(r'(\w+(?:\s+\w+)*)\s+to\s+(\w+(?:\s+\w+)*)', part, re.IGNORECASE)
-                            if correction_match:
-                                old_val = correction_match.group(1).strip()
-                                new_val = correction_match.group(2).strip()
-                                # Detect field automatically
-                                field = "companies" if any(s in (old_val + new_val).upper() for s in ['AG', 'GMBH', 'LTD']) else "people"
-                                corrections.append({"field": field, "old": old_val, "new": new_val})
-                    
-                    if corrections:
-                        extracted = {"correct": corrections}
-                        session["command_history"].append(session["structured_data"].copy())
-                        session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
-                        session["structured_data"] = enrich_date(session["structured_data"])
-                        save_session(session_data)
-                        summary = summarize_report(session["structured_data"])
-                        send_message(chat_id, f"✅ Multiple corrections processed.\n\n{summary}")
-                        return "ok", 200
+        # Special handling for multiple company corrections
+        if "correct spelling" in text.lower() and text.count(" to ") == 2:
+            # Pattern: "correct spelling X to Y and A to B"
+            parts = text.split(" and ")
+            if len(parts) == 2:
+                corrections = []
+                for part in parts:
+                    if " to " in part:
+                        correction_match = re.search(r'(\w+(?:\s+\w+)*)\s+to\s+(\w+(?:\s+\w+)*)', part, re.IGNORECASE)
+                        if correction_match:
+                            old_val = correction_match.group(1).strip()
+                            new_val = correction_match.group(2).strip()
+                            # Detect field automatically
+                            field = "companies" if any(s in (old_val + new_val).upper() for s in ['AG', 'GMBH', 'LTD']) else "people"
+                            corrections.append({"field": field, "old": old_val, "new": new_val})
+                
+                if corrections:
+                    extracted = {"correct": corrections}
+                    session["command_history"].append(session["structured_data"].copy())
+                    session["structured_data"] = merge_data(session["structured_data"], extracted, chat_id)
+                    session["structured_data"] = enrich_date(session["structured_data"])
+                    save_session(session_data)
+                    summary = summarize_report(session["structured_data"])
+                    send_message(chat_id, f"✅ Multiple corrections processed.\n\n{summary}")
+                    return "ok", 200
 
         # Special handling for "correct X to Y as Z" pattern
         correct_with_role_pattern = r'^correct\s+(.+?)\s+to\s+(.+?)\s+as\s+(.+?)$'
