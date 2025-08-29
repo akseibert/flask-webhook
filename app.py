@@ -3137,15 +3137,31 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                             return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
                 
                 # Check people
+                # Check people
                 for person in existing_data.get("people", []):
-                    # Check for partial match first
+                    # Check for partial match first (for first or last name corrections)
+                    person_parts = person.lower().split()
+                    old_parts = old_value.lower().split()
+                    
+                    # Check if old_value is a first or last name
+                    if len(old_parts) == 1 and old_parts[0] in person_parts:
+                        # Replace just that part of the name
+                        import re as regex
+                        new_person_name = regex.sub(re.escape(old_value), new_value, person, flags=re.IGNORECASE)
+                        return {"correct": [{"field": "people", "old": person, "new": new_person_name}]}
+                    
+                    # Check for exact match
+                    if person.lower() == old_value.lower():
+                        return {"correct": [{"field": "people", "old": person, "new": new_value}]}
+                    
+                    # Check for partial substring match
                     if old_value.lower() in person.lower():
                         import re as regex
                         new_person_name = regex.sub(re.escape(old_value), new_value, person, flags=re.IGNORECASE)
                         return {"correct": [{"field": "people", "old": person, "new": new_person_name}]}
-                    # Then check similarity with 70% threshold
-                    if string_similarity(person.lower(), old_value.lower()) >= 0.7:
-                        return {"correct": [{"field": "people", "old": person, "new": new_value}]}
+                    
+                    # Then check similarity with 60% threshold (lower for people)
+                    if string_similarity(person.lower(), old_value.lower()) >= 0.6:
                 
                 # Check other list fields
                 for field in ["tools", "services", "activities", "issues"]:
