@@ -3933,22 +3933,6 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
     result = existing_data.copy()
     changes = []
 
-    # If this is ONLY a correction command, process it first and return early
-    # Handle correcting values
-    if "correct" in new_data:
-        corrections = new_data.pop("correct")
-        log_event("processing_corrections", corrections=corrections)  # Add logging
-        for correction in corrections:
-            field = correction.get("field")
-            old_value = correction.get("old")
-            new_value = correction.get("new")
-            
-            log_event("processing_correction", field=field, old=old_value, new=new_value)  # Add logging
-            
-            if not field or not old_value or not new_value:
-                log_event("skipping_correction", reason="missing_data")  # Add logging
-                continue
-
     # Validate new data first
     validation_errors = []
     for field, value in new_data.items():
@@ -4247,32 +4231,27 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
             # Handle LIST fields (this should be at the SAME level as the if above, not nested inside it)
             elif field in LIST_FIELDS:
                 log_event("correction_for_list_field", field=field)
-                
+
                 if field == "companies":
                     # Save history for undo
                     if "companies" in result:
                         session_data[chat_id]["last_change_history"].append(("companies", result["companies"].copy()))
                     
                     matched = False
-                    
+                    # Use a company-specific similarity threshold from config
+                    threshold = CONFIG.get("COMPANY_SIMILARITY_THRESHOLD", 0.5)
+
                     # Process each company in the result
                     for i, company in enumerate(result.get("companies", [])):
                         if isinstance(company, dict) and company.get("name"):
                             company_name = company["name"]
                             
-                            # Check for exact match first
-                            if company_name == old_value:
+                            # Use fuzzy matching to find the misspelled company
+                            if string_similarity(company_name.lower(), old_value.lower()) >= threshold:
                                 result["companies"][i] = {"name": new_value}
                                 matched = True
                                 changes.append(f"corrected company '{company_name}' to '{new_value}'")
-                                log_event("corrected_company_exact", old=company_name, new=new_value)
-                                break
-                            # Check for partial match
-                            elif old_value.lower() in company_name.lower():
-                                result["companies"][i] = {"name": new_value}
-                                matched = True
-                                changes.append(f"corrected company '{company_name}' to '{new_value}'")
-                                log_event("corrected_company_partial", old=company_name, new=new_value)
+                                log_event("corrected_company_fuzzy", old=company_name, new=new_value, score=string_similarity(company_name.lower(), old_value.lower()))
                                 break
                     
                     if not matched:
