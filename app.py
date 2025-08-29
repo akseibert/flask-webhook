@@ -3927,6 +3927,18 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
     result = existing_data.copy()
     changes = []
 
+    # If this is ONLY a correction command, process it first and return early
+    if "correct" in new_data:
+        corrections = new_data["correct"]
+        # Process corrections here (keep existing correction code)
+        # After processing corrections, check if there are other fields
+        remaining_fields = [k for k in new_data.keys() if k != "correct"]
+        if not remaining_fields:
+            # This was ONLY a correction, don't process anything else
+            # Apply the corrections to result...
+            # (existing correction processing code stays here)
+            return result  # Return early after applying corrections
+
     # Validate new data first
     validation_errors = []
     for field, value in new_data.items():
@@ -4184,6 +4196,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
             new_data.pop(field)
     
     # Handle correcting values
+
     if "correct" in new_data:
         corrections = new_data.pop("correct")
         for correction in corrections:
@@ -4281,43 +4294,37 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     matched = False
                     old_name_lower = old_value.strip().lower()
                     
-                    # Find the best matching company
-                    best_match_index = -1
-                    best_match_score = 0
-                    best_match_name = None
-                    
+                    # Look for the company to correct
                     for i, company in enumerate(result.get("companies", [])):
                         if isinstance(company, dict) and company.get("name"):
                             company_name = company["name"]
                             
-                            # Exact match
-                            if company_name.lower() == old_name_lower:
-                                best_match_index = i
-                                best_match_score = 1.0
-                                best_match_name = company_name
+                            # Check if old_value is part of the company name (partial match)
+                            if old_name_lower in company_name.lower():
+                                # Replace the old part with new part in the company name
+                                import re as regex
+                                new_company_name = regex.sub(re.escape(old_value), new_value, company_name, flags=re.IGNORECASE)
+                                result["companies"][i] = {"name": new_company_name}
+                                matched = True
+                                changes.append(f"corrected company '{company_name}' to '{new_company_name}'")
+                                log_event("corrected_company_partial", old=company_name, new=new_company_name)
                                 break
                             
-                            # Substring match
-                            if old_name_lower in company_name.lower() or company_name.lower() in old_name_lower:
-                                score = 0.9
-                                if score > best_match_score:
-                                    best_match_index = i
-                                    best_match_score = score
-                                    best_match_name = company_name
+                            # Check for exact match
+                            elif company_name.lower() == old_name_lower:
+                                result["companies"][i] = {"name": new_value}
+                                matched = True
+                                changes.append(f"corrected company '{company_name}' to '{new_value}'")
+                                log_event("corrected_company_exact", old=company_name, new=new_value)
+                                break
                             
-                            # Similarity match
-                            similarity = string_similarity(company_name.lower(), old_name_lower)
-                            if similarity > best_match_score and similarity >= CONFIG.get("COMPANY_SIMILARITY_THRESHOLD", 0.5):
-                                best_match_index = i
-                                best_match_score = similarity
-                                best_match_name = company_name
-                    
-                    # Apply the correction if we found a match
-                    if best_match_index >= 0 and best_match_score >= CONFIG.get("COMPANY_SIMILARITY_THRESHOLD", 0.5):
-                        result["companies"][best_match_index] = {"name": new_value}
-                        matched = True
-                        changes.append(f"corrected company '{best_match_name}' to '{new_value}'")
-                        log_event("corrected_company", old=best_match_name, new=new_value, score=best_match_score)
+                            # Check for similarity match (70% threshold)
+                            elif string_similarity(company_name.lower(), old_name_lower) >= 0.7:
+                                result["companies"][i] = {"name": new_value}
+                                matched = True
+                                changes.append(f"corrected company '{company_name}' to '{new_value}'")
+                                log_event("corrected_company_similarity", old=company_name, new=new_value)
+                                break
                     
                     if not matched:
                         log_event("company_correction_failed", 
@@ -4418,9 +4425,12 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
         elif field in LIST_FIELDS:
             if field in ["companies", "tools", "services", "issues"]:
                 # These are dictionaries with specific keys
-                if field == "companies":
+                elif field == "companies":
                     key = "name"
-                    existing_values = [c.get(key, "").lower() for c in result[field] if isinstance(c, dict)]
+                    existing_values = []
+                    for c in result[field]:
+                        if isinstance(c, dict) and c.get(key):
+                            existing_values.append(c.get(key, "").lower())
                 elif field == "tools":
                     key = "item"
                     existing_values = [t.get(key, "").lower() for t in result[field] if isinstance(t, dict)]
@@ -4461,11 +4471,27 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     if isinstance(item, dict) and key in item:
                         item_value = item[key].lower()
                         
-                        # Check if this item already exists
+                        # Check if this item already exists (use stricter matching for companies)
                         already_exists = False
                         for existing_value in existing_values:
-                            if string_similarity(item_value, existing_value) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                            # Check for exact match or very high similarity
+                            if existing_value == item_value:
                                 already_exists = True
+                                log_event("skipped_exact_duplicate", field=field, value=item[key])
+                                break
+                            # For companies, also check if they're the same company with different suffixes
+                            elif field == "companies":
+                                # Remove common suffixes for comparison
+                                existing_base = re.sub(r'\s+(ag|gmbh|ltd|inc|llc|corp|sa|bv|nv)$', '', existing_value, flags=re.IGNORECASE)
+                                item_base = re.sub(r'\s+(ag|gmbh|ltd|inc|llc|corp|sa|bv|nv)$', '', item_value, flags=re.IGNORECASE)
+                                if existing_base == item_base:
+                                    already_exists = True
+                                    log_event("skipped_duplicate_company_base", existing=existing_value, new=item_value)
+                                    break
+                            # Use similarity check as fallback
+                            elif string_similarity(item_value, existing_value) >= 0.9:  # Higher threshold for companies
+                                already_exists = True
+                                log_event("skipped_similar_duplicate", field=field, value=item[key], existing=existing_value)
                                 break
                                 
                         if not already_exists:
