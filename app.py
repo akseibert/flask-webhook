@@ -3177,8 +3177,16 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
             # This way we correct it in the right field where it already exists
             # Since we couldn't find it above, we don't know what field it belongs to
             # Ask the user to be more specific
-            print(f"DEBUG: Ambiguous correction - couldn't determine field")
-            return {"error": f"Cannot determine if '{old_value}' is a company or person. Please specify: 'correct {old_value} in companies to {new_value}' or 'correct {old_value} in people to {new_value}'"}
+            # If we can't auto-detect, try to guess by the content
+            # Check for company suffixes
+            if any(suffix in new_value.upper() or suffix in old_value.upper() 
+                   for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP', 'SA', 'BV', 'NV']):
+                print(f"DEBUG: Detected company suffix, using companies field")
+                return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
+            
+            # If we can't find it in existing data, just try to correct it as a person
+            # since that's the most common case for names without company suffixes.
+            print(f"DEBUG: Defaulting to people field for correction")
             return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
         
         # Special pattern for correcting words within fields
