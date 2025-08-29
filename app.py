@@ -297,9 +297,13 @@ CRITICAL: When you see "Correct X to Y as Z" patterns:
   - people: ["Sandra Meier"]
   - roles: [{"name": "Sandra Meier", "role": "Mural Artist"}]
 
-Correction commands (CRITICAL - DO NOT ADD AS COMPANIES):
+Correction commands (CRITICAL - DO NOT ADD AS COMPANIES OR PEOPLE):
 - If input starts with "correct spelling", it's ONLY a correction - return ONLY {"correct": [...]}
 - NEVER add "correct spelling X to Y" as a company entry
+- NEVER add the new corrected name as a person entry
+- For corrections like "correct spelling Anna Müller to Ana Müller", return ONLY:
+  {"correct": [{"field": "people", "old": "Anna Müller", "new": "Ana Müller"}]}
+  DO NOT include "people": ["Ana Müller"] in the response
 - If input is "correct spelling X to Y": return {"correct": [{"field": "companies", "old": "X", "new": "Y"}]} if X/Y have company suffixes
 - If input is "correct X in Y to Z" or similar: return {"correct": [{"field": "Y", "old": "X", "new": "Z"}]}
 - IMPORTANT: For "correct X to Y", first check if X exists in the current report data:
@@ -462,14 +466,16 @@ def standardize_nlp_output(data: Dict[str, Any]) -> Dict[str, Any]:
         if field in data and isinstance(data[field], dict) and "delete" in data[field]:
             result[field] = {"delete": True}
     
-    # Handle correction commands
+   
     # Handle correction commands
     if "correct" in data:
         result["correct"] = data["correct"]
         # CRITICAL: If this is ONLY a correction command, don't process other fields
-        # This prevents "correct spelling X to Y" from being misinterpreted as adding a company
-        if all(k in ["correct", "date"] for k in data.keys()):
-            return result
+        # This prevents "correct spelling X to Y" from being misinterpreted as adding a company or person
+        correction_only_keys = ["correct", "date", "people", "roles"]  # Allow people/roles but will be filtered below
+        if all(k in correction_only_keys for k in data.keys()):
+            # If there are people/roles in a correction command, don't add them
+            return {"correct": data["correct"]}
     
     # Handle structured list fields
     if "companies" in data and "correct" not in data:  # Don't add companies if this is a correction
@@ -2919,9 +2925,36 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         result: Dict[str, Any] = {}
         normalized_text = re.sub(r'[.!?]\s*$', '', text.strip())
         
+       
         # CHECK FOR CORRECTIONS FIRST - BEFORE NLP!
         if re.match(r'^correct\s+spelling', normalized_text, re.IGNORECASE):
-            print(f"DEBUG: Correction command detected, skipping NLP")
+            print(f"DEBUG: Correction command detected, processing directly")
+            # Process correction immediately without NLP
+            correct_match = re.match(r'^correct\s+spelling\s+(?:of\s+)?(.+?)\s+to\s+(.+?)$', normalized_text, re.IGNORECASE)
+            if correct_match:
+                old_value = correct_match.group(1).strip()
+                new_value = correct_match.group(2).strip()
+                
+                # Auto-detect field
+                if chat_id and chat_id in session_data:
+                    existing_data = session_data[chat_id].get("structured_data", {})
+                    
+                    # Check people first
+                    for person in existing_data.get("people", []):
+                        if person.lower() == old_value.lower():
+                            return {"correct": [{"field": "people", "old": person, "new": new_value}]}
+                    
+                    # Check companies
+                    for company in existing_data.get("companies", []):
+                        if isinstance(company, dict) and company.get("name", "").lower() == old_value.lower():
+                            return {"correct": [{"field": "companies", "old": company["name"], "new": new_value}]}
+                
+                # Default based on content
+                if any(suffix in new_value.upper() for suffix in ['AG', 'GMBH', 'LTD']):
+                    return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
+                else:
+                    return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
+            
             # Skip NLP entirely for correction commands
         # Try NLP extraction if enabled and text doesn't look like a command
         elif CONFIG.get("ENABLE_NLP_EXTRACTION", False):
@@ -4192,9 +4225,20 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
     
   
     # Handle correcting values using a "delete then add" strategy for robustness
+    # Handle correcting values using a "delete then add" strategy for robustness
     if "correct" in new_data:
         corrections = new_data.pop("correct")
         log_event("processing_corrections_as_delete_add", corrections=corrections)
+        
+        # IMPORTANT: Remove any other fields that might have been incorrectly added
+        # This prevents the new name from being added as a separate person
+        for correction in corrections:
+            if correction.get("field") == "people" and "people" in new_data:
+                # Remove the new name if it was incorrectly added to people list
+                new_name = correction.get("new")
+                if new_name and new_name in new_data.get("people", []):
+                    new_data["people"].remove(new_name)
+                    log_event("removed_incorrectly_added_person", person=new_name)
 
         for correction in corrections:
             field = correction.get("field")
