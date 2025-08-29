@@ -967,7 +967,7 @@ FIELD_PATTERNS = {
     "segment_category": r'^(?:(?:add|insert)\s+)?(?:segments?|section)\s*[:,]?\s*(.+?)\s+category\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "category": r'^(?:(?:add|insert)\s+)?(?:categories?|kategorie|category)\s*[:,]?\s*(.+?)(?:\s*(?:companies|people|tools|services|activities|$))',
     "impression": r'^(?:(?:add|insert)\s+)?(?:impressions?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
-    "people": r'^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+)(?:\s*(?:,|\.|$))|^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
+    "people": r'^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s*[:,]?\s*(.+)$',
     "person_as_role": r'^(?:add\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+(?:\s+[A-Za-z\s\-]+)?)(?:\s*(?:,|\.|$))',
     "add_person_role": r'^add\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+)$',
     "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(\w+\s+\w+|\w+)\s+(?:as|is)\s+(.+?)(?:\s*(?:,|\.|$))',
