@@ -4287,24 +4287,24 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
             else:
                 log_event("correction_failed_item_not_found", field=field, old_value=old_value)
         
-                elif field == "people":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
-                    # Find and replace the old person name
-                    matched = False
-                            for i, person in enumerate(result["people"]):
-                                if string_similarity(person.lower(), old_value.lower()) >= 0.6:
-                                    result["people"][i] = new_value
-                                    matched = True
-                                    changes.append(f"corrected person '{person}' to '{new_value}'")
-                                    
-                                    # Also update roles that refer to this person
-                                    if "roles" in result:
-                                        for role in result["roles"]:
-                                            if (isinstance(role, dict) and role.get("name") and 
-                                                string_similarity(role["name"].lower(), person.lower()) >= 0.6):
-                                                role["name"] = new_value
-                                    break
+        elif field == "people":
+            session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
+            
+            # Find and replace the old person name
+            matched = False
+                    for i, person in enumerate(result["people"]):
+                        if string_similarity(person.lower(), old_value.lower()) >= 0.6:
+                            result["people"][i] = new_value
+                            matched = True
+                            changes.append(f"corrected person '{person}' to '{new_value}'")
+                            
+                            # Also update roles that refer to this person
+                            if "roles" in result:
+                                for role in result["roles"]:
+                                    if (isinstance(role, dict) and role.get("name") and 
+                                        string_similarity(role["name"].lower(), person.lower()) >= 0.6):
+                                        role["name"] = new_value
+                            break
                     
                     if not matched:
                         log_event("person_not_found_for_correction", old=old_value, new=new_value)
