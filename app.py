@@ -4303,8 +4303,8 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 
                 changes.append(f"added '{new_value}' to {field}")
             
-            elif field == "people":  # This needs to be aligned with the original 'if field == "companies":'
-                session_data[chat_id]["last_change_history"].append((field, result.get("people", []).copy()))
+                elif field == "people":  # This needs to be aligned with the original 'if field == "companies":'
+                    session_data[chat_id]["last_change_history"].append((field, result.get("people", []).copy()))
                 
                 # Delete old person
                 deleted = False
