@@ -4296,32 +4296,45 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 elif field == "people":
                     session_data[chat_id]["last_change_history"].append((field, existing_data.get("people", []).copy()))
                     
-                    matched = False
-                    # Find and remove the old person, then add the new one
-                    for i, person in enumerate(list(result.get("people", []))):
-                        # Use lower threshold for people names (0.5) and also check partial matches
-                        if (person.lower() == old_value.lower() or 
-                            old_value.lower() in person.lower() or
-                            string_similarity(person.lower(), old_value.lower()) >= 0.5):
-                            
-                            # Delete the old person
-                            del result["people"][i]
-                            # Add the new person at the same position
-                            result["people"].insert(i, new_value)
-                            
-                            matched = True
-                            changes.append(f"corrected person '{person}' to '{new_value}'")
-                            
-                            # Also update roles that refer to this person
-                            if "roles" in result:
-                                for role in result["roles"]:
-                                    if (isinstance(role, dict) and role.get("name") and 
-                                        (role["name"].lower() == person.lower() or
-                                         string_similarity(role["name"].lower(), person.lower()) >= 0.5)):
-                                        role["name"] = new_value
-                            break
+                    # Use the same delete-then-add pattern as companies
+                    item_to_remove = None
+                    best_score = 0.5  # Lower threshold for people names
+                    role_to_reassign = None
                     
-                    if not matched:
+                    # Find the best match to remove
+                    for person in result.get("people", []):
+                        score = string_similarity(person.lower(), old_value.lower())
+                        if score > best_score:
+                            item_to_remove = person
+                            best_score = score
+                    
+                    deleted = False
+                    if item_to_remove:
+                        # Remove the person
+                        result["people"].remove(item_to_remove)
+                        deleted = True
+                        
+                        # Find and save their role for reassignment
+                        if "roles" in result:
+                            for role in list(result.get("roles", [])):
+                                if (isinstance(role, dict) and role.get("name") and 
+                                    role["name"].lower() == item_to_remove.lower()):
+                                    role_to_reassign = role["role"]
+                                    result["roles"].remove(role)
+                                    break
+                        
+                        changes.append(f"removed person '{item_to_remove}'")
+                    
+                    # Add the new person
+                    if deleted:
+                        result["people"].append(new_value)
+                        changes.append(f"added person '{new_value}'")
+                        
+                        # Re-assign the role to the new name if there was one
+                        if role_to_reassign and "roles" in result:
+                            result["roles"].append({"name": new_value, "role": role_to_reassign})
+                            changes.append(f"reassigned role '{role_to_reassign}' to '{new_value}'")
+                    else:
                         log_event("person_not_found_for_correction", old=old_value, new=new_value)
                             
                 elif field == "roles":
