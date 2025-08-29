@@ -4270,44 +4270,44 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         deleted = True
             
             # --- 2. ADD STEP: Add the new, corrected item ---
-            if deleted:
-                if field == "people":
-                    result[field].append(new_value)
-                    # Re-assign the role to the new name
-                    if 'role_to_reassign' in locals() and role_to_reassign:
-                        result["roles"].append({"name": new_value, "role": role_to_reassign})
-                elif field == "activities":
-                    result[field].append(new_value)
-                elif field in DICT_LIST_FIELDS:
-                    item_key = {"companies": "name", "tools": "item", "services": "task", "issues": "description"}.get(field)
-                    if item_key:
-                        result[field].append({item_key: new_value})
+                    if deleted:
+                        if field == "people":
+                            result[field].append(new_value)
+                            # Re-assign the role to the new name
+                            if 'role_to_reassign' in locals() and role_to_reassign:
+                                result["roles"].append({"name": new_value, "role": role_to_reassign})
+                        elif field == "activities":
+                            result[field].append(new_value)
+                        elif field in DICT_LIST_FIELDS:
+                            item_key = {"companies": "name", "tools": "item", "services": "task", "issues": "description"}.get(field)
+                            if item_key:
+                                result[field].append({item_key: new_value})
+                        
+                        changes.append(f"corrected '{old_value}' to '{new_value}'")
+                    else:
+                        log_event("correction_failed_item_not_found", field=field, old_value=old_value)
                 
-                changes.append(f"corrected '{old_value}' to '{new_value}'")
-            else:
-                log_event("correction_failed_item_not_found", field=field, old_value=old_value)
-        
-        elif field == "people":
-            session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-            
-            # Find and replace the old person name
-            matched = False
-                    for i, person in enumerate(result["people"]):
-                        if string_similarity(person.lower(), old_value.lower()) >= 0.6:
-                            result["people"][i] = new_value
-                            matched = True
-                            changes.append(f"corrected person '{person}' to '{new_value}'")
-                            
-                            # Also update roles that refer to this person
-                            if "roles" in result:
-                                for role in result["roles"]:
-                                    if (isinstance(role, dict) and role.get("name") and 
-                                        string_similarity(role["name"].lower(), person.lower()) >= 0.6):
-                                        role["name"] = new_value
-                            break
+                elif field == "people":
+                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                     
-                    if not matched:
-                        log_event("person_not_found_for_correction", old=old_value, new=new_value)
+                    # Find and replace the old person name
+                    matched = False
+                            for i, person in enumerate(result["people"]):
+                                if string_similarity(person.lower(), old_value.lower()) >= 0.6:
+                                    result["people"][i] = new_value
+                                    matched = True
+                                    changes.append(f"corrected person '{person}' to '{new_value}'")
+                                    
+                                    # Also update roles that refer to this person
+                                    if "roles" in result:
+                                        for role in result["roles"]:
+                                            if (isinstance(role, dict) and role.get("name") and 
+                                                string_similarity(role["name"].lower(), person.lower()) >= 0.6):
+                                                role["name"] = new_value
+                                    break
+                            
+                            if not matched:
+                                log_event("person_not_found_for_correction", old=old_value, new=new_value)
                             
                 elif field == "roles":
                     # Interpret as correcting a role for a person
@@ -4591,6 +4591,9 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             
                     if not already_exists:
                         result[field].append(item)
+                        # IMPORTANT: Add to existing_values so we don't add duplicates in the same operation
+                        existing_values.append(item.lower())
+                        
                         if field == "people":
                             changes.append(f"added person '{item}'")
                         elif field == "activities":
