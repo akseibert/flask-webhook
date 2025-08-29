@@ -4266,6 +4266,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     changes.append(f"corrected '{old_value}' to '{new_value}' in {field}")
                 continue
 
+            
             # For LIST fields, find the best match to remove
             elif field in LIST_FIELDS:
                 session_data[chat_id]["last_change_history"].append((field, result[field].copy()))
@@ -4273,8 +4274,15 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 # A. Handle simple lists like 'people' and 'activities'
                 if field in SIMPLE_LIST_FIELDS:
                     item_to_remove = None
-                    best_score = 0.6  # Similarity threshold
+                    best_score = 0.5  # Lower threshold for corrections
+                    
                     for item in result.get(field, []):
+                        # Exact match first
+                        if item.lower() == old_value_lower:
+                            item_to_remove = item
+                            best_score = 1.0
+                            break
+                        # Similarity match
                         score = string_similarity(item.lower(), old_value_lower)
                         if score > best_score:
                             item_to_remove = item
@@ -4336,26 +4344,46 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 elif field == "people":
                     session_data[chat_id]["last_change_history"].append((field, result.get("people", []).copy()))
                     
-                    # Delete old person
+                    # Delete old person - use similarity matching
                     deleted = False
-                    for person in list(result.get("people", [])):
-                        if person == old_value:
-                            result["people"].remove(person)
-                            deleted = True
-                            
-                            # Also remove from roles
-                            for role in list(result.get("roles", [])):
-                                if isinstance(role, dict) and role.get("name") == old_value:
-                                    result["roles"].remove(role)
-                            break
+                    person_to_remove = None
+                    best_score = 0.0
                     
-                    # Add new person
-                    if deleted:
+                    for person in result.get("people", []):
+                        # Try exact match first
+                        if person.lower() == old_value.lower():
+                            person_to_remove = person
+                            best_score = 1.0
+                            break
+                        # Then try similarity match
+                        score = string_similarity(person.lower(), old_value.lower())
+                        if score > best_score and score >= 0.6:  # Lower threshold for corrections
+                            person_to_remove = person
+                            best_score = score
+                    
+                    if person_to_remove:
+                        result["people"].remove(person_to_remove)
+                        deleted = True
+                        
+                        # Also update roles - find by the actual name that was in the list
+                        for role in list(result.get("roles", [])):
+                            if isinstance(role, dict) and role.get("name") == person_to_remove:
+                                # Update the role with the new name
+                                role["name"] = new_value
+                                changes.append(f"updated role for '{person_to_remove}' to use new name '{new_value}'")
+                        
+                        # Add new person
                         result["people"].append(new_value)
-                        changes.append(f"corrected '{old_value}' to '{new_value}'")
+                        changes.append(f"corrected '{person_to_remove}' to '{new_value}'")
+                        log_event("person_corrected", old=person_to_remove, new=new_value, score=best_score)
                     else:
-                        log_event("person_not_found_for_correction", old=old_value, new=new_value)
-                            
+                        # If we can't find the person, still add the new one and log it
+                        log_event("person_not_found_for_correction", old=old_value, new=new_value, people_list=result.get("people", []))
+                        # Optionally add the new person anyway
+                        if new_value not in result.get("people", []):
+                            result["people"].append(new_value)
+                            changes.append(f"added '{new_value}' (could not find '{old_value}' to replace)")
+
                 elif field == "roles":
                     # Interpret as correcting a role for a person
                     session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
