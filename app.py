@@ -3162,6 +3162,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     
                     # Then check similarity with 60% threshold (lower for people)
                     if string_similarity(person.lower(), old_value.lower()) >= 0.6:
+                         return {"correct": [{"field": "people", "old": person, "new": new_value}]}
                 
                 # Check other list fields
                 for field in ["tools", "services", "activities", "issues"]:
