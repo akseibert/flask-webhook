@@ -4243,15 +4243,17 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         result[field].remove(item_to_remove)
                         deleted = True
                         
+             
                         # Special handling for people: find their role to re-assign later
                         if field == "people":
                             role_to_reassign = None
                             role_to_remove = None
+                            # Find the role that exactly matches the name of the person being removed.
                             for r in result.get("roles", []):
-                                if r.get("name") and string_similarity(r["name"].lower(), item_to_remove.lower()) >= 0.9:
+                                if r.get("name") and r["name"].lower() == item_to_remove.lower():
                                     role_to_reassign = r["role"]
                                     role_to_remove = r
-                                    break
+                                    break # Found the exact role, no need to continue
                             if role_to_remove:
                                 result["roles"].remove(role_to_remove)
 
