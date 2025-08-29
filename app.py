@@ -130,6 +130,7 @@ CONFIG = {
     "OPENAI_MODEL": config("OPENAI_MODEL", default="gpt-3.5-turbo"),
     "OPENAI_TEMPERATURE": config("OPENAI_TEMPERATURE", default=0.2, cast=float),
     "NAME_SIMILARITY_THRESHOLD": config("NAME_SIMILARITY_THRESHOLD", default=0.7, cast=float),
+    "CORRECTION_SIMILARITY_THRESHOLD": config("CORRECTION_SIMILARITY_THRESHOLD", default=0.7, cast=float),
     "COMPANY_SIMILARITY_THRESHOLD": config("COMPANY_SIMILARITY_THRESHOLD", default=0.5, cast=float),
     "COMMAND_SIMILARITY_THRESHOLD": config("COMMAND_SIMILARITY_THRESHOLD", default=0.85, cast=float),
     "REPORT_FORMAT": config("REPORT_FORMAT", default="detailed"),
@@ -3078,7 +3079,6 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         ]
         
        
-        # Special handling for simple corrections like "Correct spelling Makhti ageet to Marti AG"
         # Universal spelling correction handler - MUST BE CHECKED EARLY
         simple_correct = re.match(r'^correct\s+spelling\s+(?:of\s+)?(.+?)\s+to\s+(.+?)$', normalized_text, re.IGNORECASE)
         if simple_correct:
@@ -3093,11 +3093,19 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
             if chat_id and chat_id in session_data:
                 existing_data = session_data[chat_id].get("structured_data", {})
                 
-                # Check all scalar fields first (exact or partial match)
+                # Check all scalar fields first (exact or partial match with 70% threshold)
                 for field in SCALAR_FIELDS:
                     if field in existing_data and existing_data[field]:
-                        if old_value.lower() in existing_data[field].lower():
-                            return {"correct": [{"field": field, "old": existing_data[field], "new": existing_data[field].replace(old_value, new_value)}]}
+                        field_value = existing_data[field]
+                        # Check for partial match (word within the field)
+                        if old_value.lower() in field_value.lower():
+                            # Replace case-insensitively
+                            import re as regex
+                            new_field_value = regex.sub(re.escape(old_value), new_value, field_value, flags=re.IGNORECASE)
+                            return {"correct": [{"field": field, "old": field_value, "new": new_field_value}]}
+                        # Check for similarity match (70% threshold)
+                        elif string_similarity(field_value.lower(), old_value.lower()) >= 0.7:
+                            return {"correct": [{"field": field, "old": field_value, "new": new_value}]}
                 
              
                 # Check companies (with or without suffix)
@@ -3108,38 +3116,33 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         # Log what we're comparing
                         log_event("company_comparison", comparing=old_value, with_company=company_name)
                         
+                        # Check for partial match (word within company name)
+                        if old_value.lower() in company_name.lower():
+                            # Replace the word within the company name
+                            import re as regex
+                            new_company_name = regex.sub(re.escape(old_value), new_value, company_name, flags=re.IGNORECASE)
+                            log_event("partial_match_found", company=company_name, new_name=new_company_name)
+                            return {"correct": [{"field": "companies", "old": company_name, "new": new_company_name}]}
+                        
                         # Check exact match (case-insensitive)
                         if company_name.lower() == old_value.lower():
                             log_event("exact_match_found", company=company_name)
                             return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
                         
-                        # Check if old_value matches the base name (without suffix)
-                        company_parts = company_name.split()
-                        if company_parts:
-                            # Check first word match
-                            if company_parts[0].lower() == old_value.lower():
-                                log_event("base_name_match_found", company=company_name)
-                                return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
-                            
-                            # Check if old_value matches company without suffix
-                            company_without_suffix = ' '.join(company_parts[:-1]) if len(company_parts) > 1 else company_parts[0]
-                            if company_without_suffix.lower() == old_value.lower():
-                                log_event("name_without_suffix_match", company=company_name)
-                                return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
-                        
-                        # Check substring match
-                        if old_value.lower() in company_name.lower():
-                            log_event("substring_match_found", company=company_name)
-                            return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
-                        
-                        # Check similarity match with lower threshold for companies
+                        # Check similarity with 70% threshold
                         similarity = string_similarity(company_name.lower(), old_value.lower())
-                        if similarity >= CONFIG.get("COMPANY_SIMILARITY_THRESHOLD", 0.5):
+                        if similarity >= 0.7:
                             log_event("similarity_match_found", company=company_name, score=similarity)
                             return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
                 
                 # Check people
                 for person in existing_data.get("people", []):
+                    # Check for partial match first
+                    if old_value.lower() in person.lower():
+                        import re as regex
+                        new_person_name = regex.sub(re.escape(old_value), new_value, person, flags=re.IGNORECASE)
+                        return {"correct": [{"field": "people", "old": person, "new": new_person_name}]}
+                    # Then check similarity with 70% threshold
                     if string_similarity(person.lower(), old_value.lower()) >= 0.7:
                         return {"correct": [{"field": "people", "old": person, "new": new_value}]}
                 
@@ -3518,58 +3521,50 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return result
                     
                 elif field == "people":
-                    # The people pattern has multiple capture groups, we need to check which ones are populated
+                    # Capture the full text for this field
                     people_text = None
-                    role_text = None
-                    
-                    # Check each group to find the actual data
-                    for i in range(1, len(match.groups()) + 1):
-                        if match.group(i) is not None:
-                            if people_text is None:
-                                people_text = match.group(i).strip()
-                            elif role_text is None:
-                                role_text = match.group(i).strip()
-                                break
+                    for group in match.groups():
+                        if group:
+                            people_text = group.strip()
+                            break
                     
                     if not people_text:
                         continue
-                    
-                    # Clean up the people text
-                    people_text = re.sub(r'^add\s+', '', people_text, flags=re.IGNORECASE)
-                    people_text = re.sub(r'^people\s*,?\s*', '', people_text, flags=re.IGNORECASE)
-                    
+
+                    # Clean up any "people:" prefix
+                    people_text = re.sub(r'^(?:add\s+)?(?:peoples?|persons?)\s*[:,]?\s*', '', people_text, flags=re.IGNORECASE)
+
                     result["people"] = []
                     result["roles"] = []
                     
-                    # Check if there's "as" in the text indicating roles
-                    if " as " in people_text.lower():
-                        # Parse "Name as Role" pattern for multiple people
-                        # Handle "Anna as supervisor" or "Anna, Marcus as supervisors"
-                        parts = people_text.split(',')
-                        
-                        for part in parts:
-                            part = part.strip()
-                            if " as " in part.lower():
-                                as_match = re.match(r'(.+?)\s+as\s+(.+)', part, re.IGNORECASE)
-                                if as_match:
-                                    name = as_match.group(1).strip()
-                                    role = as_match.group(2).strip()
-                                    
-                                    # Handle plural roles like "supervisors"
-                                    if role.lower().endswith('s') and role.lower() != "progress":
-                                        role = role[:-1]  # Remove 's' to singularize
-                                    
-                                    result["people"].append(name)
-                                    result["roles"].append({"name": name, "role": role.title()})
-                            else:
-                                # Just a name without role
-                                if part:
-                                    result["people"].append(part)
-                    else:
-                        # No roles, just parse names
-                        people = [p.strip() for p in re.split(r',|\s+and\s+', people_text)]
-                        result["people"] = [p for p in people if p]
+                    # Find all "name as role" pairs first
+                    role_pattern = r'([A-Za-z\s]+?)\s+as\s+([A-Za-z\s\-]+)'
+                    role_matches = re.findall(role_pattern, people_text, re.IGNORECASE)
                     
+                    processed_text = people_text
+                    for name, role in role_matches:
+                        name = name.strip()
+                        role = role.strip()
+                        
+                        # Remove trailing "and" or commas from name if present
+                        name = re.sub(r'\s+(?:and|,)$', '', name).strip()
+                        
+                        if name and role:
+                            # Capitalize role properly
+                            role_title = ' '.join(word.capitalize() for word in role.split())
+                            if name not in result["people"]:
+                                result["people"].append(name)
+                            result["roles"].append({"name": name, "role": role_title})
+                            
+                            # Remove the processed part from the text to find remaining people
+                            processed_text = re.sub(re.escape(f"{name} as {role}"), '', processed_text, flags=re.IGNORECASE)
+
+                    # Any remaining text contains people without roles
+                    remaining_people = [p.strip() for p in re.split(r',|\s+and\s+', processed_text) if p.strip()]
+                    for person in remaining_people:
+                        if person and person not in result["people"]:
+                            result["people"].append(person)
+                            
                     return result
                     
                     
@@ -4203,24 +4198,23 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 # Save last state for undo
                 session_data[chat_id]["last_change_history"].append((field, existing_data[field]))
                 
-                # For site_name, handle partial word replacements
-                if field == "site_name" and result[field]:
-                        # Check if old_value is a word within the site_name
-                        if old_value.lower() in result[field].lower():
-                            # Replace the word in the site name
-                            import re as regex
-                            new_site_name = regex.sub(re.escape(old_value), new_value, result[field], flags=re.IGNORECASE)
-                            result[field] = new_site_name
-                            changes.append(f"corrected {field} from '{existing_data[field]}' to '{new_site_name}'")
-                        elif string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                            # Full replacement if similarity is high
-                            result[field] = new_value
-                            changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
-                else:
-                    # Simple replace for other scalar fields
-                    if string_similarity(result[field].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
+                # Handle partial word replacements for ALL scalar fields
+                if result[field]:
+                    # Check if old_value is a word within the field value
+                    if old_value.lower() in result[field].lower():
+                        # Replace the word in the field value (case-insensitive)
+                        import re as regex
+                        new_field_value = regex.sub(re.escape(old_value), new_value, result[field], flags=re.IGNORECASE)
+                        result[field] = new_field_value
+                        changes.append(f"corrected {field} from '{existing_data[field]}' to '{new_field_value}'")
+                    # Use 70% similarity threshold for all fields
+                    elif string_similarity(result[field].lower(), old_value.lower()) >= 0.7:
+                        # Full replacement if similarity is high enough
                         result[field] = new_value
                         changes.append(f"corrected {field} '{old_value}' to '{new_value}'")
+                    else:
+                        log_event("correction_not_applied", field=field, old=old_value, new=new_value, 
+                                 similarity=string_similarity(result[field].lower(), old_value.lower()))
                 
                 if field in LIST_FIELDS:
                     # More complex handling for list fields
