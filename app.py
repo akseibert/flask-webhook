@@ -4286,12 +4286,12 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 changes.append(f"corrected '{old_value}' to '{new_value}'")
             else:
                 log_event("correction_failed_item_not_found", field=field, old_value=old_value)
-                
-                elif field == "people":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
-                    # Find and replace the old person name
-                    matched = False
+        
+        elif field == "people":
+            session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
+            
+            # Find and replace the old person name
+            matched = False
                     for i, person in enumerate(result["people"]):
                         if string_similarity(person.lower(), old_value.lower()) >= 0.6:
                             result["people"][i] = new_value
