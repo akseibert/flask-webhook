@@ -4253,6 +4253,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             if role_to_remove:
                                 result["roles"].remove(role_to_remove)
 
+               
                 # B. Handle dictionary lists like 'companies', 'tools', etc.
                 elif field in DICT_LIST_FIELDS:
                     key_map = {"companies": "name", "tools": "item", "services": "task", "issues": "description"}
@@ -4270,24 +4271,37 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     if item_dict_to_remove:
                         result[field].remove(item_dict_to_remove)
                         deleted = True
-            
-            # --- 2. ADD STEP: Add the new, corrected item ---
-                    if deleted:
-                        if field == "people":
-                            result[field].append(new_value)
-                            # Re-assign the role to the new name
-                            if 'role_to_reassign' in locals() and role_to_reassign:
-                                result["roles"].append({"name": new_value, "role": role_to_reassign})
-                        elif field == "activities":
-                            result[field].append(new_value)
-                        elif field in DICT_LIST_FIELDS:
-                            item_key = {"companies": "name", "tools": "item", "services": "task", "issues": "description"}.get(field)
-                            if item_key:
-                                result[field].append({item_key: new_value})
-                        
-                        changes.append(f"corrected '{old_value}' to '{new_value}'")
-                    else:
-                        log_event("correction_failed_item_not_found", field=field, old_value=old_value)
+
+            # --- 2. ADD STEP: Add the new or corrected item ---
+            # This block is now correctly indented to apply to all list fields
+            if deleted:
+                # The old item was found and removed, now add the new one
+                if field == "people":
+                    result[field].append(new_value)
+                    # Re-assign the role to the new name if it existed
+                    if 'role_to_reassign' in locals() and role_to_reassign:
+                        result["roles"].append({"name": new_value, "role": role_to_reassign})
+                elif field == "activities":
+                    result[field].append(new_value)
+                elif field in DICT_LIST_FIELDS:
+                    item_key = {"companies": "name", "tools": "item", "services": "task", "issues": "description"}.get(field)
+                    if item_key:
+                        result[field].append({item_key: new_value})
+                
+                changes.append(f"corrected '{old_value}' to '{new_value}'")
+            else:
+                # The old item wasn't found, so add the new item as a new entry
+                log_event("correction_is_new_entry", field=field, old_value=old_value, new_value=new_value)
+                if field == "people":
+                    result[field].append(new_value)
+                elif field == "activities":
+                    result[field].append(new_value)
+                elif field in DICT_LIST_FIELDS:
+                    item_key = {"companies": "name", "tools": "item", "services": "task", "issues": "description"}.get(field)
+                    if item_key:
+                        result[field].append({item_key: new_value})
+                
+                changes.append(f"added '{new_value}' to {field}")
                 
                 elif field == "people":
                     session_data[chat_id]["last_change_history"].append((field, result.get("people", []).copy()))
