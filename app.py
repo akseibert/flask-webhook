@@ -4238,21 +4238,32 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         session_data[chat_id]["last_change_history"].append(("companies", result["companies"].copy()))
                     
                     matched = False
-                    # Use a company-specific similarity threshold from config
-                    threshold = CONFIG.get("COMPANY_SIMILARITY_THRESHOLD", 0.5)
-
-                    # Process each company in the result
-                    for i, company in enumerate(result.get("companies", [])):
+                    threshold = 0.7  # Use 70% similarity for corrections
+                    
+                    # Find and remove the old company
+                    for i, company in enumerate(list(result.get("companies", []))):
                         if isinstance(company, dict) and company.get("name"):
                             company_name = company["name"]
                             
-                            # Use fuzzy matching to find the misspelled company
-                            if string_similarity(company_name.lower(), old_value.lower()) >= threshold:
-                                result["companies"][i] = {"name": new_value}
+                            # Check exact match or fuzzy match
+                            if (company_name.lower() == old_value.lower() or 
+                                old_value.lower() in company_name.lower() or
+                                string_similarity(company_name.lower(), old_value.lower()) >= threshold):
+                                
+                                # Delete the old company
+                                del result["companies"][i]
+                                # Add the new company at the same position
+                                result["companies"].insert(i, {"name": new_value})
+                                
                                 matched = True
                                 changes.append(f"corrected company '{company_name}' to '{new_value}'")
-                                log_event("corrected_company_fuzzy", old=company_name, new=new_value, score=string_similarity(company_name.lower(), old_value.lower()))
+                                log_event("corrected_company", old=company_name, new=new_value)
                                 break
+                    
+                    if not matched:
+                        log_event("company_correction_not_matched", 
+                                old_value=old_value,
+                                companies_in_report=[c.get("name") for c in result.get("companies", [])])
                     
                     if not matched:
                         log_event("company_correction_not_matched", 
@@ -4336,13 +4347,13 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         changes.append(f"added company '{new_value}'")
                         log_event("added_company_during_correction", new=new_value)
                         continue
-                    
+                  
                     # Process each company in the result
                     for i, company in enumerate(result.get("companies", [])):
-                    
+                        # This loop should have the company processing logic
+                        pass  # Add this if there's no processing logic yet
                     
                 elif field == "tools":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
                     
                     matched = False
                     for i, tool in enumerate(result[field]):
