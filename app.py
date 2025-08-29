@@ -3173,12 +3173,9 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 print(f"DEBUG: Detected company suffix, using companies field")
                 return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
             
-            # For ambiguous cases (like APEX), try to find it in existing data first
-            # This way we correct it in the right field where it already exists
-            # Since we couldn't find it above, we don't know what field it belongs to
-            # Ask the user to be more specific
-            print(f"DEBUG: Ambiguous correction - couldn't determine field")
-            return {"error": f"Cannot determine if '{old_value}' is a company or person. Please specify: 'correct {old_value} in companies to {new_value}' or 'correct {old_value} in people to {new_value}'"}
+            # If we can't find it in existing data, just try to correct it as a person
+            # since that's the most common case
+            print(f"DEBUG: Defaulting to people field for correction")
             return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
         
         # Special pattern for correcting words within fields
@@ -4243,7 +4240,6 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         result[field].remove(item_to_remove)
                         deleted = True
                         
-             
                         # Special handling for people: find their role to re-assign later
                         if field == "people":
                             role_to_reassign = None
@@ -4296,36 +4292,22 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 elif field == "people":
                     session_data[chat_id]["last_change_history"].append((field, result.get("people", []).copy()))
                     
-                    # Find exact match first
-                    person_found = None
-                    person_index = -1
-                    
+                    # Find and replace
+                    found = False
                     for i, person in enumerate(result.get("people", [])):
-                        # Exact match (case-insensitive)
-                        if person.lower() == old_value.lower():
-                            person_found = person
-                            person_index = i
+                        if person == old_value:
+                            result["people"][i] = new_value
+                            found = True
+                            
+                            # Update roles too
+                            for role in result.get("roles", []):
+                                if isinstance(role, dict) and role.get("name") == old_value:
+                                    role["name"] = new_value
+                            
+                            changes.append(f"corrected '{old_value}' to '{new_value}'")
                             break
                     
-                    if person_found:
-                        # Remove old person
-                        result["people"].pop(person_index)
-                        # Add new person at same position
-                        result["people"].insert(person_index, new_value)
-                        changes.append(f"corrected '{person_found}' to '{new_value}'")
-                        
-                        # Update roles if any
-                        if "roles" in result:
-                            for role in result.get("roles", []):
-                                if isinstance(role, dict) and role.get("name", "").lower() == person_found.lower():
-                                    role["name"] = new_value
-                    else:
-                        # Person not found - log but don't fail
-                        log_event("person_not_found_for_correction", old=old_value, new=new_value)
-                        changes.append(f"Could not find '{old_value}' to correct")
-                      
-                    
-                    if not matched:
+                    if not found:
                         log_event("person_not_found_for_correction", old=old_value, new=new_value)
                             
                 elif field == "roles":
