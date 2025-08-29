@@ -3137,32 +3137,15 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                             return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
                 
                 # Check people
-                # Check people
                 for person in existing_data.get("people", []):
-                    # Check for partial match first (for first or last name corrections)
-                    person_parts = person.lower().split()
-                    old_parts = old_value.lower().split()
-                    
-                    # Check if old_value is a first or last name
-                    if len(old_parts) == 1 and old_parts[0] in person_parts:
-                        # Replace just that part of the name
-                        import re as regex
-                        new_person_name = regex.sub(re.escape(old_value), new_value, person, flags=re.IGNORECASE)
-                        return {"correct": [{"field": "people", "old": person, "new": new_person_name}]}
-                    
-                    # Check for exact match
-                    if person.lower() == old_value.lower():
-                        return {"correct": [{"field": "people", "old": person, "new": new_value}]}
-                    
-                    # Check for partial substring match
+                    # Check for partial match first
                     if old_value.lower() in person.lower():
                         import re as regex
                         new_person_name = regex.sub(re.escape(old_value), new_value, person, flags=re.IGNORECASE)
                         return {"correct": [{"field": "people", "old": person, "new": new_person_name}]}
-                    
-                    # Then check similarity with 60% threshold (lower for people)
-                    if string_similarity(person.lower(), old_value.lower()) >= 0.6:
-                         return {"correct": [{"field": "people", "old": person, "new": new_value}]}
+                    # Then check similarity with 70% threshold
+                    if string_similarity(person.lower(), old_value.lower()) >= 0.7:
+                        return {"correct": [{"field": "people", "old": person, "new": new_value}]}
                 
                 # Check other list fields
                 for field in ["tools", "services", "activities", "issues"]:
@@ -4313,56 +4296,37 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 elif field == "people":
                     session_data[chat_id]["last_change_history"].append((field, result.get("people", []).copy()))
                     
-                    # Use delete-then-add pattern like companies
-                    person_to_remove = None
-                    best_score = 0.4  # Lower threshold for people
+                    # Find exact match first
+                    person_found = None
+                    person_index = -1
                     
-                    # Find best matching person
-                    for person in result.get("people", []):
-                        # Check exact match first
+                    for i, person in enumerate(result.get("people", [])):
+                        # Exact match (case-insensitive)
                         if person.lower() == old_value.lower():
-                            person_to_remove = person
-                            best_score = 1.0
+                            person_found = person
+                            person_index = i
                             break
-                        
-                        # Check if old_value is part of the person's name
-                        if old_value.lower() in person.lower():
-                            person_to_remove = person
-                            best_score = 0.9
-                            break
-                        
-                        # Check similarity
-                        score = string_similarity(person.lower(), old_value.lower())
-                        if score > best_score:
-                            person_to_remove = person
-                            best_score = score
                     
-                    if person_to_remove and best_score >= 0.4:
-                        # Remove the old person
-                        result["people"].remove(person_to_remove)
+                    if person_found:
+                        # Remove old person
+                        result["people"].pop(person_index)
+                        # Add new person at same position
+                        result["people"].insert(person_index, new_value)
+                        changes.append(f"corrected '{person_found}' to '{new_value}'")
                         
-                        # Handle role if exists
-                        role_to_update = None
+                        # Update roles if any
                         if "roles" in result:
-                            for role in list(result.get("roles", [])):
-                                if isinstance(role, dict) and role.get("name", "").lower() == person_to_remove.lower():
-                                    role_to_update = role
-                                    result["roles"].remove(role)
-                                    break
-                        
-                        # Add the new person
-                        result["people"].append(new_value)
-                        changes.append(f"corrected person '{person_to_remove}' to '{new_value}'")
-                        
-                        # Update role with new name
-                        if role_to_update:
-                            result["roles"].append({"name": new_value, "role": role_to_update["role"]})
-                            changes.append(f"updated role for '{new_value}'")
+                            for role in result.get("roles", []):
+                                if isinstance(role, dict) and role.get("name", "").lower() == person_found.lower():
+                                    role["name"] = new_value
                     else:
+                        # Person not found - log but don't fail
                         log_event("person_not_found_for_correction", old=old_value, new=new_value)
-                        # If not found, still add the correction
-                        result["people"].append(new_value)
-                        changes.append(f"added '{new_value}' ('{old_value}' not found)")
+                        changes.append(f"Could not find '{old_value}' to correct")
+                      
+                    
+                    if not matched:
+                        log_event("person_not_found_for_correction", old=old_value, new=new_value)
                             
                 elif field == "roles":
                     # Interpret as correcting a role for a person
@@ -5186,48 +5150,20 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
                     return "ok", 200
         
         # Special handling for multiple company corrections
-        # Special handling for multiple corrections with "and"
-        if "correct spelling" in text.lower() and " and " in text.lower():
-            # First remove "correct spelling" prefix
-            clean_text = re.sub(r'^correct\s+spelling\s+', '', text, flags=re.IGNORECASE)
-            
-            # Split by "and" to get individual corrections
-            parts = re.split(r'\s+and\s+', clean_text, flags=re.IGNORECASE)
-            corrections = []
-            
-            for part in parts:
-                if " to " in part.lower():
-                    correction_match = re.search(r'^(.+?)\s+to\s+(.+?)$', part.strip(), re.IGNORECASE)
-                    if correction_match:
-                        old_val = correction_match.group(1).strip()
-                        new_val = correction_match.group(2).strip()
-                        
-                        # Detect field based on existing data
-                        field = None
-                        if chat_id and chat_id in session_data:
-                            existing_data = session_data[chat_id].get("structured_data", {})
-                            
-                            # Check companies first
-                            for company in existing_data.get("companies", []):
-                                if isinstance(company, dict) and company.get("name"):
-                                    if old_val.lower() in company["name"].lower():
-                                        field = "companies"
-                                        old_val = company["name"]  # Use full company name
-                                        break
-                            
-                            # Check people if not found in companies
-                            if not field:
-                                for person in existing_data.get("people", []):
-                                    if old_val.lower() in person.lower():
-                                        field = "people"
-                                        old_val = person  # Use full person name
-                                        break
-                        
-                        # Fallback: detect by suffixes
-                        if not field:
+        if "correct spelling" in text.lower() and text.count(" to ") == 2:
+            # Pattern: "correct spelling X to Y and A to B"
+            parts = text.split(" and ")
+            if len(parts) == 2:
+                corrections = []
+                for part in parts:
+                    if " to " in part:
+                        correction_match = re.search(r'(\w+(?:\s+\w+)*)\s+to\s+(\w+(?:\s+\w+)*)', part, re.IGNORECASE)
+                        if correction_match:
+                            old_val = correction_match.group(1).strip()
+                            new_val = correction_match.group(2).strip()
+                            # Detect field automatically
                             field = "companies" if any(s in (old_val + new_val).upper() for s in ['AG', 'GMBH', 'LTD']) else "people"
-                        
-                        corrections.append({"field": field, "old": old_val, "new": new_val})
+                            corrections.append({"field": field, "old": old_val, "new": new_val})
                 
                 if corrections:
                     extracted = {"correct": corrections}
