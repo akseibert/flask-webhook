@@ -3348,6 +3348,11 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 return result
         
         # Try FIELD_PATTERNS first for structured commands
+        # If NLP already extracted data successfully, return it
+        if CONFIG.get("ENABLE_NLP_EXTRACTION", False) and nlp_data:
+            return nlp_data
+            
+        # Try FIELD_PATTERNS first for structured commands
         for field, pattern in FIELD_PATTERNS.items():
             match = re.match(pattern, normalized_text, re.IGNORECASE)
             if match:
@@ -3377,7 +3382,6 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     companies_text = re.sub(r"^company's\s+", '', companies_text, flags=re.IGNORECASE)
                     companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
                     result["companies"] = [{"name": company} for company in companies if company]
-                    return result
                 
                 elif field == "tool":
                     # Get the captured text - could be in group 1 or 2
