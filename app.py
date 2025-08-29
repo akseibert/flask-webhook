@@ -4292,22 +4292,24 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 elif field == "people":
                     session_data[chat_id]["last_change_history"].append((field, result.get("people", []).copy()))
                     
-                    # Find and replace
-                    found = False
-                    for i, person in enumerate(result.get("people", [])):
+                    # Delete old person
+                    deleted = False
+                    for person in list(result.get("people", [])):
                         if person == old_value:
-                            result["people"][i] = new_value
-                            found = True
+                            result["people"].remove(person)
+                            deleted = True
                             
-                            # Update roles too
-                            for role in result.get("roles", []):
+                            # Also remove from roles
+                            for role in list(result.get("roles", [])):
                                 if isinstance(role, dict) and role.get("name") == old_value:
-                                    role["name"] = new_value
-                            
-                            changes.append(f"corrected '{old_value}' to '{new_value}'")
+                                    result["roles"].remove(role)
                             break
                     
-                    if not found:
+                    # Add new person
+                    if deleted:
+                        result["people"].append(new_value)
+                        changes.append(f"corrected '{old_value}' to '{new_value}'")
+                    else:
                         log_event("person_not_found_for_correction", old=old_value, new=new_value)
                             
                 elif field == "roles":
