@@ -2930,6 +2930,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 nlp_data, confidence = extract_with_nlp(text)
                 if confidence >= CONFIG.get("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", 0.7):
                     log_event("using_nlp_extraction", confidence=confidence, fields=list(nlp_data.keys()))
+                    return nlp_data  # Add this return statement!
                     
                     # Supplement NLP with regex for fields it might have missed
                     supplemented_fields = []
@@ -3166,13 +3167,18 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
             
         
             # If we can't auto-detect, try to guess by the content
+            # Check for company suffixes
             if any(suffix in new_value.upper() or suffix in old_value.upper() 
-                   for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
+                   for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP', 'SA', 'BV', 'NV']):
                 print(f"DEBUG: Detected company suffix, using companies field")
                 return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
-            else:
-                # Default to people if it looks like a name
-                print(f"DEBUG: No company suffix, defaulting to people field")
+            
+            # For ambiguous cases (like APEX), try to find it in existing data first
+            # This way we correct it in the right field where it already exists
+            # Since we couldn't find it above, we don't know what field it belongs to
+            # Ask the user to be more specific
+            print(f"DEBUG: Ambiguous correction - couldn't determine field")
+            return {"error": f"Cannot determine if '{old_value}' is a company or person. Please specify: 'correct {old_value} in companies to {new_value}' or 'correct {old_value} in people to {new_value}'"}
                 return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
         
         # Special pattern for correcting words within fields
@@ -4299,40 +4305,25 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     
                     matched = False
                     
-                    # Process each company in the result
-                    for i, company in enumerate(result.get("companies", [])):
+                    # First, check if old_value exists in the current companies
+                    company_found = False
+                    for company in result.get("companies", []):
                         if isinstance(company, dict) and company.get("name"):
-                            company_name = company["name"]
-                            
-                            # Check if this is the company to correct
-                            # The old_value might be the full name "Kyberg AG" or just "Kyberg"
-                            if company_name == old_value:
-                                # Exact match - replace entirely
-                                result["companies"][i] = {"name": new_value}
-                                matched = True
-                                changes.append(f"corrected company '{company_name}' to '{new_value}'")
-                                log_event("corrected_company_exact", old=company_name, new=new_value)
-                                break
-                            elif old_value.lower() in company_name.lower():
-                                # Partial match - replace the matching part
-                                import re as regex
-                                # If new_value doesn't have AG/GmbH suffix but old company does, preserve it
-                                if not any(suffix in new_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
-                                    if ' AG' in company_name:
-                                        new_value = new_value + ' AG'
-                                    elif ' GmbH' in company_name:
-                                        new_value = new_value + ' GmbH'
-                                
-                                result["companies"][i] = {"name": new_value}
-                                matched = True
-                                changes.append(f"corrected company '{company_name}' to '{new_value}'")
-                                log_event("corrected_company_partial", old=company_name, new=new_value)
+                            if old_value in company["name"] or company["name"] == old_value:
+                                company_found = True
                                 break
                     
-                    if not matched:
-                        log_event("company_correction_not_matched", 
-                                old_value=old_value,
-                                companies_in_report=[c.get("name") for c in result.get("companies", [])])
+                    if not company_found:
+                        # If the company to correct doesn't exist, add it with the new value
+                        if "companies" not in result:
+                            result["companies"] = []
+                        result["companies"].append({"name": new_value})
+                        changes.append(f"added company '{new_value}'")
+                        log_event("added_company_during_correction", new=new_value)
+                        continue
+                    
+                    # Process each company in the result
+                    for i, company in enumerate(result.get("companies", [])):
                     
                     
                 elif field == "tools":
@@ -5150,9 +5141,12 @@ def handle_command(chat_id: str, text: str, session: Dict[str, Any]) -> tuple[st
             send_message(chat_id, f"📋 Report:\n{summary}")
             return "ok", 200
         
+        
         # Extract fields from input (single command processing)
         extracted = extract_fields(text, chat_id)
-
+        
+        # Log what was extracted for debugging
+        log_event("extracted_data", data=extracted)
         
         # Handle empty or invalid extractions
         if not extracted:
