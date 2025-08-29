@@ -4344,41 +4344,40 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 elif field == "people":
                     session_data[chat_id]["last_change_history"].append((field, result.get("people", []).copy()))
                     
-                    # Delete old person - use similarity matching
+                    # Find the person to remove
                     person_to_remove = None
                     best_score = 0.0
                     
                     for person in result.get("people", []):
-                        # Try exact match first
                         if person.lower() == old_value.lower():
                             person_to_remove = person
                             best_score = 1.0
                             break
-                        # Then try similarity match
                         score = string_similarity(person.lower(), old_value.lower())
-                        if score > best_score and score >= 0.5:  # Lower threshold for corrections
+                        if score > best_score and score >= 0.5:
                             person_to_remove = person
                             best_score = score
                     
+                    # Remove old person if found
                     if person_to_remove:
-                        # Remove the old person
                         result["people"].remove(person_to_remove)
                         log_event("removed_person_for_correction", removed=person_to_remove)
                         
-                        # Also update roles - find by the actual name that was in the list
+                        # Update roles
                         for role in list(result.get("roles", [])):
                             if isinstance(role, dict) and role.get("name") == person_to_remove:
-                                # Update the role with the new name
                                 role["name"] = new_value
-                                changes.append(f"updated role for '{person_to_remove}' to use new name '{new_value}'")
+                                log_event("updated_role_for_correction", old_name=person_to_remove, new_name=new_value)
                     else:
-                        log_event("person_not_found_for_correction", old=old_value, new=new_value, people_list=result.get("people", []))
+                        log_event("person_not_found_for_correction", old=old_value, new=new_value)
                     
-                    # ALWAYS add the new person (whether we found the old one or not)
-                    if new_value not in result.get("people", []):
-                        result["people"].append(new_value)
-                        changes.append(f"corrected '{old_value}' to '{new_value}'")
-                        log_event("added_corrected_person", new=new_value)
+                    # CRITICAL: Add the new person - this MUST happen
+                    result["people"].append(new_value)
+                    changes.append(f"corrected '{old_value if not person_to_remove else person_to_remove}' to '{new_value}'")
+                    log_event("added_corrected_person", new=new_value, was_added=True)
+                    
+                    # Continue to next correction - don't fall through to other logic
+                    continue
 
                 elif field == "roles":
                     # Interpret as correcting a role for a person
