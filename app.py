@@ -967,7 +967,7 @@ FIELD_PATTERNS = {
     "segment_category": r'^(?:(?:add|insert)\s+)?(?:segments?|section)\s*[:,]?\s*(.+?)\s+category\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "category": r'^(?:(?:add|insert)\s+)?(?:categories?|kategorie|category)\s*[:,]?\s*(.+?)(?:\s*(?:companies|people|tools|services|activities|$))',
     "impression": r'^(?:(?:add|insert)\s+)?(?:impressions?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
-    "people": r'^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s*[:,]?\s*(.+)$',
+    "people": r'^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+)(?:\s*(?:,|\.|$))|^(?:(?:add|insert)\s+)?(?:peoples?|persons?)\s*[:,]?\s*(.+?)(?:\s*(?:,|\.|$))',
     "person_as_role": r'^(?:add\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+(?:\s+[A-Za-z\s\-]+)?)(?:\s*(?:,|\.|$))',
     "add_person_role": r'^add\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+as\s+([A-Za-z\s\-]+)$',
     "role": r'^(?:(?:add|insert)\s+roles?\s+|roles?\s*[:,]?\s*(?:are|is|for)?\s*)?(\w+\s+\w+|\w+)\s+(?:as|is)\s+(.+?)(?:\s*(?:,|\.|$))',
@@ -3173,9 +3173,12 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 print(f"DEBUG: Detected company suffix, using companies field")
                 return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
             
-            # If we can't find it in existing data, just try to correct it as a person
-            # since that's the most common case
-            print(f"DEBUG: Defaulting to people field for correction")
+            # For ambiguous cases (like APEX), try to find it in existing data first
+            # This way we correct it in the right field where it already exists
+            # Since we couldn't find it above, we don't know what field it belongs to
+            # Ask the user to be more specific
+            print(f"DEBUG: Ambiguous correction - couldn't determine field")
+            return {"error": f"Cannot determine if '{old_value}' is a company or person. Please specify: 'correct {old_value} in companies to {new_value}' or 'correct {old_value} in people to {new_value}'"}
             return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
         
         # Special pattern for correcting words within fields
@@ -3345,11 +3348,6 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                 return result
         
         # Try FIELD_PATTERNS first for structured commands
-        # If NLP already extracted data successfully, return it
-        if CONFIG.get("ENABLE_NLP_EXTRACTION", False) and nlp_data:
-            return nlp_data
-            
-        # Try FIELD_PATTERNS first for structured commands
         for field, pattern in FIELD_PATTERNS.items():
             match = re.match(pattern, normalized_text, re.IGNORECASE)
             if match:
@@ -3379,6 +3377,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     companies_text = re.sub(r"^company's\s+", '', companies_text, flags=re.IGNORECASE)
                     companies = [c.strip() for c in re.split(r',|\s+and\s+', companies_text)]
                     result["companies"] = [{"name": company} for company in companies if company]
+                    return result
                 
                 elif field == "tool":
                     # Get the captured text - could be in group 1 or 2
@@ -4244,16 +4243,14 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         if field == "people":
                             role_to_reassign = None
                             role_to_remove = None
-                            # Find the role that exactly matches the name of the person being removed.
                             for r in result.get("roles", []):
-                                if r.get("name") and r["name"].lower() == item_to_remove.lower():
+                                if r.get("name") and string_similarity(r["name"].lower(), item_to_remove.lower()) >= 0.9:
                                     role_to_reassign = r["role"]
                                     role_to_remove = r
-                                    break # Found the exact role, no need to continue
+                                    break
                             if role_to_remove:
                                 result["roles"].remove(role_to_remove)
 
-               
                 # B. Handle dictionary lists like 'companies', 'tools', etc.
                 elif field in DICT_LIST_FIELDS:
                     key_map = {"companies": "name", "tools": "item", "services": "task", "issues": "description"}
@@ -4271,14 +4268,12 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     if item_dict_to_remove:
                         result[field].remove(item_dict_to_remove)
                         deleted = True
-
-            # --- 2. ADD STEP: Add the new or corrected item ---
-            # This block is now correctly indented to apply to all list fields
+            
+            # --- 2. ADD STEP: Add the new, corrected item ---
             if deleted:
-                # The old item was found and removed, now add the new one
                 if field == "people":
                     result[field].append(new_value)
-                    # Re-assign the role to the new name if it existed
+                    # Re-assign the role to the new name
                     if 'role_to_reassign' in locals() and role_to_reassign:
                         result["roles"].append({"name": new_value, "role": role_to_reassign})
                 elif field == "activities":
@@ -4290,40 +4285,28 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 
                 changes.append(f"corrected '{old_value}' to '{new_value}'")
             else:
-                # The old item wasn't found, so add the new item as a new entry
-                log_event("correction_is_new_entry", field=field, old_value=old_value, new_value=new_value)
-                if field == "people":
-                    result[field].append(new_value)
-                elif field == "activities":
-                    result[field].append(new_value)
-                elif field in DICT_LIST_FIELDS:
-                    item_key = {"companies": "name", "tools": "item", "services": "task", "issues": "description"}.get(field)
-                    if item_key:
-                        result[field].append({item_key: new_value})
-                
-                changes.append(f"added '{new_value}' to {field}")
+                log_event("correction_failed_item_not_found", field=field, old_value=old_value)
+        
+        elif field == "people":
+            session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
             
-                elif field == "people":  # This needs to be aligned with the original 'if field == "companies":'
-                    session_data[chat_id]["last_change_history"].append((field, result.get("people", []).copy()))
-                
-                # Delete old person
-                deleted = False
-                for person in list(result.get("people", [])):
-                    if person == old_value:
-                        result["people"].remove(person)
-                        deleted = True
+            # Find and replace the old person name
+            matched = False
+                    for i, person in enumerate(result["people"]):
+                        if string_similarity(person.lower(), old_value.lower()) >= 0.6:
+                            result["people"][i] = new_value
+                            matched = True
+                            changes.append(f"corrected person '{person}' to '{new_value}'")
                             
-                            # Also remove from roles
-                            for role in list(result.get("roles", [])):
-                                if isinstance(role, dict) and role.get("name") == old_value:
-                                    result["roles"].remove(role)
+                            # Also update roles that refer to this person
+                            if "roles" in result:
+                                for role in result["roles"]:
+                                    if (isinstance(role, dict) and role.get("name") and 
+                                        string_similarity(role["name"].lower(), person.lower()) >= 0.6):
+                                        role["name"] = new_value
                             break
                     
-                    # Add new person
-                    if deleted:
-                        result["people"].append(new_value)
-                        changes.append(f"corrected '{old_value}' to '{new_value}'")
-                    else:
+                    if not matched:
                         log_event("person_not_found_for_correction", old=old_value, new=new_value)
                             
                 elif field == "roles":
@@ -4608,9 +4591,6 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             
                     if not already_exists:
                         result[field].append(item)
-                        # IMPORTANT: Add to existing_values so we don't add duplicates in the same operation
-                        existing_values.append(item.lower())
-                        
                         if field == "people":
                             changes.append(f"added person '{item}'")
                         elif field == "activities":
