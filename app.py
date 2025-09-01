@@ -3143,7 +3143,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         log_event("company_comparison", comparing=old_value, with_company=company_name)
                         
                         # Check exact match first (case-insensitive)
-                        if company_name.lower() == old_value.lower():
+                        if company_name.lower().strip() == old_value.lower().strip():
                             log_event("exact_match_found", company=company_name)
                             return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
                         
@@ -3155,15 +3155,16 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                             log_event("partial_match_found", company=company_name, new_name=new_company_name)
                             return {"correct": [{"field": "companies", "old": company_name, "new": new_company_name}]}
                         
+                       
                         # Calculate similarity but only keep the BEST match
                         similarity = string_similarity(company_name.lower(), old_value.lower())
-                        if similarity > best_company_score and similarity >= 0.75:  # Raised threshold from 0.5 to 0.75
+                        if similarity > best_company_score:  # Remove threshold here to find best match
                             best_company_match = company_name
                             best_company_score = similarity
                             log_event("potential_match", company=company_name, score=similarity)
                 
-                # Only return the BEST match if it's good enough
-                if best_company_match and best_company_score >= 0.75:
+                # Only return the BEST match if it's good enough (use 0.65 as compromise)
+                if best_company_match and best_company_score >= 0.65:  # Lowered from 0.75 to 0.65
                     log_event("best_match_selected", company=best_company_match, score=best_company_score)
                     return {"correct": [{"field": "companies", "old": best_company_match, "new": new_value}]}
                 
@@ -4327,7 +4328,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             best_score = score
                 
                 # Only apply correction if we have a strong match (raised from 0.5 to 0.75)
-                if company_to_remove and best_score >= 0.75:
+                if company_to_remove and best_score >= 0.65:  # Lowered from 0.75 to 0.65
                     # Check if new company already exists to prevent duplicates
                     new_company_exists = any(
                         c.get("name", "").lower() == new_value.lower() 
