@@ -4362,6 +4362,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 
                 # A. Handle simple lists like 'people' and 'activities'
                 # For LIST fields, find the best match to remove
+            # For LIST fields, find the best match to remove
             elif field in LIST_FIELDS:
                 session_data[chat_id]["last_change_history"].append((field, result[field].copy()))
                 
@@ -4398,8 +4399,6 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                     break # Found the exact role, no need to continue
                             if role_to_remove:
                                 result["roles"].remove(role_to_remove)
-                                # Store the role to re-add with new name
-                                session_data[chat_id]["_temp_role_reassign"] = role_to_reassign
 
                 # B. Handle dictionary lists like 'companies', 'tools', etc.
                 elif field in DICT_LIST_FIELDS:
@@ -4421,24 +4420,25 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
             
             
                     # --- 2. ADD STEP: Add the new, corrected item ---
+                    # --- 2. ADD STEP: Add the new, corrected item ---
                     if deleted:
                         if field == "people":
+                            # Add the new person
                             result[field].append(new_value)
-                            # Re-assign the role to the new name if we stored it
-                            if session_data[chat_id].get("_temp_role_reassign"):
-                                result["roles"].append({"name": new_value, "role": session_data[chat_id]["_temp_role_reassign"]})
-                                del session_data[chat_id]["_temp_role_reassign"]
-                            # Also check if role_to_reassign exists in local scope
-                            elif 'role_to_reassign' in locals() and role_to_reassign:
+                            changes.append(f"corrected '{old_value}' to '{new_value}'")
+                            
+                            # Re-assign the role to the new name if there was one
+                            if 'role_to_reassign' in locals() and role_to_reassign:
                                 result["roles"].append({"name": new_value, "role": role_to_reassign})
+                                changes.append(f"reassigned role '{role_to_reassign}' to '{new_value}'")
                         elif field == "activities":
                             result[field].append(new_value)
+                            changes.append(f"corrected '{old_value}' to '{new_value}'")
                         elif field in DICT_LIST_FIELDS:
                             item_key = {"companies": "name", "tools": "item", "services": "task", "issues": "description"}.get(field)
                             if item_key:
                                 result[field].append({item_key: new_value})
-                        
-                        changes.append(f"corrected '{old_value}' to '{new_value}'")
+                                changes.append(f"corrected '{old_value}' to '{new_value}'")
                     else:
                         log_event("correction_failed_item_not_found", field=field, old_value=old_value)
                 
