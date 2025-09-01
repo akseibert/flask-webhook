@@ -4054,7 +4054,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
             # Log the deletion
             log_event("deleted_category", category=category)
             # Don't return here - let the function continue to the end
-            return result
+            deleted_something = True
         
         if not value and not category:
             return result  # Nothing to delete
@@ -4086,20 +4086,47 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
             
             elif category == "people":
                 # Handle people (and also remove from roles)
+                person_to_delete = None
+                best_score = 0.0
+                
+                # First check for EXACT match
                 for person in list(result["people"]):
-                    if string_similarity(person.lower(), value_lower) >= 0.6:
-                        session_data[chat_id]["last_change_history"].append(("people", existing_data["people"].copy()))
-                        result["people"].remove(person)
-                        
-                        # Also remove from roles
-                        if "roles" in result:
-                            session_data[chat_id]["last_change_history"].append(("roles", existing_data.get("roles", []).copy()))
-                            result["roles"] = [r for r in result["roles"] 
-                                            if not (isinstance(r, dict) and "name" in r and 
-                                                    string_similarity(r["name"].lower(), person.lower()) >= 0.6)]
-                        changes.append(f"removed person '{person}' and their roles")
-                        deleted_something = True
+                    if person.lower() == value_lower:
+                        person_to_delete = person
+                        best_score = 1.0
                         break
+                
+                # Only if no exact match, look for close matches
+                if not person_to_delete:
+                    for person in list(result["people"]):
+                        score = string_similarity(person.lower(), value_lower)
+                        # Only consider very high similarity (raised threshold)
+                        if score > best_score and score >= 0.85:  # Raised from 0.6 to 0.85
+                            person_to_delete = person
+                            best_score = score
+                
+                # Only delete if we found a strong match
+                if person_to_delete:
+                    session_data[chat_id]["last_change_history"].append(("people", existing_data["people"].copy()))
+                    result["people"].remove(person_to_delete)
+                    
+                    # Also remove from roles
+                    if "roles" in result:
+                        session_data[chat_id]["last_change_history"].append(("roles", existing_data.get("roles", []).copy()))
+                        result["roles"] = [r for r in result["roles"] 
+                                        if not (isinstance(r, dict) and "name" in r and 
+                                                r["name"].lower() == person_to_delete.lower())]
+                    
+                    changes.append(f"removed person '{person_to_delete}' and their roles")
+                    deleted_something = True
+                    log_event("person_deleted", 
+                             requested=value,
+                             actual_deleted=person_to_delete,
+                             score=best_score)
+                else:
+                    log_event("person_not_found_for_deletion", 
+                             requested=value,
+                             people_in_report=result.get("people", []))
             
             elif category == "companies":
                 # Handle companies
