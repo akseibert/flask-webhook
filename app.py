@@ -3036,22 +3036,13 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
         
         # Try NLP extraction if enabled and text doesn't look like a command
-        elif CONFIG.get("ENABLE_NLP_EXTRACTION", False):
-                        
-                        # For scalar fields with partial matches
-                        if field_name in SCALAR_FIELDS and old_value.lower() in exact_value.lower():
-                            # Replace the word within the field value
-                            new_field_value = re.sub(re.escape(old_value), new_value, exact_value, flags=re.IGNORECASE)
-                            return {"correct": [{"field": field_name, "old": exact_value, "new": new_field_value}]}
-                        else:
-                            # For exact matches or list fields
-                            return {"correct": [{"field": field_name, "old": exact_value, "new": new_value}]}
-                
-                # If we can't find the field, default based on content
-                if any(suffix in new_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
-                    return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
-                else:
-                    return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
+        if CONFIG.get("ENABLE_NLP_EXTRACTION", False):
+            # Skip NLP for obvious commands (now including "correct")
+            if not re.match(r'^(?:yes|no|help|new|reset|undo|export|summarize|detailed|delete|clear)\b', normalized_text.lower()):
+                nlp_data, confidence = extract_with_nlp(text)
+                if confidence >= CONFIG.get("NLP_EXTRACTION_CONFIDENCE_THRESHOLD", 0.7):
+                    log_event("using_nlp_extraction", confidence=confidence, fields=list(nlp_data.keys()))
+                    return nlp_data
             
             # Skip NLP entirely for correction commands
         # Try NLP extraction if enabled and text doesn't look like a command
