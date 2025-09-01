@@ -3081,6 +3081,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         
        
         # Universal spelling correction handler - MUST BE CHECKED EARLY
+        # Universal spelling correction handler - MUST BE CHECKED EARLY
         simple_correct = re.match(r'^correct\s+spelling\s+(?:of\s+)?(.+?)\s+to\s+(.+?)$', normalized_text, re.IGNORECASE)
         if simple_correct:
             old_value = simple_correct.group(1).strip()
@@ -3108,7 +3109,22 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         elif string_similarity(field_value.lower(), old_value.lower()) >= 0.7:
                             return {"correct": [{"field": field, "old": field_value, "new": new_value}]}
                 
-             
+                # Check people list with better matching
+                for person in existing_data.get("people", []):
+                    # Check for partial match first
+                    if old_value.lower() in person.lower():
+                        return {"correct": [{"field": "people", "old": person, "new": person.replace(old_value, new_value)}]}
+                    # Then check similarity with 70% threshold
+                    if string_similarity(person.lower(), old_value.lower()) >= 0.7:
+                        return {"correct": [{"field": "people", "old": person, "new": new_value}]}
+                
+                # Check activities list
+                for activity in existing_data.get("activities", []):
+                    if old_value.lower() in activity.lower():
+                        return {"correct": [{"field": "activities", "old": activity, "new": activity.replace(old_value, new_value)}]}
+                    if string_similarity(activity.lower(), old_value.lower()) >= 0.7:
+                        return {"correct": [{"field": "activities", "old": activity, "new": new_value}]}
+                
                 # Check companies (with or without suffix)
                 for company in existing_data.get("companies", []):
                     if isinstance(company, dict) and company.get("name"):
@@ -3130,42 +3146,39 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                             log_event("exact_match_found", company=company_name)
                             return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
                         
-                        # Check similarity with 70% threshold
+                        # Check similarity with 50% threshold for companies
                         similarity = string_similarity(company_name.lower(), old_value.lower())
-                        if similarity >= 0.7:
+                        if similarity >= 0.5:
                             log_event("similarity_match_found", company=company_name, score=similarity)
                             return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
                 
-                # Check people
-                for person in existing_data.get("people", []):
-                    # Check for partial match first
-                    if old_value.lower() in person.lower():
-                        import re as regex
-                        new_person_name = regex.sub(re.escape(old_value), new_value, person, flags=re.IGNORECASE)
-                        return {"correct": [{"field": "people", "old": person, "new": new_person_name}]}
-                    # Then check similarity with 70% threshold
-                    if string_similarity(person.lower(), old_value.lower()) >= 0.7:
-                        return {"correct": [{"field": "people", "old": person, "new": new_value}]}
+                # Check tools
+                for tool in existing_data.get("tools", []):
+                    if isinstance(tool, dict) and tool.get("item"):
+                        tool_name = tool["item"]
+                        if old_value.lower() in tool_name.lower():
+                            return {"correct": [{"field": "tools", "old": tool_name, "new": tool_name.replace(old_value, new_value)}]}
+                        if string_similarity(tool_name.lower(), old_value.lower()) >= 0.6:
+                            return {"correct": [{"field": "tools", "old": tool_name, "new": new_value}]}
                 
-                # Check other list fields
-                for field in ["tools", "services", "activities", "issues"]:
-                    items = existing_data.get(field, [])
-                    for item in items:
-                        item_text = ""
-                        if isinstance(item, dict):
-                            if field == "tools":
-                                item_text = item.get("item", "")
-                            elif field == "services":
-                                item_text = item.get("task", "")
-                            elif field == "issues":
-                                item_text = item.get("description", "")
-                        else:
-                            item_text = item
-                        
-                        if item_text and string_similarity(item_text.lower(), old_value.lower()) >= 0.7:
-                            return {"correct": [{"field": field, "old": item_text, "new": new_value}]}
+                # Check services
+                for service in existing_data.get("services", []):
+                    if isinstance(service, dict) and service.get("task"):
+                        service_name = service["task"]
+                        if old_value.lower() in service_name.lower():
+                            return {"correct": [{"field": "services", "old": service_name, "new": service_name.replace(old_value, new_value)}]}
+                        if string_similarity(service_name.lower(), old_value.lower()) >= 0.6:
+                            return {"correct": [{"field": "services", "old": service_name, "new": new_value}]}
+                
+                # Check issues
+                for issue in existing_data.get("issues", []):
+                    if isinstance(issue, dict) and issue.get("description"):
+                        issue_desc = issue["description"]
+                        if old_value.lower() in issue_desc.lower():
+                            return {"correct": [{"field": "issues", "old": issue_desc, "new": issue_desc.replace(old_value, new_value)}]}
+                        if string_similarity(issue_desc.lower(), old_value.lower()) >= 0.6:
+                            return {"correct": [{"field": "issues", "old": issue_desc, "new": new_value}]}
             
-        
             # If we can't auto-detect, try to guess by the content
             # Check for company suffixes
             if any(suffix in new_value.upper() or suffix in old_value.upper() 
@@ -4205,240 +4218,189 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 log_event("skipping_invalid_correction", correction=correction)
                 continue
 
-            # --- 1. DELETE STEP: Find and remove the old item ---
-            deleted = False
+            # Save state for undo
+            if field in existing_data:
+                if field in LIST_FIELDS:
+                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
+                elif field in SCALAR_FIELDS:
+                    session_data[chat_id]["last_change_history"].append((field, existing_data[field]))
+
             old_value_lower = old_value.lower()
+            corrected = False
             
-            # For SCALAR fields, this is a simple replacement
+            # For SCALAR fields, simple replacement
             if field in SCALAR_FIELDS and field in result:
-                session_data[chat_id]["last_change_history"].append((field, result[field]))
-                # Replace the entire field value if it's a close enough match
+                # Check for exact or partial match
                 if string_similarity(result[field].lower(), old_value_lower) >= 0.7:
                     result[field] = new_value
-                    changes.append(f"corrected {field} from '{result[field]}' to '{new_value}'")
-                else: # Handle partial word correction within the string
-                    # Use regex to replace case-insensitively
-                    result[field] = re.sub(re.escape(old_value), new_value, result[field], flags=re.IGNORECASE)
+                    changes.append(f"corrected {field} from '{old_value}' to '{new_value}'")
+                    corrected = True
+                elif old_value_lower in result[field].lower():
+                    # Partial word replacement
+                    import re as regex
+                    result[field] = regex.sub(re.escape(old_value), new_value, result[field], flags=re.IGNORECASE)
                     changes.append(f"corrected '{old_value}' to '{new_value}' in {field}")
+                    corrected = True
                 continue
 
-            # For LIST fields, find the best match to remove
-            elif field in LIST_FIELDS:
-                session_data[chat_id]["last_change_history"].append((field, result[field].copy()))
+            # For LIST fields - DELETE then ADD approach
+            if field == "people":
+                # Find and remove old person
+                person_to_remove = None
+                best_score = 0.6
                 
-                # A. Handle simple lists like 'people' and 'activities'
-                if field in SIMPLE_LIST_FIELDS:
-                    item_to_remove = None
-                    best_score = 0.6  # Similarity threshold
-                    for item in result.get(field, []):
-                        score = string_similarity(item.lower(), old_value_lower)
-                        if score > best_score:
-                            item_to_remove = item
-                            best_score = score
+                for person in result.get("people", []):
+                    score = string_similarity(person.lower(), old_value_lower)
+                    if score > best_score:
+                        person_to_remove = person
+                        best_score = score
+                
+                if person_to_remove:
+                    result["people"].remove(person_to_remove)
+                    result["people"].append(new_value)
                     
-                    if item_to_remove:
-                        result[field].remove(item_to_remove)
-                        deleted = True
-                        
-                        # Special handling for people: find their role to re-assign later
-                        if field == "people":
-                            role_to_reassign = None
-                            role_to_remove = None
-                            # Find the role that exactly matches the name of the person being removed.
-                            for r in result.get("roles", []):
-                                if r.get("name") and r["name"].lower() == item_to_remove.lower():
-                                    role_to_reassign = r["role"]
-                                    role_to_remove = r
-                                    break # Found the exact role, no need to continue
-                            if role_to_remove:
-                                result["roles"].remove(role_to_remove)
+                    # Also update in roles if exists
+                    for role in result.get("roles", []):
+                        if isinstance(role, dict) and role.get("name") == person_to_remove:
+                            role["name"] = new_value
+                    
+                    changes.append(f"corrected person '{old_value}' to '{new_value}'")
+                    corrected = True
 
-                # B. Handle dictionary lists like 'companies', 'tools', etc.
-                elif field in DICT_LIST_FIELDS:
-                    key_map = {"companies": "name", "tools": "item", "services": "task", "issues": "description"}
-                    item_key = key_map.get(field)
-                    item_dict_to_remove = None
-                    best_score = 0.6 # Similarity threshold
-                    
-                    for item_dict in result.get(field, []):
-                        current_val = item_dict.get(item_key, "")
-                        score = string_similarity(current_val.lower(), old_value_lower)
-                        if score > best_score:
-                            item_dict_to_remove = item_dict
-                            best_score = score
-                    
-                    if item_dict_to_remove:
-                        result[field].remove(item_dict_to_remove)
-                        deleted = True
-            
-            # --- 2. ADD STEP: Add the new, corrected item ---
-                    if deleted:
-                        if field == "people":
-                            result[field].append(new_value)
-                            # Re-assign the role to the new name
-                            if 'role_to_reassign' in locals() and role_to_reassign:
-                                result["roles"].append({"name": new_value, "role": role_to_reassign})
-                        elif field == "activities":
-                            result[field].append(new_value)
-                        elif field in DICT_LIST_FIELDS:
-                            item_key = {"companies": "name", "tools": "item", "services": "task", "issues": "description"}.get(field)
-                            if item_key:
-                                result[field].append({item_key: new_value})
-                        
-                        changes.append(f"corrected '{old_value}' to '{new_value}'")
-                    else:
-                        log_event("correction_failed_item_not_found", field=field, old_value=old_value)
+            elif field == "activities":
+                # Find and replace activity
+                activity_to_remove = None
+                best_score = 0.6
                 
-                elif field == "people":
-                    session_data[chat_id]["last_change_history"].append((field, result.get("people", []).copy()))
-                    
-                    # Delete old person
-                    deleted = False
-                    for person in list(result.get("people", [])):
-                        if person == old_value:
-                            result["people"].remove(person)
-                            deleted = True
+                for i, activity in enumerate(result.get("activities", [])):
+                    score = string_similarity(activity.lower(), old_value_lower)
+                    if score > best_score:
+                        activity_to_remove = i
+                        best_score = score
+                
+                if activity_to_remove is not None:
+                    result["activities"][activity_to_remove] = new_value
+                    changes.append(f"corrected activity '{old_value}' to '{new_value}'")
+                    corrected = True
+
+            elif field == "companies":
+                # Find and replace company
+                company_to_remove = None
+                best_score = 0.5  # Lower threshold for companies
+                
+                for company in result.get("companies", []):
+                    if isinstance(company, dict) and company.get("name"):
+                        score = string_similarity(company["name"].lower(), old_value_lower)
+                        # Also check if old_value is part of company name
+                        if old_value_lower in company["name"].lower():
+                            score = max(score, 0.8)
+                        if score > best_score:
+                            company_to_remove = company
+                            best_score = score
+                
+                if company_to_remove:
+                    result["companies"].remove(company_to_remove)
+                    result["companies"].append({"name": new_value})
+                    changes.append(f"corrected company '{old_value}' to '{new_value}'")
+                    corrected = True
+
+            elif field == "tools":
+                # Find and replace tool
+                tool_to_remove = None
+                best_score = 0.6
+                
+                for tool in result.get("tools", []):
+                    if isinstance(tool, dict) and tool.get("item"):
+                        score = string_similarity(tool["item"].lower(), old_value_lower)
+                        if score > best_score:
+                            tool_to_remove = tool
+                            best_score = score
+                
+                if tool_to_remove:
+                    result["tools"].remove(tool_to_remove)
+                    result["tools"].append({"item": new_value})
+                    changes.append(f"corrected tool '{old_value}' to '{new_value}'")
+                    corrected = True
+
+            elif field == "services":
+                # Find and replace service
+                service_to_remove = None
+                best_score = 0.6
+                
+                for service in result.get("services", []):
+                    if isinstance(service, dict) and service.get("task"):
+                        score = string_similarity(service["task"].lower(), old_value_lower)
+                        if score > best_score:
+                            service_to_remove = service
+                            best_score = score
+                
+                if service_to_remove:
+                    result["services"].remove(service_to_remove)
+                    result["services"].append({"task": new_value})
+                    changes.append(f"corrected service '{old_value}' to '{new_value}'")
+                    corrected = True
+
+            elif field == "issues":
+                # Find and replace issue - PRESERVE PHOTO STATUS
+                issue_to_remove = None
+                best_score = 0.6
+                has_photo = False  # Important: preserve photo status
+                caused_by = None   # Preserve caused_by if exists
+                
+                for issue in result.get("issues", []):
+                    if isinstance(issue, dict) and issue.get("description"):
+                        score = string_similarity(issue["description"].lower(), old_value_lower)
+                        if score > best_score:
+                            issue_to_remove = issue
+                            best_score = score
+                            has_photo = issue.get("has_photo", False)  # Preserve photo status
+                            caused_by = issue.get("caused_by")  # Preserve caused_by
+                
+                if issue_to_remove:
+                    result["issues"].remove(issue_to_remove)
+                    # Add new issue with preserved photo status
+                    new_issue = {"description": new_value, "has_photo": has_photo}
+                    if caused_by:
+                        new_issue["caused_by"] = caused_by
+                    result["issues"].append(new_issue)
+                    changes.append(f"corrected issue '{old_value}' to '{new_value}'")
+                    corrected = True
+
+            elif field == "roles":
+                # Special handling for roles - can correct either name or role title
+                role_corrected = False
+                
+                for role in result.get("roles", []):
+                    if isinstance(role, dict):
+                        # Check if correcting the person's name
+                        if role.get("name") and string_similarity(role["name"].lower(), old_value_lower) >= 0.6:
+                            old_name = role["name"]
+                            role["name"] = new_value
                             
-                            # Also remove from roles
-                            for role in list(result.get("roles", [])):
-                                if isinstance(role, dict) and role.get("name") == old_value:
-                                    result["roles"].remove(role)
+                            # Also update in people list
+                            if old_name in result.get("people", []):
+                                people_idx = result["people"].index(old_name)
+                                result["people"][people_idx] = new_value
+                            
+                            changes.append(f"corrected person name in role from '{old_value}' to '{new_value}'")
+                            role_corrected = True
                             break
-                    
-                    # Add new person
-                    if deleted:
-                        result["people"].append(new_value)
-                        changes.append(f"corrected '{old_value}' to '{new_value}'")
-                    else:
-                        log_event("person_not_found_for_correction", old=old_value, new=new_value)
-                            
-                elif field == "roles":
-                    # Interpret as correcting a role for a person
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
-                    matched = False
-                    for role in result[field]:
-                        if (isinstance(role, dict) and role.get("name") and 
-                            string_similarity(role["name"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
+                        
+                        # Check if correcting the role title
+                        elif role.get("role") and string_similarity(role["role"].lower(), old_value_lower) >= 0.6:
                             role["role"] = new_value.title()
-                            matched = True
-                            changes.append(f"corrected role for '{old_value}' to '{new_value}'")
+                            changes.append(f"corrected role title from '{old_value}' to '{new_value}'")
+                            role_corrected = True
                             break
-                    
-                    if not matched:
-                        # If no exact match, try finding the person elsewhere
-                        person_name = None
-                        for person in result["people"]:
-                            if string_similarity(person.lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                                person_name = person
-                                break
-                        
-                        if person_name:
-                            # Add this person with the new role
-                            result[field].append({"name": person_name, "role": new_value.title()})
-                            changes.append(f"added role '{new_value}' for '{person_name}'")
-                        else:
-                            # Add both the person and role
-                            result["people"].append(old_value)
-                            result[field].append({"name": old_value, "role": new_value.title()})
-                            changes.append(f"added person '{old_value}' with role '{new_value}'")
-                            
-          
-                elif field == "companies":
-                    # Save history for undo
-                    if "companies" in existing_data:
-                        session_data[chat_id]["last_change_history"].append(("companies", existing_data["companies"].copy()))
-                    
-                    matched = False
-                    
-                    # First, check if old_value exists in the current companies
-                    company_found = False
-                    for company in result.get("companies", []):
-                        if isinstance(company, dict) and company.get("name"):
-                            if old_value in company["name"] or company["name"] == old_value:
-                                company_found = True
-                                break
-                    
-                    if not company_found:
-                        # If the company to correct doesn't exist, add it with the new value
-                        if "companies" not in result:
-                            result["companies"] = []
-                        result["companies"].append({"name": new_value})
-                        changes.append(f"added company '{new_value}'")
-                        log_event("added_company_during_correction", new=new_value)
-                        continue
-                  
-                    # Process each company in the result
-                    for i, company in enumerate(result.get("companies", [])):
-                        # This loop should have the company processing logic
-                        pass  # Add this if there's no processing logic yet
-                    
-                elif field == "tools":
-                    
-                    matched = False
-                    for i, tool in enumerate(result[field]):
-                        if (isinstance(tool, dict) and tool.get("item") and 
-                            string_similarity(tool["item"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
-                            tool["item"] = new_value
-                            matched = True
-                            changes.append(f"corrected tool '{old_value}' to '{new_value}'")
-                            break
-                    
-                    if not matched:
-                        # If no match, add the new tool
-                        result[field].append({"item": new_value})
-                        changes.append(f"added corrected tool '{new_value}'")
-                        
-                elif field == "services":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
-                    matched = False
-                    for i, service in enumerate(result[field]):
-                        if (isinstance(service, dict) and service.get("task") and 
-                            string_similarity(service["task"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
-                            service["task"] = new_value
-                            matched = True
-                            changes.append(f"corrected service '{old_value}' to '{new_value}'")
-                            break
-                    
-                    if not matched:
-                        # If no match, add the new service
-                        result[field].append({"task": new_value})
-                        changes.append(f"added corrected service '{new_value}'")
-                        
-                elif field == "activities":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
-                    matched = False
-                    for i, activity in enumerate(result[field]):
-                        if string_similarity(activity.lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]:
-                            result[field][i] = new_value
-                            matched = True
-                            changes.append(f"corrected activity '{old_value}' to '{new_value}'")
-                            break
-                    
-                    if not matched:
-                        # If no match, add the new activity
-                        result[field].append(new_value)
-                        changes.append(f"added corrected activity '{new_value}'")
-                        
-                elif field == "issues":
-                    session_data[chat_id]["last_change_history"].append((field, existing_data[field].copy()))
-                    
-                    matched = False
-                    for i, issue in enumerate(result[field]):
-                        if (isinstance(issue, dict) and issue.get("description") and 
-                            string_similarity(issue["description"].lower(), old_value.lower()) >= CONFIG["NAME_SIMILARITY_THRESHOLD"]):
-                            issue["description"] = new_value
-                            matched = True
-                            changes.append(f"corrected issue '{old_value}' to '{new_value}'")
-                            break
-                    
-                    if not matched:
-                        # If no match, add the new issue
-                        has_photo = "photo" in old_value.lower() or "photo" in new_value.lower()
-                        result[field].append({"description": new_value, "has_photo": has_photo})
-                        changes.append(f"added corrected issue '{new_value}'")
+                
+                corrected = role_corrected
+
+            # Log if correction failed
+            if not corrected:
+                log_event("correction_failed_item_not_found", 
+                         field=field, 
+                         old_value=old_value,
+                         new_value=new_value)
     
     # Regular field updates
     for field in new_data:
