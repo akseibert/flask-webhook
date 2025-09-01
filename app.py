@@ -3239,13 +3239,12 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         # Log what we're comparing
                         log_event("company_comparison", comparing=old_value, with_company=company_name)
                         
+                        
                         # Check for partial match (word within company name)
                         if old_value.lower() in company_name.lower():
-                            # Replace the word within the company name
-                            import re as regex
-                            new_company_name = regex.sub(re.escape(old_value), new_value, company_name, flags=re.IGNORECASE)
-                            log_event("partial_match_found", company=company_name, new_name=new_company_name)
-                            return {"correct": [{"field": "companies", "old": company_name, "new": new_company_name}]}
+                            # If a partial match is found, replace the ENTIRE old name with the new one.
+                            log_event("partial_match_found", company=company_name, new_name=new_value)
+                            return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
                         
                         # Check exact match (case-insensitive)
                         if company_name.lower() == old_value.lower():
@@ -4313,21 +4312,11 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
             new_data.pop(field)
     
   
-    # Handle correcting values using a "delete then add" strategy for robustness
+
     # Handle correcting values using a "delete then add" strategy for robustness
     if "correct" in new_data:
         corrections = new_data.pop("correct")
         log_event("processing_corrections_as_delete_add", corrections=corrections)
-        
-        # IMPORTANT: Remove any other fields that might have been incorrectly added
-        # This prevents the new name from being added as a separate person
-        for correction in corrections:
-            if correction.get("field") == "people" and "people" in new_data:
-                # Remove the new name if it was incorrectly added to people list
-                new_name = correction.get("new")
-                if new_name and new_name in new_data.get("people", []):
-                    new_data["people"].remove(new_name)
-                    log_event("removed_incorrectly_added_person", person=new_name)
 
         for correction in corrections:
             field = correction.get("field")
@@ -4340,20 +4329,63 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
 
             # --- 1. DELETE STEP: Find and remove the old item ---
             deleted = False
-            old_value_lower = old_value.lower()
             
             # For SCALAR fields, this is a simple replacement
             if field in SCALAR_FIELDS and field in result:
                 session_data[chat_id]["last_change_history"].append((field, result[field]))
-                # Replace the entire field value if it's a close enough match
-                if string_similarity(result[field].lower(), old_value_lower) >= 0.7:
-                    result[field] = new_value
-                    changes.append(f"corrected {field} from '{result[field]}' to '{new_value}'")
-                else: # Handle partial word correction within the string
-                    # Use regex to replace case-insensitively
-                    result[field] = re.sub(re.escape(old_value), new_value, result[field], flags=re.IGNORECASE)
-                    changes.append(f"corrected '{old_value}' to '{new_value}' in {field}")
-                continue
+                result[field] = re.sub(re.escape(old_value), new_value, result[field], flags=re.IGNORECASE)
+                changes.append(f"corrected '{old_value}' to '{new_value}' in {field}")
+                continue # Move to the next correction
+
+            # For LIST fields, find the best match to remove
+            elif field in LIST_FIELDS:
+                session_data[chat_id]["last_change_history"].append((field, result[field].copy()))
+                item_to_remove = None
+
+                # Find the exact item to remove (extract_fields should provide the correct old_value)
+                for item in result.get(field, []):
+                    current_val = ""
+                    if isinstance(item, dict):
+                        key_map = {"companies": "name", "tools": "item", "services": "task", "issues": "description", "roles": "name"}
+                        current_val = item.get(key_map.get(field), "")
+                    else: # Simple list like people, activities
+                        current_val = item
+                    
+                    if current_val.lower() == old_value.lower():
+                        item_to_remove = item
+                        break
+                
+                if item_to_remove:
+                    result[field].remove(item_to_remove)
+                    deleted = True
+                    # Special handling for people: also remove their role entry
+                    if field == "people":
+                        role_to_reassign = None
+                        role_to_remove = None
+                        for r in result.get("roles", []):
+                            if r.get("name") and r["name"].lower() == item_to_remove.lower():
+                                role_to_reassign = r["role"]
+                                role_to_remove = r
+                                break
+                        if role_to_remove:
+                            result["roles"].remove(role_to_remove)
+            
+            # --- 2. ADD STEP: Add the new, corrected item ---
+            if deleted:
+                if field == "people":
+                    result[field].append(new_value)
+                    if 'role_to_reassign' in locals() and role_to_reassign:
+                        result["roles"].append({"name": new_value, "role": role_to_reassign})
+                elif field == "activities":
+                    result[field].append(new_value)
+                elif field in DICT_LIST_FIELDS:
+                    item_key = {"companies": "name", "tools": "item", "services": "task", "issues": "description"}.get(field)
+                    if item_key:
+                        result[field].append({item_key: new_value})
+                
+                changes.append(f"corrected '{old_value}' to '{new_value}'")
+            else:
+                log_event("correction_failed_item_not_found", field=field, old_value=old_value)
 
             
             # For LIST fields, find the best match to remove
