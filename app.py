@@ -3126,6 +3126,10 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         return {"correct": [{"field": "activities", "old": activity, "new": new_value}]}
                 
                 # Check companies (with or without suffix)
+                # Check companies (with or without suffix)
+                best_company_match = None
+                best_company_score = 0.0
+                
                 for company in existing_data.get("companies", []):
                     if isinstance(company, dict) and company.get("name"):
                         company_name = company["name"]
@@ -3133,24 +3137,30 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                         # Log what we're comparing
                         log_event("company_comparison", comparing=old_value, with_company=company_name)
                         
+                        # Check exact match first (case-insensitive)
+                        if company_name.lower() == old_value.lower():
+                            log_event("exact_match_found", company=company_name)
+                            return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
+                        
                         # Check for partial match (word within company name)
                         if old_value.lower() in company_name.lower():
-                            # Replace the word within the company name
+                            # This is a partial match - keep track but continue looking for exact match
                             import re as regex
                             new_company_name = regex.sub(re.escape(old_value), new_value, company_name, flags=re.IGNORECASE)
                             log_event("partial_match_found", company=company_name, new_name=new_company_name)
                             return {"correct": [{"field": "companies", "old": company_name, "new": new_company_name}]}
                         
-                        # Check exact match (case-insensitive)
-                        if company_name.lower() == old_value.lower():
-                            log_event("exact_match_found", company=company_name)
-                            return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
-                        
-                        # Check similarity with 50% threshold for companies
+                        # Calculate similarity but only keep the BEST match
                         similarity = string_similarity(company_name.lower(), old_value.lower())
-                        if similarity >= 0.5:
-                            log_event("similarity_match_found", company=company_name, score=similarity)
-                            return {"correct": [{"field": "companies", "old": company_name, "new": new_value}]}
+                        if similarity > best_company_score and similarity >= 0.75:  # Raised threshold from 0.5 to 0.75
+                            best_company_match = company_name
+                            best_company_score = similarity
+                            log_event("potential_match", company=company_name, score=similarity)
+                
+                # Only return the BEST match if it's good enough
+                if best_company_match and best_company_score >= 0.75:
+                    log_event("best_match_selected", company=best_company_match, score=best_company_score)
+                    return {"correct": [{"field": "companies", "old": best_company_match, "new": new_value}]}
                 
                 # Check tools
                 for tool in existing_data.get("tools", []):
@@ -4284,25 +4294,57 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     corrected = True
 
             elif field == "companies":
-                # Find and replace company
+                # Find and replace company - use exact or very close match only
                 company_to_remove = None
-                best_score = 0.5  # Lower threshold for companies
+                best_score = 0.0
                 
                 for company in result.get("companies", []):
                     if isinstance(company, dict) and company.get("name"):
-                        score = string_similarity(company["name"].lower(), old_value_lower)
-                        # Also check if old_value is part of company name
-                        if old_value_lower in company["name"].lower():
-                            score = max(score, 0.8)
+                        company_name = company["name"]
+                        
+                        # Exact match (case-insensitive) - immediately use this
+                        if company_name.lower() == old_value_lower:
+                            company_to_remove = company
+                            best_score = 1.0
+                            break  # Found exact match, stop looking
+                        
+                        # Check if old_value is part of company name (partial match)
+                        if old_value_lower in company_name.lower() and len(old_value_lower) > 3:
+                            # For partial matches, set high score
+                            score = 0.9
+                        else:
+                            # Calculate similarity
+                            score = string_similarity(company_name.lower(), old_value_lower)
+                        
+                        # Only consider if score is better than current best
                         if score > best_score:
                             company_to_remove = company
                             best_score = score
                 
-                if company_to_remove:
-                    result["companies"].remove(company_to_remove)
-                    result["companies"].append({"name": new_value})
-                    changes.append(f"corrected company '{old_value}' to '{new_value}'")
+                # Only apply correction if we have a strong match (raised from 0.5 to 0.75)
+                if company_to_remove and best_score >= 0.75:
+                    # Check if new company already exists to prevent duplicates
+                    new_company_exists = any(
+                        c.get("name", "").lower() == new_value.lower() 
+                        for c in result.get("companies", []) 
+                        if isinstance(c, dict)
+                    )
+                    
+                    if not new_company_exists:
+                        result["companies"].remove(company_to_remove)
+                        result["companies"].append({"name": new_value})
+                        changes.append(f"corrected company '{company_to_remove.get('name')}' to '{new_value}'")
+                    else:
+                        # New company already exists, just remove the old one
+                        result["companies"].remove(company_to_remove)
+                        changes.append(f"removed duplicate company '{company_to_remove.get('name')}' (already have '{new_value}')")
+                    
                     corrected = True
+                else:
+                    log_event("company_correction_failed_low_score", 
+                             old_value=old_value, 
+                             best_match=company_to_remove.get("name") if company_to_remove else None,
+                             best_score=best_score)
 
             elif field == "tools":
                 # Find and replace tool
