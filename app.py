@@ -4371,6 +4371,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             result["roles"].remove(role_to_remove)
             
             # --- 2. ADD STEP: Add the new, corrected item ---
+            # --- 2. ADD STEP: Add the new, corrected item ---
             if deleted:
                 if field == "people":
                     result[field].append(new_value)
@@ -4386,17 +4387,10 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 changes.append(f"corrected '{old_value}' to '{new_value}'")
             else:
                 log_event("correction_failed_item_not_found", field=field, old_value=old_value)
-
-            
-            # For LIST fields, find the best match to remove
-            elif field in LIST_FIELDS:
-                session_data[chat_id]["last_change_history"].append((field, result[field].copy()))
-                
-                # A. Handle simple lists like 'people' and 'activities'
-                # For LIST fields, find the best match to remove
-            # For LIST fields, find the best match to remove
-            elif field in LIST_FIELDS:
-                session_data[chat_id]["last_change_history"].append((field, result[field].copy()))
+        
+        # B. Handle dictionary lists like 'companies', 'tools', etc.
+                elif field in DICT_LIST_FIELDS:
+                    session_data[chat_id]["last_change_history"].append((field, result[field].copy()))
                 
                 # A. Handle simple lists like 'people' and 'activities'
                 if field in SIMPLE_LIST_FIELDS:
