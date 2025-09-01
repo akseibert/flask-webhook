@@ -4327,7 +4327,8 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                             company_to_remove = company
                             best_score = score
                 
-                # Only apply correction if we have a strong match (raised from 0.5 to 0.75)
+             
+                # Only apply correction if we have a strong match (use 0.65 as compromise)
                 if company_to_remove and best_score >= 0.65:  # Lowered from 0.75 to 0.65
                     # Check if new company already exists to prevent duplicates
                     new_company_exists = any(
@@ -4346,6 +4347,19 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         changes.append(f"removed duplicate company '{company_to_remove.get('name')}' (already have '{new_value}')")
                     
                     corrected = True
+                    # ADD THIS LOGGING HERE
+                    log_event("company_correction_successful", 
+                             removed=company_to_remove.get("name"),
+                             added=new_value,
+                             score=best_score,
+                             was_duplicate=new_company_exists)
+                else:
+                    # ADD THIS LOGGING FOR FAILED CORRECTIONS
+                    log_event("company_correction_failed_low_score", 
+                             old_value=old_value, 
+                             best_match=company_to_remove.get("name") if company_to_remove else None,
+                             best_score=best_score,
+                             threshold=0.65)
                 else:
                     log_event("company_correction_failed_low_score", 
                              old_value=old_value, 
@@ -5378,7 +5392,11 @@ def process_chained_commands(text: str, chat_id: str) -> List[Dict[str, Any]]:
 def webhook() -> tuple[str, int]:
     """Handle incoming webhook from Telegram"""
     try:
+        # Log webhook received
+        log_event("webhook_started", timestamp=datetime.now().isoformat())
+        
         data = request.get_json()
+
         if not data:
             log_event("webhook_invalid_data", error="No JSON data received")
             return "error", 400
@@ -5731,6 +5749,15 @@ def health_check():
             "added handling for simple 'yes' responses",
             "improved error handling and feedback"
         ]
+    }), 200
+
+@app.route("/keepalive", methods=["GET"])
+def keepalive():
+    """Keepalive endpoint to prevent service shutdown"""
+    return jsonify({
+        "status": "alive",
+        "timestamp": datetime.now().isoformat(),
+        "sessions": len(session_data)
     }), 200
 
 @app.route("/", methods=["GET"])
