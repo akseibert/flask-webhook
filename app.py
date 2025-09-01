@@ -2999,6 +2999,7 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
             (r'^change\s+(.+?)\s+to\s+(.+?)$', 'change'),
         ]
         
+      
         for pattern, correction_type in correction_patterns:
             correct_match = re.match(pattern, normalized_text, re.IGNORECASE)
             if correct_match:
@@ -3018,6 +3019,24 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     
                     if field_match:
                         field_name, exact_value = field_match
+                        
+                        # For scalar fields with partial matches
+                        if field_name in SCALAR_FIELDS and old_value.lower() in exact_value.lower():
+                            # Replace the word within the field value
+                            new_field_value = re.sub(re.escape(old_value), new_value, exact_value, flags=re.IGNORECASE)
+                            return {"correct": [{"field": field_name, "old": exact_value, "new": new_field_value}]}
+                        else:
+                            # For exact matches or list fields
+                            return {"correct": [{"field": field_name, "old": exact_value, "new": new_value}]}
+                
+                # If we can't find the field, default based on content
+                if any(suffix in new_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
+                    return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
+                else:
+                    return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
+        
+        # Try NLP extraction if enabled and text doesn't look like a command
+        elif CONFIG.get("ENABLE_NLP_EXTRACTION", False):
                         
                         # For scalar fields with partial matches
                         if field_name in SCALAR_FIELDS and old_value.lower() in exact_value.lower():
