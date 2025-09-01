@@ -3125,10 +3125,15 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
                     if string_similarity(activity.lower(), old_value.lower()) >= 0.7:
                         return {"correct": [{"field": "activities", "old": activity, "new": new_value}]}
                 
-                # Check companies (with or without suffix)
+         
                 # Check companies (with or without suffix)
                 best_company_match = None
                 best_company_score = 0.0
+                
+                # Debug: Log what we're looking for
+                log_event("company_correction_search", 
+                         looking_for=old_value,
+                         companies_in_report=[c.get("name") for c in existing_data.get("companies", []) if isinstance(c, dict)])
                 
                 for company in existing_data.get("companies", []):
                     if isinstance(company, dict) and company.get("name"):
