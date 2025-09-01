@@ -130,7 +130,7 @@ CONFIG = {
     "OPENAI_MODEL": config("OPENAI_MODEL", default="gpt-3.5-turbo"),
     "OPENAI_TEMPERATURE": config("OPENAI_TEMPERATURE", default=0.2, cast=float),
     "NAME_SIMILARITY_THRESHOLD": config("NAME_SIMILARITY_THRESHOLD", default=0.7, cast=float),
-    "CORRECTION_SIMILARITY_THRESHOLD": config("CORRECTION_SIMILARITY_THRESHOLD", default=0.7, cast=float),
+    "CORRECTION_SIMILARITY_THRESHOLD": config("CORRECTION_SIMILARITY_THRESHOLD", default=0.6, cast=float),
     "COMPANY_SIMILARITY_THRESHOLD": config("COMPANY_SIMILARITY_THRESHOLD", default=0.5, cast=float),
     "COMMAND_SIMILARITY_THRESHOLD": config("COMMAND_SIMILARITY_THRESHOLD", default=0.85, cast=float),
     "REPORT_FORMAT": config("REPORT_FORMAT", default="detailed"),
@@ -997,8 +997,9 @@ FIELD_PATTERNS = {
     "delete_specific": r'^(?:delete|remove)\s+(.+?)\s+from\s+(\w+)(?:\s*(?:,|\.|$))',
     "delete_field": r'^(?:delete|remove|clear)\s+(.+?)(?:\s*(?:,|\.|$))',
     "delete_item": r'^(?:delete|remove)\s+(?:company|firm)\s+(.+?)(?:\s*(?:,|\.|$))',
-    "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+(.+?)(?:\s+in\s+(.+?))?\s*(?:to\s+(.+?))?(?:\s*(?:,|\.|$))',
-    "correct_simple": r'^(?:companies?\s+)?correct\s+spelling\s+(.+?)(?:\s*(?:,|\.|$))',
+    "correct": r'^(?:correct|adjust|update|spell|fix)(?:\s+spelling)?\s+(?:of\s+)?(.+?)(?:\s+in\s+(.+?))?\s*(?:to\s+(.+?))?(?:\s*(?:,|\.|$))',
+    "correct_simple": r'^correct\s+spelling\s+(?:of\s+)?(.+?)\s+to\s+(.+?)(?:\s*(?:,|\.|$))',
+    "correct_direct": r'^correct\s+(.+?)\s+to\s+(.+?)(?:\s*(?:,|\.|$))',
     "help": r'^help(?:\s+on\s+([a-z_]+))?$|^\/help(?:\s+([a-z_]+))?$',
     "undo_last": r'^undo\s+last\s*[.!]?$|^undo\s+last\s+(?:change|modification|edit)\s*[.!]?$',
     "context_add": r'^(?:add|include|insert)\s+(?:it|this|that|him|her|them)\s+(?:to|in|into|as)\s+(.+?)\s*[.!]?$',
@@ -2913,7 +2914,70 @@ def extract_single_command(cmd: str) -> Dict[str, Any]:
     except Exception as e:
         log_event("extract_single_command_error", input=cmd, error=str(e))
         return {}
+
+def find_field_for_correction(value: str, existing_data: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    """Find which field contains a value for correction
+    Returns: (field_name, exact_matched_value) or None
+    """
+    value_lower = value.lower().strip()
     
+    # Check scalar fields first
+    for field in SCALAR_FIELDS:
+        if field in existing_data and existing_data[field]:
+            field_value = existing_data[field]
+            # Exact match
+            if field_value.lower() == value_lower:
+                return (field, field_value)
+            # Partial match (word within field)
+            if value_lower in field_value.lower():
+                return (field, field_value)
+            # Similarity match
+            if string_similarity(field_value.lower(), value_lower) >= 0.7:
+                return (field, field_value)
+    
+    # Check people
+    for person in existing_data.get("people", []):
+        if person.lower() == value_lower:
+            return ("people", person)
+        if string_similarity(person.lower(), value_lower) >= 0.7:
+            return ("people", person)
+    
+    # Check companies
+    for company in existing_data.get("companies", []):
+        if isinstance(company, dict) and company.get("name"):
+            company_name = company["name"]
+            if company_name.lower() == value_lower:
+                return ("companies", company_name)
+            if value_lower in company_name.lower():
+                return ("companies", company_name)
+            if string_similarity(company_name.lower(), value_lower) >= 0.5:
+                return ("companies", company_name)
+    
+    # Check other list fields
+    field_keys = {
+        "tools": "item",
+        "services": "task", 
+        "issues": "description"
+    }
+    
+    for field, key in field_keys.items():
+        for item in existing_data.get(field, []):
+            if isinstance(item, dict) and item.get(key):
+                item_value = item[key]
+                if item_value.lower() == value_lower:
+                    return (field, item_value)
+                if string_similarity(item_value.lower(), value_lower) >= 0.7:
+                    return (field, item_value)
+    
+    # Check activities
+    for activity in existing_data.get("activities", []):
+        if activity.lower() == value_lower:
+            return ("activities", activity)
+        if string_similarity(activity.lower(), value_lower) >= 0.7:
+            return ("activities", activity)
+    
+    return None
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=10))
 def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
     """Extract fields from text input with enhanced error handling and field validation"""
@@ -2927,30 +2991,45 @@ def extract_fields(text: str, chat_id: str = None) -> Dict[str, Any]:
         
        
         # CHECK FOR CORRECTIONS FIRST - BEFORE NLP!
-        if re.match(r'^correct\s+spelling', normalized_text, re.IGNORECASE):
-            print(f"DEBUG: Correction command detected, processing directly")
-            # Process correction immediately without NLP
-            correct_match = re.match(r'^correct\s+spelling\s+(?:of\s+)?(.+?)\s+to\s+(.+?)$', normalized_text, re.IGNORECASE)
+        # CHECK FOR CORRECTIONS FIRST - BEFORE NLP!
+        correction_patterns = [
+            (r'^correct\s+spelling\s+(?:of\s+)?(.+?)\s+to\s+(.+?)$', 'spelling'),
+            (r'^correct\s+(.+?)\s+to\s+(.+?)$', 'direct'),
+            (r'^fix\s+(.+?)\s+to\s+(.+?)$', 'fix'),
+            (r'^change\s+(.+?)\s+to\s+(.+?)$', 'change'),
+        ]
+        
+        for pattern, correction_type in correction_patterns:
+            correct_match = re.match(pattern, normalized_text, re.IGNORECASE)
             if correct_match:
+                print(f"DEBUG: Correction command detected (type: {correction_type})")
                 old_value = correct_match.group(1).strip()
                 new_value = correct_match.group(2).strip()
+                
+                # Remove common prefixes from old_value if present
+                old_value = re.sub(r'^(?:spelling\s+of\s+|spelling\s+)', '', old_value, flags=re.IGNORECASE)
                 
                 # Auto-detect field
                 if chat_id and chat_id in session_data:
                     existing_data = session_data[chat_id].get("structured_data", {})
                     
-                    # Check people first
-                    for person in existing_data.get("people", []):
-                        if person.lower() == old_value.lower():
-                            return {"correct": [{"field": "people", "old": person, "new": new_value}]}
+                    # Use the helper function to find the field
+                    field_match = find_field_for_correction(old_value, existing_data)
                     
-                    # Check companies
-                    for company in existing_data.get("companies", []):
-                        if isinstance(company, dict) and company.get("name", "").lower() == old_value.lower():
-                            return {"correct": [{"field": "companies", "old": company["name"], "new": new_value}]}
+                    if field_match:
+                        field_name, exact_value = field_match
+                        
+                        # For scalar fields with partial matches
+                        if field_name in SCALAR_FIELDS and old_value.lower() in exact_value.lower():
+                            # Replace the word within the field value
+                            new_field_value = re.sub(re.escape(old_value), new_value, exact_value, flags=re.IGNORECASE)
+                            return {"correct": [{"field": field_name, "old": exact_value, "new": new_field_value}]}
+                        else:
+                            # For exact matches or list fields
+                            return {"correct": [{"field": field_name, "old": exact_value, "new": new_value}]}
                 
-                # Default based on content
-                if any(suffix in new_value.upper() for suffix in ['AG', 'GMBH', 'LTD']):
+                # If we can't find the field, default based on content
+                if any(suffix in new_value.upper() for suffix in ['AG', 'GMBH', 'LTD', 'INC', 'LLC', 'CORP']):
                     return {"correct": [{"field": "companies", "old": old_value, "new": new_value}]}
                 else:
                     return {"correct": [{"field": "people", "old": old_value, "new": new_value}]}
@@ -4272,6 +4351,11 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                 session_data[chat_id]["last_change_history"].append((field, result[field].copy()))
                 
                 # A. Handle simple lists like 'people' and 'activities'
+                # For LIST fields, find the best match to remove
+            elif field in LIST_FIELDS:
+                session_data[chat_id]["last_change_history"].append((field, result[field].copy()))
+                
+                # A. Handle simple lists like 'people' and 'activities'
                 if field in SIMPLE_LIST_FIELDS:
                     item_to_remove = None
                     best_score = 0.5  # Lower threshold for corrections
@@ -4304,6 +4388,8 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                                     break # Found the exact role, no need to continue
                             if role_to_remove:
                                 result["roles"].remove(role_to_remove)
+                                # Store the role to re-add with new name
+                                session_data[chat_id]["_temp_role_reassign"] = role_to_reassign
 
                 # B. Handle dictionary lists like 'companies', 'tools', etc.
                 elif field in DICT_LIST_FIELDS:
@@ -4323,12 +4409,17 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         result[field].remove(item_dict_to_remove)
                         deleted = True
             
-            # --- 2. ADD STEP: Add the new, corrected item ---
+            
+                    # --- 2. ADD STEP: Add the new, corrected item ---
                     if deleted:
                         if field == "people":
                             result[field].append(new_value)
-                            # Re-assign the role to the new name
-                            if 'role_to_reassign' in locals() and role_to_reassign:
+                            # Re-assign the role to the new name if we stored it
+                            if session_data[chat_id].get("_temp_role_reassign"):
+                                result["roles"].append({"name": new_value, "role": session_data[chat_id]["_temp_role_reassign"]})
+                                del session_data[chat_id]["_temp_role_reassign"]
+                            # Also check if role_to_reassign exists in local scope
+                            elif 'role_to_reassign' in locals() and role_to_reassign:
                                 result["roles"].append({"name": new_value, "role": role_to_reassign})
                         elif field == "activities":
                             result[field].append(new_value)
@@ -4363,7 +4454,7 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                         result["people"].remove(person_to_remove)
                         log_event("removed_person_for_correction", removed=person_to_remove)
                         
-                        # Update roles
+                        # Update roles - both name and preserve the role
                         for role in list(result.get("roles", [])):
                             if isinstance(role, dict) and role.get("name") == person_to_remove:
                                 role["name"] = new_value
@@ -4371,10 +4462,12 @@ def merge_data(existing_data: Dict[str, Any], new_data: Dict[str, Any], chat_id:
                     else:
                         log_event("person_not_found_for_correction", old=old_value, new=new_value)
                     
-                    # CRITICAL: Add the new person - this MUST happen
-                    result["people"].append(new_value)
+                    # CRITICAL: Add the new person only if not already there
+                    if new_value not in result["people"]:
+                        result["people"].append(new_value)
+                        log_event("added_corrected_person", new=new_value, was_added=True)
+                    
                     changes.append(f"corrected '{old_value if not person_to_remove else person_to_remove}' to '{new_value}'")
-                    log_event("added_corrected_person", new=new_value, was_added=True)
                     
                     # Continue to next correction - don't fall through to other logic
                     continue
